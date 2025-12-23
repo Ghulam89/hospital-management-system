@@ -1,0 +1,1 @@
+export const Base_url = "https://api.holisticare.pk"

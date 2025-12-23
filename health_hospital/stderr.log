@@ -1,0 +1,552 @@
+/home/yumhubbc/nodevenv/test.yumhubb.com/18/lib/node_modules/sequelize/lib/associations/base.js:13
+      throw new AssociationError(`You have used the alias ${options.as} in two separate associations. Aliased associations must have unique aliases.`);
+      ^
+
+AssociationError [SequelizeAssociationError]: You have used the alias employe in two separate associations. Aliased associations must have unique aliases.
+    at new Association (/home/yumhubbc/nodevenv/test.yumhubb.com/18/lib/node_modules/sequelize/lib/associations/base.js:13:13)
+    at new HasMany (/home/yumhubbc/nodevenv/test.yumhubb.com/18/lib/node_modules/sequelize/lib/associations/has-many.js:28:5)
+    at image.hasMany (/home/yumhubbc/nodevenv/test.yumhubb.com/18/lib/node_modules/sequelize/lib/associations/mixin.js:22:25)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/models/index.js:422:10)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+
+Node.js v18.18.2
+/home/yumhubbc/nodevenv/test.yumhubb.com/18/lib/node_modules/sequelize/lib/associations/base.js:13
+      throw new AssociationError(`You have used the alias ${options.as} in two separate associations. Aliased associations must have unique aliases.`);
+      ^
+
+AssociationError [SequelizeAssociationError]: You have used the alias employe in two separate associations. Aliased associations must have unique aliases.
+    at new Association (/home/yumhubbc/nodevenv/test.yumhubb.com/18/lib/node_modules/sequelize/lib/associations/base.js:13:13)
+    at new HasMany (/home/yumhubbc/nodevenv/test.yumhubb.com/18/lib/node_modules/sequelize/lib/associations/has-many.js:28:5)
+    at image.hasMany (/home/yumhubbc/nodevenv/test.yumhubb.com/18/lib/node_modules/sequelize/lib/associations/mixin.js:22:25)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/models/index.js:422:10)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+
+Node.js v18.18.2
+/home/yumhubbc/nodevenv/test.yumhubb.com/18/lib/node_modules/sequelize/lib/associations/base.js:13
+      throw new AssociationError(`You have used the alias ${options.as} in two separate associations. Aliased associations must have unique aliases.`);
+      ^
+
+AssociationError [SequelizeAssociationError]: You have used the alias employe in two separate associations. Aliased associations must have unique aliases.
+    at new Association (/home/yumhubbc/nodevenv/test.yumhubb.com/18/lib/node_modules/sequelize/lib/associations/base.js:13:13)
+    at new HasMany (/home/yumhubbc/nodevenv/test.yumhubb.com/18/lib/node_modules/sequelize/lib/associations/has-many.js:28:5)
+    at image.hasMany (/home/yumhubbc/nodevenv/test.yumhubb.com/18/lib/node_modules/sequelize/lib/associations/mixin.js:22:25)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/models/index.js:422:10)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+
+Node.js v18.18.2
+/home/yumhubbc/nodevenv/test.yumhubb.com/18/lib/node_modules/sequelize/lib/associations/base.js:13
+      throw new AssociationError(`You have used the alias ${options.as} in two separate associations. Aliased associations must have unique aliases.`);
+      ^
+
+AssociationError [SequelizeAssociationError]: You have used the alias employe in two separate associations. Aliased associations must have unique aliases.
+    at new Association (/home/yumhubbc/nodevenv/test.yumhubb.com/18/lib/node_modules/sequelize/lib/associations/base.js:13:13)
+    at new HasMany (/home/yumhubbc/nodevenv/test.yumhubb.com/18/lib/node_modules/sequelize/lib/associations/has-many.js:28:5)
+    at image.hasMany (/home/yumhubbc/nodevenv/test.yumhubb.com/18/lib/node_modules/sequelize/lib/associations/mixin.js:22:25)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/models/index.js:422:10)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+
+Node.js v18.18.2
+/home/yumhubbc/nodevenv/test.yumhubb.com/18/lib/node_modules/sequelize/lib/associations/base.js:13
+      throw new AssociationError(`You have used the alias ${options.as} in two separate associations. Aliased associations must have unique aliases.`);
+      ^
+
+AssociationError [SequelizeAssociationError]: You have used the alias employe in two separate associations. Aliased associations must have unique aliases.
+    at new Association (/home/yumhubbc/nodevenv/test.yumhubb.com/18/lib/node_modules/sequelize/lib/associations/base.js:13:13)
+    at new HasMany (/home/yumhubbc/nodevenv/test.yumhubb.com/18/lib/node_modules/sequelize/lib/associations/has-many.js:28:5)
+    at image.hasMany (/home/yumhubbc/nodevenv/test.yumhubb.com/18/lib/node_modules/sequelize/lib/associations/mixin.js:22:25)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/models/index.js:422:10)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+
+Node.js v18.18.2
+(node:1195303) [SEQUELIZE0004] DeprecationWarning: A boolean value was passed to options.operatorsAliases. This is a no-op with v5 and should be removed.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+/usr/local/lsws/fcgi-bin/lsnode.js:68
+        throw new Error("http.Server.listen() was called more than once " +
+        ^
+
+Error: http.Server.listen() was called more than once which is not allowed.
+    at Server.customListen [as listen] (/usr/local/lsws/fcgi-bin/lsnode.js:68:15)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/server.js:94:8)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at startApplication (/usr/local/lsws/fcgi-bin/lsnode.js:48:15)
+    at Object.<anonymous> (/usr/local/lsws/fcgi-bin/lsnode.js:16:1)
+
+Node.js v18.18.2
+/usr/local/lsws/fcgi-bin/lsnode.js:68
+        throw new Error("http.Server.listen() was called more than once " +
+        ^
+
+Error: http.Server.listen() was called more than once which is not allowed.
+    at Server.customListen [as listen] (/usr/local/lsws/fcgi-bin/lsnode.js:68:15)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/server.js:94:8)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at startApplication (/usr/local/lsws/fcgi-bin/lsnode.js:48:15)
+    at Object.<anonymous> (/usr/local/lsws/fcgi-bin/lsnode.js:16:1)
+
+Node.js v18.18.2
+(node:3622887) [SEQUELIZE0004] DeprecationWarning: A boolean value was passed to options.operatorsAliases. This is a no-op with v5 and should be removed.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:2302417) [SEQUELIZE0004] DeprecationWarning: A boolean value was passed to options.operatorsAliases. This is a no-op with v5 and should be removed.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+(node:3883536) [SEQUELIZE0004] DeprecationWarning: A boolean value was passed to options.operatorsAliases. This is a no-op with v5 and should be removed.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+/home/yumhubbc/test.yumhubb.com/config/dbConfig.js:18
+    pool:{
+    ^^^^
+
+SyntaxError: Unexpected identifier
+    at internalCompileFunction (node:internal/vm:73:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1178:20)
+    at Module._compile (node:internal/modules/cjs/loader:1220:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/auth/token_validation.js:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+
+Node.js v18.18.2
+/home/yumhubbc/test.yumhubb.com/config/dbConfig.js:18
+    pool:{
+    ^^^^
+
+SyntaxError: Unexpected identifier
+    at internalCompileFunction (node:internal/vm:73:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1178:20)
+    at Module._compile (node:internal/modules/cjs/loader:1220:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/auth/token_validation.js:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+
+Node.js v18.18.2
+/home/yumhubbc/test.yumhubb.com/config/dbConfig.js:18
+    pool:{
+    ^^^^
+
+SyntaxError: Unexpected identifier
+    at internalCompileFunction (node:internal/vm:73:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1178:20)
+    at Module._compile (node:internal/modules/cjs/loader:1220:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/auth/token_validation.js:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+
+Node.js v18.18.2
+/home/yumhubbc/test.yumhubb.com/config/dbConfig.js:18
+    pool:{
+    ^^^^
+
+SyntaxError: Unexpected identifier
+    at internalCompileFunction (node:internal/vm:73:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1178:20)
+    at Module._compile (node:internal/modules/cjs/loader:1220:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/auth/token_validation.js:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+
+Node.js v18.18.2
+/home/yumhubbc/test.yumhubb.com/config/dbConfig.js:18
+    pool:{
+    ^^^^
+
+SyntaxError: Unexpected identifier
+    at internalCompileFunction (node:internal/vm:73:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1178:20)
+    at Module._compile (node:internal/modules/cjs/loader:1220:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/auth/token_validation.js:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+
+Node.js v18.18.2
+/home/yumhubbc/test.yumhubb.com/config/dbConfig.js:18
+    pool:{
+    ^^^^
+
+SyntaxError: Unexpected identifier
+    at internalCompileFunction (node:internal/vm:73:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1178:20)
+    at Module._compile (node:internal/modules/cjs/loader:1220:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/auth/token_validation.js:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+
+Node.js v18.18.2
+/home/yumhubbc/test.yumhubb.com/config/dbConfig.js:18
+    pool:{
+    ^^^^
+
+SyntaxError: Unexpected identifier
+    at internalCompileFunction (node:internal/vm:73:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1178:20)
+    at Module._compile (node:internal/modules/cjs/loader:1220:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/auth/token_validation.js:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+
+Node.js v18.18.2
+/home/yumhubbc/test.yumhubb.com/config/dbConfig.js:18
+    pool:{
+    ^^^^
+
+SyntaxError: Unexpected identifier
+    at internalCompileFunction (node:internal/vm:73:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1178:20)
+    at Module._compile (node:internal/modules/cjs/loader:1220:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/auth/token_validation.js:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+
+Node.js v18.18.2
+/home/yumhubbc/test.yumhubb.com/config/dbConfig.js:18
+    pool:{
+    ^^^^
+
+SyntaxError: Unexpected identifier
+    at internalCompileFunction (node:internal/vm:73:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1178:20)
+    at Module._compile (node:internal/modules/cjs/loader:1220:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/auth/token_validation.js:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+
+Node.js v18.18.2
+/home/yumhubbc/test.yumhubb.com/config/dbConfig.js:18
+    pool:{
+    ^^^^
+
+SyntaxError: Unexpected identifier
+    at internalCompileFunction (node:internal/vm:73:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1178:20)
+    at Module._compile (node:internal/modules/cjs/loader:1220:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/auth/token_validation.js:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+
+Node.js v18.18.2
+/home/yumhubbc/test.yumhubb.com/config/dbConfig.js:18
+    pool:{
+    ^^^^
+
+SyntaxError: Unexpected identifier
+    at internalCompileFunction (node:internal/vm:73:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1178:20)
+    at Module._compile (node:internal/modules/cjs/loader:1220:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/auth/token_validation.js:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+
+Node.js v18.18.2
+/home/yumhubbc/test.yumhubb.com/config/dbConfig.js:18
+    pool:{
+    ^^^^
+
+SyntaxError: Unexpected identifier
+    at internalCompileFunction (node:internal/vm:73:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1178:20)
+    at Module._compile (node:internal/modules/cjs/loader:1220:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/auth/token_validation.js:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+
+Node.js v18.18.2
+/home/yumhubbc/test.yumhubb.com/config/dbConfig.js:18
+    pool:{
+    ^^^^
+
+SyntaxError: Unexpected identifier
+    at internalCompileFunction (node:internal/vm:73:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1178:20)
+    at Module._compile (node:internal/modules/cjs/loader:1220:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/auth/token_validation.js:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+
+Node.js v18.18.2
+/home/yumhubbc/test.yumhubb.com/config/dbConfig.js:18
+    pool:{
+    ^^^^
+
+SyntaxError: Unexpected identifier
+    at internalCompileFunction (node:internal/vm:73:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1178:20)
+    at Module._compile (node:internal/modules/cjs/loader:1220:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/auth/token_validation.js:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+
+Node.js v18.18.2
+/home/yumhubbc/test.yumhubb.com/config/dbConfig.js:18
+    pool:{
+    ^^^^
+
+SyntaxError: Unexpected identifier
+    at internalCompileFunction (node:internal/vm:73:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1178:20)
+    at Module._compile (node:internal/modules/cjs/loader:1220:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/auth/token_validation.js:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+
+Node.js v18.18.2
+/home/yumhubbc/test.yumhubb.com/config/dbConfig.js:18
+    pool:{
+    ^^^^
+
+SyntaxError: Unexpected identifier
+    at internalCompileFunction (node:internal/vm:73:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1178:20)
+    at Module._compile (node:internal/modules/cjs/loader:1220:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/auth/token_validation.js:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+
+Node.js v18.18.2
+/home/yumhubbc/test.yumhubb.com/config/dbConfig.js:18
+    pool:{
+    ^^^^
+
+SyntaxError: Unexpected identifier
+    at internalCompileFunction (node:internal/vm:73:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1178:20)
+    at Module._compile (node:internal/modules/cjs/loader:1220:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/auth/token_validation.js:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+
+Node.js v18.18.2
+/home/yumhubbc/test.yumhubb.com/config/dbConfig.js:18
+    pool:{
+    ^^^^
+
+SyntaxError: Unexpected identifier
+    at internalCompileFunction (node:internal/vm:73:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1178:20)
+    at Module._compile (node:internal/modules/cjs/loader:1220:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/auth/token_validation.js:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+
+Node.js v18.18.2
+/home/yumhubbc/test.yumhubb.com/config/dbConfig.js:18
+    pool:{
+    ^^^^
+
+SyntaxError: Unexpected identifier
+    at internalCompileFunction (node:internal/vm:73:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1178:20)
+    at Module._compile (node:internal/modules/cjs/loader:1220:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/auth/token_validation.js:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+
+Node.js v18.18.2
+/home/yumhubbc/test.yumhubb.com/config/dbConfig.js:18
+    pool:{
+    ^^^^
+
+SyntaxError: Unexpected identifier
+    at internalCompileFunction (node:internal/vm:73:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1178:20)
+    at Module._compile (node:internal/modules/cjs/loader:1220:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/auth/token_validation.js:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+
+Node.js v18.18.2
+/home/yumhubbc/test.yumhubb.com/config/dbConfig.js:18
+    pool:{
+    ^^^^
+
+SyntaxError: Unexpected identifier
+    at internalCompileFunction (node:internal/vm:73:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1178:20)
+    at Module._compile (node:internal/modules/cjs/loader:1220:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/auth/token_validation.js:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+
+Node.js v18.18.2
+/home/yumhubbc/test.yumhubb.com/config/dbConfig.js:18
+    pool:{
+    ^^^^
+
+SyntaxError: Unexpected identifier
+    at internalCompileFunction (node:internal/vm:73:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1178:20)
+    at Module._compile (node:internal/modules/cjs/loader:1220:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/auth/token_validation.js:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+
+Node.js v18.18.2
+/home/yumhubbc/test.yumhubb.com/config/dbConfig.js:18
+    pool:{
+    ^^^^
+
+SyntaxError: Unexpected identifier
+    at internalCompileFunction (node:internal/vm:73:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1178:20)
+    at Module._compile (node:internal/modules/cjs/loader:1220:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/auth/token_validation.js:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+
+Node.js v18.18.2
+/home/yumhubbc/test.yumhubb.com/config/dbConfig.js:18
+    pool:{
+    ^^^^
+
+SyntaxError: Unexpected identifier
+    at internalCompileFunction (node:internal/vm:73:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1178:20)
+    at Module._compile (node:internal/modules/cjs/loader:1220:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/auth/token_validation.js:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+
+Node.js v18.18.2
+/home/yumhubbc/test.yumhubb.com/config/dbConfig.js:18
+    pool:{
+    ^^^^
+
+SyntaxError: Unexpected identifier
+    at internalCompileFunction (node:internal/vm:73:18)
+    at wrapSafe (node:internal/modules/cjs/loader:1178:20)
+    at Module._compile (node:internal/modules/cjs/loader:1220:27)
+    at Module._extensions..js (node:internal/modules/cjs/loader:1310:10)
+    at Module.load (node:internal/modules/cjs/loader:1119:32)
+    at Module._load (node:internal/modules/cjs/loader:960:12)
+    at Module.require (node:internal/modules/cjs/loader:1143:19)
+    at require (node:internal/modules/cjs/helpers:119:18)
+    at Object.<anonymous> (/home/yumhubbc/test.yumhubb.com/auth/token_validation.js:2:18)
+    at Module._compile (node:internal/modules/cjs/loader:1256:14)
+
+Node.js v18.18.2

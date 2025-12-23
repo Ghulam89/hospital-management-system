@@ -1,0 +1,128 @@
+import React, { useState, useEffect } from 'react';
+import Modal from '../../../components/modal';
+import { MdClose } from 'react-icons/md';
+import axios from 'axios';
+import { toast } from 'react-toastify';
+import { Base_url } from '../../../utils/Base_url';
+
+const AddPharmacyManufacturers = ({ isModalOpen, setIsModalOpen, selectedCategory, fetchExpenseCategories }) => {
+  const [formData, setFormData] = useState({
+    name: '',
+  });
+  
+  const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    if (selectedCategory) {
+      setFormData({
+        name: selectedCategory.name || '',
+      });
+    } else {
+      setFormData({
+        name: ''
+      });
+    }
+  }, [selectedCategory, isModalOpen]);
+
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+
+    // Validation
+    if (!formData.name.trim()) {
+      toast.error('Please enter manufacturer name');
+      return;
+    }
+
+    setIsLoading(true);
+
+    try {
+      const request = selectedCategory
+        ? axios.put(`${Base_url}/apis/pharmManufacturer/update/${selectedCategory._id}`, formData)
+        : axios.post(`${Base_url}/apis/pharmManufacturer/create`, formData);
+
+      const res = await request;
+
+      if (res.data.status === 'ok') {
+        toast.success(`Manufacturer ${selectedCategory ? 'updated' : 'added'} successfully`);
+        setIsModalOpen(false);
+        setFormData({ name: '' }); // Reset form
+        fetchExpenseCategories();
+      } else {
+        toast.error(res.data.message || 'Operation failed');
+      }
+    } catch (error) {
+      console.error('Error saving manufacturer:', error);
+      const errorMessage = error.response?.data?.error || error.response?.data?.message || 'Failed to save manufacturer';
+      toast.error(errorMessage);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  return (
+    <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} width="600px">
+      <div className="p-4 flex justify-between items-center bg-gray-50 dark:bg-gray-800">
+        <h1 className="text-xl font-semibold text-gray-800 dark:text-white">
+          {selectedCategory ? 'Edit Manufacturer' : 'Add New Manufacturer'}
+        </h1>
+        <MdClose 
+          onClick={() => setIsModalOpen(false)} 
+          size={24} 
+          className="cursor-pointer text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+        />
+      </div>
+      
+      <hr className="border-gray dark:border-gray-700" />
+      
+      <form onSubmit={handleSubmit}>
+        <div className="p-6 space-y-4">
+          <div>
+            <label className="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+              Name <span className="text-red-500">*</span>
+            </label>
+            <input
+              type="text"
+              name="name"
+              value={formData.name}
+              onChange={handleChange}
+              placeholder="Enter manufacturer name..."
+              className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+              required
+              disabled={isLoading}
+            />
+          </div>
+        
+          <div className="pt-2">
+            <button 
+              type="submit" 
+              className="flex w-full justify-center rounded-lg bg-primary p-3 font-medium text-white hover:bg-opacity-90 transition-colors duration-200 disabled:opacity-50"
+              disabled={isLoading}
+            >
+              {isLoading ? (
+                <span className="flex items-center justify-center">
+                  <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  {selectedCategory ? 'Updating...' : 'Adding...'}
+                </span>
+              ) : (
+                selectedCategory ? 'Update Manufacturer' : 'Add Manufacturer'
+              )}
+            </button>
+          </div>
+        </div>
+      </form>
+    </Modal>
+  );
+};
+
+export default AddPharmacyManufacturers;

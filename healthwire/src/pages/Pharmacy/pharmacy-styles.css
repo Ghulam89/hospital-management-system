@@ -1,0 +1,558 @@
+/* Pharmacy Management System - Enhanced Styling */
+
+/* Main Container Styling */
+.pharmacy-container {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  min-height: 100vh;
+  padding: 20px;
+}
+
+.pharmacy-header {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  border-radius: 20px;
+  padding: 30px;
+  margin-bottom: 30px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+}
+
+.pharmacy-title {
+  font-size: 2.5rem;
+  font-weight: 700;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+  margin-bottom: 10px;
+}
+
+.pharmacy-subtitle {
+  color: #6b7280;
+  font-size: 1.1rem;
+  font-weight: 400;
+}
+
+/* Tab Styling */
+.pharmacy-tabs {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  border-radius: 20px;
+  padding: 20px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+}
+
+.pharmacy-tab-button {
+  background: transparent;
+  border: none;
+  padding: 15px 25px;
+  margin: 0 5px;
+  border-radius: 15px;
+  font-weight: 600;
+  font-size: 1rem;
+  transition: all 0.3s ease;
+  cursor: pointer;
+  position: relative;
+  overflow: hidden;
+}
+
+.pharmacy-tab-button:hover {
+  background: rgba(102, 126, 234, 0.1);
+  transform: translateY(-2px);
+}
+
+.pharmacy-tab-button.active {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+}
+
+.pharmacy-tab-button.active::before {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 4px;
+  background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+  border-radius: 2px;
+}
+
+/* Card Styling */
+.pharmacy-card {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  border-radius: 20px;
+  padding: 25px;
+  margin-bottom: 20px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+  transition: all 0.3s ease;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.pharmacy-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+}
+
+.pharmacy-card-header {
+  display: flex;
+  justify-content: between;
+  align-items: center;
+  margin-bottom: 20px;
+  padding-bottom: 15px;
+  border-bottom: 2px solid #f3f4f6;
+}
+
+.pharmacy-card-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #1f2937;
+  margin: 0;
+}
+
+/* Button Styling */
+.pharmacy-btn {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border: none;
+  color: white;
+  padding: 12px 24px;
+  border-radius: 12px;
+  font-weight: 600;
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+}
+
+.pharmacy-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 25px rgba(102, 126, 234, 0.4);
+}
+
+.pharmacy-btn-secondary {
+  background: rgba(255, 255, 255, 0.9);
+  color: #667eea;
+  border: 2px solid #667eea;
+}
+
+.pharmacy-btn-secondary:hover {
+  background: #667eea;
+  color: white;
+}
+
+/* Table Styling */
+.pharmacy-table {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+}
+
+.pharmacy-table .ant-table-thead > tr > th {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  font-weight: 600;
+  border: none;
+  padding: 15px;
+}
+
+.pharmacy-table .ant-table-tbody > tr > td {
+  padding: 15px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.pharmacy-table .ant-table-tbody > tr:hover > td {
+  background: rgba(102, 126, 234, 0.05);
+}
+
+/* Stats Card Styling */
+.pharmacy-stats-card {
+  background: rgba(255, 255, 255, 0.95);
+  backdrop-filter: blur(10px);
+  border-radius: 20px;
+  padding: 25px;
+  text-align: center;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+  transition: all 0.3s ease;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.pharmacy-stats-card:hover {
+  transform: translateY(-5px);
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.15);
+}
+
+.pharmacy-stats-number {
+  font-size: 2.5rem;
+  font-weight: 700;
+  margin-bottom: 10px;
+}
+
+.pharmacy-stats-label {
+  font-size: 1rem;
+  color: #6b7280;
+  font-weight: 500;
+}
+
+/* Alert Card Styling */
+.pharmacy-alert-card {
+  border-radius: 20px;
+  padding: 25px;
+  margin-bottom: 20px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+  backdrop-filter: blur(10px);
+}
+
+.pharmacy-alert-card.low-stock {
+  background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%);
+  border: 2px solid #f59e0b;
+}
+
+.pharmacy-alert-card.out-of-stock {
+  background: linear-gradient(135deg, #fee2e2 0%, #fecaca 100%);
+  border: 2px solid #ef4444;
+}
+
+.pharmacy-alert-card.pending {
+  background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+  border: 2px solid #3b82f6;
+}
+
+/* Progress Bar Styling */
+.pharmacy-progress {
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 15px;
+  padding: 20px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1);
+}
+
+.pharmacy-progress .ant-progress-circle .ant-progress-text {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #667eea;
+}
+
+/* Modal Styling */
+.pharmacy-modal .ant-modal-content {
+  border-radius: 20px;
+  overflow: hidden;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.pharmacy-modal .ant-modal-header {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border: none;
+  padding: 20px 24px;
+}
+
+.pharmacy-modal .ant-modal-title {
+  color: white;
+  font-weight: 600;
+  font-size: 1.1rem;
+}
+
+.pharmacy-modal .ant-modal-close {
+  color: white;
+}
+
+.pharmacy-modal .ant-modal-close:hover {
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.pharmacy-modal .ant-modal-body {
+  padding: 24px;
+  background: #fafafa;
+}
+
+.pharmacy-modal .ant-modal-footer {
+  background: white;
+  border-top: 1px solid #f0f0f0;
+  padding: 16px 24px;
+}
+
+/* Form Styling */
+.pharmacy-form .ant-form-item-label > label {
+  font-weight: 600;
+  color: #374151;
+  font-size: 0.95rem;
+}
+
+.pharmacy-form .ant-form-item-label > label.ant-form-item-required:not(.ant-form-item-required-mark-optional)::before {
+  display: none;
+}
+
+.pharmacy-input,
+.pharmacy-select .ant-select-selector,
+.pharmacy-datepicker {
+  border-radius: 12px;
+  border: 2px solid #e5e7eb;
+  transition: all 0.3s ease;
+  background: white;
+}
+
+.pharmacy-input:focus,
+.pharmacy-input:hover,
+.pharmacy-select.ant-select-focused .ant-select-selector,
+.pharmacy-select .ant-select-selector:hover,
+.pharmacy-datepicker:focus,
+.pharmacy-datepicker:hover {
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+.pharmacy-textarea {
+  border-radius: 12px;
+  border: 2px solid #e5e7eb;
+  transition: all 0.3s ease;
+  background: white;
+}
+
+.pharmacy-textarea:focus,
+.pharmacy-textarea:hover {
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+/* Select Option Styling */
+.pharmacy-select .ant-select-item-option {
+  padding: 12px 16px;
+  border-radius: 8px;
+  margin: 4px 8px;
+}
+
+.pharmacy-select .ant-select-item-option:hover {
+  background: rgba(102, 126, 234, 0.1);
+}
+
+.pharmacy-select .ant-select-item-option-selected {
+  background: rgba(102, 126, 234, 0.15);
+  color: #667eea;
+  font-weight: 600;
+}
+
+/* Button Styling */
+.pharmacy-modal .ant-btn-primary {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border: none;
+  border-radius: 12px;
+  font-weight: 600;
+  padding: 8px 24px;
+  height: auto;
+  transition: all 0.3s ease;
+}
+
+.pharmacy-modal .ant-btn-primary:hover {
+  background: linear-gradient(135deg, #5a67d8 0%, #6b46c1 100%);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(102, 126, 234, 0.3);
+}
+
+.pharmacy-modal .ant-btn-default {
+  border: 2px solid #e5e7eb;
+  border-radius: 12px;
+  font-weight: 600;
+  padding: 8px 24px;
+  height: auto;
+  color: #6b7280;
+  transition: all 0.3s ease;
+}
+
+.pharmacy-modal .ant-btn-default:hover {
+  border-color: #667eea;
+  color: #667eea;
+  background: rgba(102, 126, 234, 0.05);
+}
+
+/* Info Box Styling */
+.pharmacy-modal .bg-blue-50 {
+  background: linear-gradient(135deg, #dbeafe 0%, #bfdbfe 100%);
+  border: 1px solid #93c5fd;
+}
+
+.pharmacy-modal .bg-gray-50 {
+  background: linear-gradient(135deg, #f9fafb 0%, #f3f4f6 100%);
+  border: 1px solid #e5e7eb;
+}
+
+/* Grid Layout */
+.pharmacy-form .grid {
+  display: grid;
+  gap: 16px;
+}
+
+.pharmacy-form .grid-cols-1 {
+  grid-template-columns: repeat(1, minmax(0, 1fr));
+}
+
+.pharmacy-form .grid-cols-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+@media (max-width: 768px) {
+  .pharmacy-form .grid-cols-2 {
+    grid-template-columns: repeat(1, minmax(0, 1fr));
+  }
+  
+  .pharmacy-modal {
+    margin: 16px;
+  }
+  
+  .pharmacy-modal .ant-modal-content {
+    border-radius: 16px;
+  }
+}
+
+/* Animation */
+.pharmacy-modal .ant-modal-content {
+  animation: modalSlideIn 0.3s ease-out;
+}
+
+@keyframes modalSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* Loading States */
+.pharmacy-modal .ant-form-item-has-error .pharmacy-input,
+.pharmacy-modal .ant-form-item-has-error .pharmacy-select .ant-select-selector,
+.pharmacy-modal .ant-form-item-has-error .pharmacy-datepicker {
+  border-color: #ef4444;
+  box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.1);
+}
+
+.pharmacy-modal .ant-form-item-has-error .ant-form-item-explain-error {
+  color: #ef4444;
+  font-size: 0.875rem;
+  margin-top: 4px;
+}
+
+/* Success States */
+.pharmacy-modal .ant-form-item-has-success .pharmacy-input,
+.pharmacy-modal .ant-form-item-has-success .pharmacy-select .ant-select-selector,
+.pharmacy-modal .ant-form-item-has-success .pharmacy-datepicker {
+  border-color: #10b981;
+  box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.1);
+}
+
+/* Tag Styling */
+.pharmacy-tag {
+  border-radius: 8px;
+  font-weight: 600;
+  padding: 4px 12px;
+}
+
+/* Search and Filter Styling */
+.pharmacy-filters {
+  background: rgba(255, 255, 255, 0.9);
+  backdrop-filter: blur(10px);
+  border-radius: 15px;
+  padding: 20px;
+  margin-bottom: 20px;
+  box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+}
+
+.pharmacy-search {
+  border-radius: 12px;
+  border: 2px solid #e5e7eb;
+  transition: all 0.3s ease;
+}
+
+.pharmacy-search:focus {
+  border-color: #667eea;
+  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .pharmacy-container {
+    padding: 10px;
+  }
+  
+  .pharmacy-title {
+    font-size: 2rem;
+  }
+  
+  .pharmacy-tab-button {
+    padding: 10px 15px;
+    font-size: 0.9rem;
+  }
+  
+  .pharmacy-card {
+    padding: 15px;
+  }
+  
+  .pharmacy-stats-number {
+    font-size: 2rem;
+  }
+}
+
+/* Animation Classes */
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.pharmacy-fade-in {
+  animation: fadeInUp 0.6s ease-out;
+}
+
+/* Loading Spinner */
+.pharmacy-loading {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  height: 200px;
+}
+
+.pharmacy-spinner {
+  width: 40px;
+  height: 40px;
+  border: 4px solid #f3f4f6;
+  border-top: 4px solid #667eea;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+/* Empty State Styling */
+.pharmacy-empty-state {
+  text-align: center;
+  padding: 60px 20px;
+  color: #6b7280;
+}
+
+.pharmacy-empty-icon {
+  font-size: 4rem;
+  margin-bottom: 20px;
+  opacity: 0.5;
+}
+
+.pharmacy-empty-title {
+  font-size: 1.5rem;
+  font-weight: 600;
+  margin-bottom: 10px;
+  color: #374151;
+}
+
+.pharmacy-empty-description {
+  font-size: 1rem;
+  color: #6b7280;
+}
