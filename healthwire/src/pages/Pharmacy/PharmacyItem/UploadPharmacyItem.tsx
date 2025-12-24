@@ -35,6 +35,17 @@ const UploadPharmacyItem: React.FC<UploadPharmacyItemProps> = (props) => {
   const [totalRows, setTotalRows] = useState(0);
   const [selectedCategory, setSelectedCategory] = useState<any>(null);
   const [autoDetectCategory, setAutoDetectCategory] = useState(true);
+  const [uploadProgress, setUploadProgress] = useState({
+    processed: 0,
+    success: 0,
+    failed: 0,
+    total: 0,
+    isUploading: false
+  });
+
+  // Handle file upload in batches
+  const BATCH_SIZE = 500; // Process 50 items at a time
+  const DELAY_BETWEEN_BATCHES = 1000; // 1 second delay between batches
 
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
@@ -47,6 +58,13 @@ const UploadPharmacyItem: React.FC<UploadPharmacyItemProps> = (props) => {
     setHeaders([]);
     setTotalRows(0);
     setSelectedCategory(null);
+    setUploadProgress({
+      processed: 0,
+      success: 0,
+      failed: 0,
+      total: 0,
+      isUploading: false
+    });
 
     setFile(selectedFile);
 
@@ -235,6 +253,55 @@ const UploadPharmacyItem: React.FC<UploadPharmacyItemProps> = (props) => {
     }).filter(item => item !== null);
   };
 
+  const processBatch = async (items: any[], batchIndex: number): Promise<{success: number, failed: number}> => {
+    let success = 0;
+    let failed = 0;
+
+    // Process items in parallel but limited concurrency
+    const concurrencyLimit = 100; // Process 10 items at a time within batch
+    const chunks = [];
+    
+    for (let i = 0; i < items.length; i += concurrencyLimit) {
+      chunks.push(items.slice(i, i + concurrencyLimit));
+    }
+
+    for (const chunk of chunks) {
+      const results = await Promise.all(
+        chunk.map(item => 
+          axios.post(`${Base_url}/apis/pharmItem/createExcel`, item)
+            .then(() => ({ success: true }))
+            .catch(e => ({ 
+              success: false, 
+              error: e,
+              itemName: item.name 
+            }))
+        )
+      );
+
+      results.forEach(result => {
+        if (result.success) {
+          success++;
+        } else {
+          failed++;
+          console.error('Failed to upload item:', result.itemName, result.error);
+        }
+      });
+
+      // Update progress
+      setUploadProgress(prev => ({
+        ...prev,
+        processed: prev.processed + chunk.length,
+        success: prev.success + success,
+        failed: prev.failed + failed
+      }));
+
+      // Small delay between chunks to prevent overwhelming
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+
+    return { success, failed };
+  };
+
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     
@@ -249,6 +316,13 @@ const UploadPharmacyItem: React.FC<UploadPharmacyItemProps> = (props) => {
     }
 
     setIsLoading(true);
+    setUploadProgress({
+      processed: 0,
+      success: 0,
+      failed: 0,
+      total: 0,
+      isUploading: true
+    });
 
     try {
       const data = await readExcelFile(file);
@@ -257,28 +331,52 @@ const UploadPharmacyItem: React.FC<UploadPharmacyItemProps> = (props) => {
       if (items.length === 0) {
         toast.error('No valid items found in Excel file. Please check the file format.');
         setIsLoading(false);
+        setUploadProgress(prev => ({ ...prev, isUploading: false }));
         return;
       }
 
-      // Send each item individually
-      const results = await Promise.all(
-        items.map(item => 
-          axios.post(`${Base_url}/apis/pharmItem/createExcel`, item)
-            .catch(e => ({ error: e }))
-        )
-      );
+      // Set total items
+      setUploadProgress(prev => ({ ...prev, total: items.length }));
 
-      const successCount = results.filter(r => !("error" in r)).length;
-      const failedCount = results.filter(r => ("error" in r)).length;
-
-      if (failedCount > 0) {
-        toast.warning(`Uploaded ${successCount} items, failed ${failedCount}`);
-      } else {
-        toast.success(`Successfully uploaded ${successCount} pharmacy items`);
+      // Split items into batches
+      const batches = [];
+      for (let i = 0; i < items.length; i += BATCH_SIZE) {
+        batches.push(items.slice(i, i + BATCH_SIZE));
       }
 
-      setIsModalOpen(false);
-      if (fetchItems) fetchItems();
+      let totalSuccess = 0;
+      let totalFailed = 0;
+
+      // Process batches sequentially with delay
+      for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+        const batch = batches[batchIndex];
+        console.log(`Processing batch ${batchIndex + 1}/${batches.length} (${batch.length} items)`);
+        
+        const result = await processBatch(batch, batchIndex);
+        totalSuccess += result.success;
+        totalFailed += result.failed;
+
+        // Delay between batches (except for last batch)
+        if (batchIndex < batches.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, DELAY_BETWEEN_BATCHES));
+        }
+      }
+
+      // Final summary
+      if (totalFailed > 0) {
+        toast.warning(`Upload completed: ${totalSuccess} successful, ${totalFailed} failed`);
+      } else {
+        toast.success(`Successfully uploaded ${totalSuccess} pharmacy items`);
+      }
+
+      if (totalSuccess > 0) {
+        setIsModalOpen(false);
+        if (fetchItems) {
+          // Wait a bit before refreshing to ensure data is saved
+          setTimeout(() => fetchItems(), 1000);
+        }
+      }
+
       resetForm();
 
     } catch (error: any) {
@@ -286,6 +384,7 @@ const UploadPharmacyItem: React.FC<UploadPharmacyItemProps> = (props) => {
       console.error('Upload error:', error);
     } finally {
       setIsLoading(false);
+      setUploadProgress(prev => ({ ...prev, isUploading: false }));
     }
   };
 
@@ -295,10 +394,25 @@ const UploadPharmacyItem: React.FC<UploadPharmacyItemProps> = (props) => {
     setHeaders([]);
     setTotalRows(0);
     setSelectedCategory(null);
+    setUploadProgress({
+      processed: 0,
+      success: 0,
+      failed: 0,
+      total: 0,
+      isUploading: false
+    });
     // Reset file input
     const input = document.getElementById('excel-file-input') as HTMLInputElement | null;
     if (input) {
       input.value = '';
+    }
+  };
+
+  const cancelUpload = () => {
+    if (window.confirm('Are you sure you want to cancel the upload?')) {
+      setIsLoading(false);
+      setUploadProgress(prev => ({ ...prev, isUploading: false }));
+      resetForm();
     }
   };
 
@@ -322,6 +436,39 @@ const UploadPharmacyItem: React.FC<UploadPharmacyItemProps> = (props) => {
       
       <form onSubmit={handleSubmit}>
         <div className="p-6 space-y-6">
+          {/* Upload Progress Display */}
+          {/* {uploadProgress.isUploading && (
+            <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-sm font-medium text-blue-700 dark:text-blue-300">
+                  Uploading items...
+                </span>
+                <span className="text-sm text-blue-600 dark:text-blue-400">
+                  {uploadProgress.processed} / {uploadProgress.total}
+                </span>
+              </div>
+              <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2.5 mb-2">
+                <div 
+                  className="bg-blue-600 h-2.5 rounded-full transition-all duration-300"
+                  style={{ width: `${(uploadProgress.processed / uploadProgress.total) * 100}%` }}
+                ></div>
+              </div>
+              <div className="flex justify-between text-xs text-blue-600 dark:text-blue-400">
+                <span>Successful: {uploadProgress.success}</span>
+                <span>Failed: {uploadProgress.failed}</span>
+              </div>
+              <div className="mt-3">
+                <button
+                  type="button"
+                  onClick={cancelUpload}
+                  className="text-xs px-3 py-1 bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300 rounded hover:bg-red-200 dark:hover:bg-red-900/50"
+                >
+                  Cancel Upload
+                </button>
+              </div>
+            </div>
+          )} */}
+
           <div>
             <label className="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
               Excel File <span className="text-red-500">*</span>
@@ -333,7 +480,7 @@ const UploadPharmacyItem: React.FC<UploadPharmacyItemProps> = (props) => {
               onChange={handleFileChange}
               className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
               required
-              disabled={isLoading}
+              disabled={isLoading || uploadProgress.isUploading}
             />
             <p className="text-xs text-gray-500 mt-1">
               Supported columns: Name, Retail Price, Unit Cost, Barcode, Unit, Generic Name, Opening Stock, Reorder Level, Category, Manufacturer, Supplier, Rack
@@ -353,7 +500,7 @@ const UploadPharmacyItem: React.FC<UploadPharmacyItemProps> = (props) => {
                 }}
                 className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                 required
-                disabled={isLoading}
+                disabled={isLoading || uploadProgress.isUploading}
               >
                 <option value="">Select Category</option>
                 {categories.map((cat: any) => (
@@ -367,8 +514,8 @@ const UploadPharmacyItem: React.FC<UploadPharmacyItemProps> = (props) => {
               </p>
             </div>
           )}
-{/* 
-          {previewData.length > 0 && (
+
+          {/* {previewData.length > 0 && !uploadProgress.isUploading && (
             <div>
               <label className="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
                 Preview ({totalRows} rows found)
@@ -400,15 +547,15 @@ const UploadPharmacyItem: React.FC<UploadPharmacyItemProps> = (props) => {
             <button 
               type="submit" 
               className="flex w-full justify-center rounded-lg bg-primary p-3 font-medium text-white hover:bg-opacity-90 transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-              disabled={isLoading || !file || previewData.length === 0 || (categories.length > 0 && !selectedCategory)}
+              disabled={uploadProgress.isUploading || isLoading || !file || previewData.length === 0 || (categories.length > 0 && !selectedCategory)}
             >
-              {isLoading ? (
+              {uploadProgress.isUploading ? (
                 <span className="flex items-center justify-center">
                   <svg className="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                   </svg>
-                  Uploading...
+                  Uploading ({uploadProgress.processed}/{uploadProgress.total})
                 </span>
               ) : (
                 `Upload Items${totalRows > 0 ? ` (${totalRows})` : ''}`
