@@ -77,13 +77,43 @@ export default function AddNewStock() {
 
   const handleRowChange = (idx: number, field: string, value: any) => {
     const updated = [...rows];
-    updated[idx] = { ...updated[idx], [field]: value };
+    const currentRow = updated[idx];
+    
+    // Convert value to number and handle NaN
+    let numValue: number;
+    if (typeof value === 'string' && value.trim() === '') {
+      numValue = 0;
+    } else {
+      numValue = Number(value);
+      if (isNaN(numValue)) {
+        numValue = 0;
+      }
+    }
+    
+    // Validate: If item category is "Product", loose quantity should not be allowed
+    if (field === 'looseUnitQty' && numValue > 0) {
+      const selectedItem = itemsList.find(item => item._id === currentRow.pharmItemId);
+      if (selectedItem) {
+        const categoryName = selectedItem.pharmCategoryId?.name?.toLowerCase() || '';
+        if (categoryName === 'product' || categoryName.includes('product')) {
+          message.warning('Loose quantity is not allowed for Product category items');
+          return; // Don't update if validation fails
+        }
+      }
+    }
+    
+    // Ensure numeric fields are never NaN
+    if (['quantity', 'looseUnitQty', 'unitCost', 'totalCost', 'availableQty'].includes(field)) {
+      updated[idx] = { ...updated[idx], [field]: numValue || 0 };
+    } else {
+      updated[idx] = { ...updated[idx], [field]: value };
+    }
     
     // Auto-calculate totals when quantity or unit cost changes
     if (field === 'quantity' || field === 'unitCost') {
-      const quantity = field === 'quantity' ? value : updated[idx].quantity;
-      const unitCost = field === 'unitCost' ? value : updated[idx].unitCost;
-      updated[idx].totalCost = quantity * unitCost;
+      const quantity = field === 'quantity' ? numValue : (updated[idx].quantity || 0);
+      const unitCost = field === 'unitCost' ? numValue : (updated[idx].unitCost || 0);
+      updated[idx].totalCost = (quantity * unitCost) || 0;
     }
     
     setRows(updated);
@@ -101,10 +131,10 @@ export default function AddNewStock() {
         manufacturer: selectedItem.pharmManufacturerId?.name || '',
         b2bCategory: selectedItem.pharmCategoryId?.name || '',
         rack: selectedItem.pharmRackId?.name || '',
-        conversionUnit: selectedItem.conversionUnit || 1,
+        conversionUnit: Number(selectedItem.conversionUnit) || 1,
         unit: selectedItem.unit || 'Pack',
-        unitCost: selectedItem.unitCost || 0,
-        availableQty: selectedItem.availableQuantity || 0,
+        unitCost: Number(selectedItem.unitCost) || 0,
+        availableQty: Number(selectedItem.availableQuantity) || 0,
       };
       setRows(updated);
       calculateTotals(updated);
@@ -112,13 +142,16 @@ export default function AddNewStock() {
   };
 
   const calculateTotals = (updatedRows: StockItem[]) => {
-    const total = updatedRows.reduce((sum, row) => sum + row.totalCost, 0);
+    const total = updatedRows.reduce((sum, row) => {
+      const cost = Number(row.totalCost) || 0;
+      return sum + (isNaN(cost) ? 0 : cost);
+    }, 0);
     const tax = total * 0.17; // 17% tax
     const grand = total + tax;
     
-    setTotalCost(total);
-    setTotalTax(tax);
-    setGrandTotal(grand);
+    setTotalCost(isNaN(total) ? 0 : total);
+    setTotalTax(isNaN(tax) ? 0 : tax);
+    setGrandTotal(isNaN(grand) ? 0 : grand);
   };
 
   const addRow = () => {
@@ -146,6 +179,7 @@ export default function AddNewStock() {
 
     setIsSubmitting(true);
     try {
+      // Ensure all numeric values are valid numbers, not NaN
       const stockData = {
         documentNumber: values.documentNumber,
         date: values.date.format('YYYY-MM-DD'),
@@ -154,16 +188,16 @@ export default function AddNewStock() {
         supplierInvoiceNumber: values.supplierInvoiceNumber,
         items: validItems.map(row => ({
           pharmItemId: row.pharmItemId,
-          quantity: row.quantity,
-          looseUnitQty: row.looseUnitQty,
-          unitCost: row.unitCost,
-          totalCost: row.totalCost,
-          batchNumber: row.batchNumber,
-          expiryDate: row.expiryDate,
+          quantity: Number(row.quantity) || 0,
+          looseUnitQty: Number(row.looseUnitQty) || 0,
+          unitCost: Number(row.unitCost) || 0,
+          totalCost: Number(row.totalCost) || 0,
+          batchNumber: row.batchNumber || '',
+          expiryDate: row.expiryDate || '',
         })),
-        totalCost,
-        totalTax,
-        grandTotal,
+        totalCost: Number(totalCost) || 0,
+        totalTax: Number(totalTax) || 0,
+        grandTotal: Number(grandTotal) || 0,
         remarks: values.remarks || '',
       };
 
@@ -257,9 +291,14 @@ export default function AddNewStock() {
       render: (_: any, record: StockItem, index: number) => (
         <Input
           type="number"
+          step="0.01"
           value={record.quantity}
-          onChange={(e) => handleRowChange(index, 'quantity', Number(e.target.value))}
+          onChange={(e) => {
+            const val = e.target.value === '' ? 0 : parseFloat(e.target.value);
+            handleRowChange(index, 'quantity', isNaN(val) ? 0 : val);
+          }}
           min={0}
+          onWheel={(e) => e.currentTarget.blur()}
           style={{ width: '100%' }}
         />
       ),
@@ -268,15 +307,28 @@ export default function AddNewStock() {
       title: 'LOOSE UNIT QTY',
       key: 'looseUnitQty',
       width: 120,
-      render: (_: any, record: StockItem, index: number) => (
-        <Input
-          type="number"
-          value={record.looseUnitQty}
-          onChange={(e) => handleRowChange(index, 'looseUnitQty', Number(e.target.value))}
-          min={0}
-          style={{ width: '100%' }}
-        />
-      ),
+      render: (_: any, record: StockItem, index: number) => {
+        const selectedItem = itemsList.find(item => item._id === record.pharmItemId);
+        const categoryName = selectedItem?.pharmCategoryId?.name?.toLowerCase() || '';
+        const isProduct = categoryName === 'product' || categoryName.includes('product');
+        
+        return (
+          <Input
+            type="number"
+            step="0.01"
+            value={record.looseUnitQty}
+            onChange={(e) => {
+              const val = e.target.value === '' ? 0 : parseFloat(e.target.value);
+              handleRowChange(index, 'looseUnitQty', isNaN(val) ? 0 : val);
+            }}
+            min={0}
+            disabled={isProduct}
+            onWheel={(e) => e.currentTarget.blur()}
+            style={{ width: '100%' }}
+            title={isProduct ? 'Loose quantity not allowed for Product category' : ''}
+          />
+        );
+      },
     },
     {
       title: 'UNIT COST',
@@ -285,9 +337,14 @@ export default function AddNewStock() {
       render: (_: any, record: StockItem, index: number) => (
         <Input
           type="number"
+          step="0.01"
           value={record.unitCost}
-          onChange={(e) => handleRowChange(index, 'unitCost', Number(e.target.value))}
+          onChange={(e) => {
+            const val = e.target.value === '' ? 0 : parseFloat(e.target.value);
+            handleRowChange(index, 'unitCost', isNaN(val) ? 0 : val);
+          }}
           min={0}
+          onWheel={(e) => e.currentTarget.blur()}
           style={{ width: '100%' }}
         />
       ),
@@ -565,7 +622,19 @@ export default function AddNewStock() {
               <Button
                 htmlType="button"
                 size="large"
-                onClick={() => form.resetFields()}
+                onClick={() => {
+                  form.resetFields();
+                  setRows([{ ...defaultRow, id: '1' }]);
+                  setTotalCost(0);
+                  setTotalTax(0);
+                  setGrandTotal(0);
+                  form.setFieldsValue({
+                    documentNumber: `100${Date.now().toString().slice(-4)}`,
+                    date: dayjs(),
+                    supplierInvoiceDate: dayjs(),
+                  });
+                  message.success('Form reset successfully');
+                }}
                 className="bg-gray-100 hover:bg-gray-200 text-gray-700 border-gray-300 rounded-lg px-8 font-semibold"
               >
                 Reset Form

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useRef } from 'react';
 import { Table, Button, message, Input, Space, Tag, Modal, Form, Select, DatePicker } from 'antd';
 import { SearchOutlined, PlusOutlined, EditOutlined, DeleteOutlined, DownloadOutlined, PrinterOutlined, EyeOutlined } from '@ant-design/icons';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
@@ -6,6 +6,9 @@ import axios from 'axios';
 import Swal from 'sweetalert2';
 import { Base_url } from '../../../utils/Base_url';
 import { type Dayjs } from 'dayjs';
+import dayjs from 'dayjs';
+import * as XLSX from 'xlsx';
+import { useReactToPrint } from 'react-to-print';
 
 const { Search } = Input;
 const { Option } = Select;
@@ -149,8 +152,26 @@ const ConsumeStocks: React.FC = () => {
       title: 'Consumed At',
       dataIndex: 'consumedAt',
       key: 'consumedAt',
-      render: (text) => new Date(text).toLocaleDateString(),
-      sorter: (a, b) => new Date(a.consumedAt) - new Date(b.consumedAt),
+      render: (text) => {
+        if (!text) return 'N/A';
+        try {
+          const date = new Date(text);
+          if (isNaN(date.getTime())) return 'Invalid Date';
+          return date.toLocaleDateString();
+        } catch (e) {
+          return 'Invalid Date';
+        }
+      },
+      sorter: (a, b) => {
+        try {
+          const dateA = new Date(a.consumedAt).getTime();
+          const dateB = new Date(b.consumedAt).getTime();
+          if (isNaN(dateA) || isNaN(dateB)) return 0;
+          return dateA - dateB;
+        } catch {
+          return 0;
+        }
+      },
     },
     {
       title: 'Reason',
@@ -223,6 +244,7 @@ const ConsumeStocks: React.FC = () => {
 
   const handleEdit = (record: ConsumedStock) => {
     setEditingConsumedStock(record);
+    const consumptionDate = record.consumedAt ? dayjs(record.consumedAt) : dayjs();
     form.setFieldsValue({
       itemId: record.pharmItemId?._id,
       quantity: record.quantity,
@@ -231,6 +253,7 @@ const ConsumeStocks: React.FC = () => {
       reason: record.reason,
       status: record.status,
       notes: record.notes,
+      consumptionDate: consumptionDate,
     });
     setIsModalOpen(true);
   };
@@ -277,7 +300,7 @@ const ConsumeStocks: React.FC = () => {
         pharmItemId: values.itemId, // Map itemId to pharmItemId for backend
         quantity: values.quantity,
         consumedBy: values.consumedBy,
-        consumptionDate: new Date().toISOString(),
+        consumptionDate: values.consumptionDate ? values.consumptionDate.format('YYYY-MM-DD') : new Date().toISOString().split('T')[0],
         reason: values.reason,
         status: values.status || 'Active',
         notes: values.notes,
@@ -308,13 +331,56 @@ const ConsumeStocks: React.FC = () => {
     setCurrentPage(1);
   };
 
+  const [printPreviewVisible, setPrintPreviewVisible] = useState(false);
+  const printRef = useRef<HTMLDivElement>(null);
+
   const handleExcelExport = () => {
-    message.info('Excel export functionality will be implemented');
+    try {
+      if (consumedStocks.length === 0) {
+        message.warning('No data to export');
+        return;
+      }
+
+      const exportData = consumedStocks.map((stock) => ({
+        'Item Name': stock.pharmItemId?.name || '',
+        'Barcode': stock.pharmItemId?.barcode || '',
+        'Quantity': stock.quantity || 0,
+        'Consumed By': stock.consumedBy?.name || '',
+        'Consumed At': stock.consumedAt ? new Date(stock.consumedAt).toLocaleDateString() : 'N/A',
+        'Reason': stock.reason || '',
+        'Status': stock.status || '',
+        'Notes': stock.notes || '',
+      }));
+
+      const ws = XLSX.utils.json_to_sheet(exportData);
+      const columnWidths = [
+        { wch: 25 }, { wch: 15 }, { wch: 10 }, { wch: 20 }, { wch: 12 }, { wch: 20 }, { wch: 12 }, { wch: 30 }
+      ];
+      ws['!cols'] = columnWidths;
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Consumed Stocks');
+      const fileName = `Consumed_Stocks_${new Date().toISOString().split('T')[0]}.xlsx`;
+      XLSX.writeFile(wb, fileName);
+      message.success('Excel file exported successfully');
+    } catch (error) {
+      console.error('Error exporting to Excel:', error);
+      message.error('Failed to export Excel file');
+    }
   };
 
   const handlePrint = () => {
-    window.print();
+    setPrintPreviewVisible(true);
   };
+
+  const handlePrintConfirm = useReactToPrint({
+    content: () => printRef.current,
+    documentTitle: 'Consumed Stocks Report',
+    onAfterPrint: () => {
+      setPrintPreviewVisible(false);
+      message.success('Print completed');
+    },
+  });
 
   return (
     <div className="rounded-sm border border-stroke bg-white px-5 pt-6 pb-2.5 shadow-default dark:border-strokedark dark:bg-boxdark sm:px-7.5 xl:pb-1">
@@ -363,21 +429,37 @@ const ConsumeStocks: React.FC = () => {
           <div className="flex flex-wrap gap-4 items-center">
             <DatePicker.RangePicker
               value={dateRange}
-              onChange={(dates) => setDateRange(dates as [Dayjs | null, Dayjs | null])}
+              onChange={(dates) => {
+                setDateRange(dates as [Dayjs | null, Dayjs | null]);
+                setCurrentPage(1);
+              }}
               placeholder={['From Date', 'To Date']}
               className="w-80"
             />
             <Search
               placeholder="Search by Item Name"
               value={searchTerm}
-              onChange={(e) => handleSearch(e.target.value)}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                if (!e.target.value) {
+                  setCurrentPage(1);
+                }
+              }}
+              onSearch={(value) => {
+                setSearchTerm(value);
+                setCurrentPage(1);
+              }}
               className="w-60"
               enterButton={<SearchOutlined />}
+              allowClear
             />
             <Select
               placeholder="Select Item"
               value={itemFilter}
-              onChange={setItemFilter}
+              onChange={(value) => {
+                setItemFilter(value || '');
+                setCurrentPage(1);
+              }}
               className="w-48"
               allowClear
             >
@@ -468,7 +550,14 @@ const ConsumeStocks: React.FC = () => {
             label="Item"
             rules={[{ required: true, message: 'Please select item' }]}
           >
-            <Select placeholder="Select item">
+            <Select 
+              placeholder="Search and select item"
+              showSearch
+              filterOption={(input, option) =>
+                (option?.children as string)?.toLowerCase().includes(input.toLowerCase())
+              }
+              optionFilterProp="children"
+            >
               {pharmacyItems.map(item => (
                 <Option key={item._id} value={item._id}>
                   {item.name}
@@ -480,9 +569,18 @@ const ConsumeStocks: React.FC = () => {
           <Form.Item
             name="quantity"
             label="Quantity"
-            rules={[{ required: true, message: 'Please enter quantity' }]}
+            rules={[{ required: true, message: 'Please enter quantity' }, { type: 'number', min: 1, message: 'Quantity must be at least 1' }]}
           >
-            <Input type="number" placeholder="Enter quantity" />
+            <Input type="number" min={1} placeholder="Enter quantity" />
+          </Form.Item>
+          
+          <Form.Item
+            name="consumptionDate"
+            label="Consumption Date"
+            rules={[{ required: true, message: 'Please select consumption date' }]}
+            initialValue={dayjs()}
+          >
+            <DatePicker className="w-full" format="YYYY-MM-DD" />
           </Form.Item>
           
           <Form.Item
@@ -547,6 +645,93 @@ const ConsumeStocks: React.FC = () => {
             <Input.TextArea rows={3} placeholder="Enter any additional notes" />
           </Form.Item>
         </Form>
+      </Modal>
+
+      {/* Print Preview Modal */}
+      <Modal
+        title="Print Preview - Consumed Stocks"
+        open={printPreviewVisible}
+        onCancel={() => setPrintPreviewVisible(false)}
+        width={1200}
+        footer={[
+          <Button key="cancel" onClick={() => setPrintPreviewVisible(false)}>
+            Cancel
+          </Button>,
+          <Button key="print" type="primary" icon={<PrinterOutlined />} onClick={handlePrintConfirm}>
+            Print
+          </Button>,
+        ]}
+      >
+        <div ref={printRef} className="print-preview-content">
+          <div className="text-center mb-4">
+            <h2 className="text-2xl font-bold">Holistic Care</h2>
+            <p className="text-gray-600">Consumed Stocks Report</p>
+            <p className="text-sm text-gray-500">
+              Generated on: {new Date().toLocaleString()}
+            </p>
+          </div>
+
+          {/* Summary Cards */}
+          <div className="grid grid-cols-2 gap-4 mb-6">
+            <div className="bg-red-50 p-4 rounded border border-red-200">
+              <p className="text-sm text-red-600 font-medium mb-1">Consumed Quantity</p>
+              <p className="text-2xl font-bold text-red-700">
+                {totalConsumedQuantity.toLocaleString()}
+              </p>
+            </div>
+            <div className="bg-orange-50 p-4 rounded border border-orange-200">
+              <p className="text-sm text-orange-600 font-medium mb-1">Consumed Count</p>
+              <p className="text-2xl font-bold text-orange-700">
+                {totalConsumedCount.toLocaleString()}
+              </p>
+            </div>
+          </div>
+
+          {/* Table */}
+          <table className="w-full border-collapse border border-gray-300">
+            <thead>
+              <tr className="bg-gray-100">
+                <th className="border border-gray-300 px-3 py-2 text-left text-xs font-bold">Item Name</th>
+                <th className="border border-gray-300 px-3 py-2 text-left text-xs font-bold">Barcode</th>
+                <th className="border border-gray-300 px-3 py-2 text-left text-xs font-bold">Quantity</th>
+                <th className="border border-gray-300 px-3 py-2 text-left text-xs font-bold">Consumed By</th>
+                <th className="border border-gray-300 px-3 py-2 text-left text-xs font-bold">Consumed At</th>
+                <th className="border border-gray-300 px-3 py-2 text-left text-xs font-bold">Reason</th>
+                <th className="border border-gray-300 px-3 py-2 text-left text-xs font-bold">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {consumedStocks.map((stock) => (
+                <tr key={stock._id}>
+                  <td className="border border-gray-300 px-3 py-2 text-sm">{stock.pharmItemId?.name || 'N/A'}</td>
+                  <td className="border border-gray-300 px-3 py-2 text-sm">{stock.pharmItemId?.barcode || 'N/A'}</td>
+                  <td className="border border-gray-300 px-3 py-2 text-sm text-center">{stock.quantity}</td>
+                  <td className="border border-gray-300 px-3 py-2 text-sm">{stock.consumedBy?.name || 'N/A'}</td>
+                  <td className="border border-gray-300 px-3 py-2 text-sm">
+                    {stock.consumedAt ? (() => {
+                      try {
+                        const date = new Date(stock.consumedAt);
+                        return isNaN(date.getTime()) ? 'Invalid Date' : date.toLocaleDateString();
+                      } catch {
+                        return 'Invalid Date';
+                      }
+                    })() : 'N/A'}
+                  </td>
+                  <td className="border border-gray-300 px-3 py-2 text-sm">{stock.reason || 'N/A'}</td>
+                  <td className="border border-gray-300 px-3 py-2 text-sm">
+                    <span className={`px-2 py-1 rounded text-xs ${
+                      stock.status === 'Completed' ? 'bg-green-100 text-green-800' :
+                      stock.status === 'Active' ? 'bg-blue-100 text-blue-800' :
+                      'bg-gray-100 text-gray-800'
+                    }`}>
+                      {stock.status}
+                    </span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </Modal>
     </div>
   );

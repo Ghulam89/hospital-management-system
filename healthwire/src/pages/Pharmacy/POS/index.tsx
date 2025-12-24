@@ -39,6 +39,10 @@ type PharmItem = {
   batches: Batch[];
   taxRate: number;
   discountAllowed: boolean;
+  pharmCategoryId?: {
+    _id: string;
+    name: string;
+  } | string | null;
 };
 
 type Patient = {
@@ -198,11 +202,20 @@ export default function PharmacyPOS() {
       const { data, totalPages } = response.data;
 
       return {
-        options: data.map((item: PharmItem) => ({
-          label: `${item.name} ${item.barcode ? `(${item.barcode})` : ''} (${item.availableQuantity} ${item.unit} available) - Rs.${item.retailPrice}`,
-          value: item._id,
-          itemData: item,
-        })),
+        options: data.map((item: PharmItem) => {
+          // Format quantity display properly
+          const packQty = Math.floor(item.availableQuantity / (item.conversionUnit || 1));
+          const pieceQty = item.availableQuantity % (item.conversionUnit || 1);
+          const qtyDisplay = item.conversionUnit > 1 
+            ? `${packQty} ${item.unit || 'pack'} ${pieceQty > 0 ? `${pieceQty} piece` : ''}`.trim()
+            : `${item.availableQuantity} ${item.unit || 'pack'}`;
+          
+          return {
+            label: `${item.name} ${item.barcode ? `(${item.barcode})` : ''} (${qtyDisplay} available) - Rs.${item.retailPrice}`,
+            value: item._id,
+            itemData: item,
+          };
+        }),
         hasMore: page < totalPages,
         additional: { page: page + 1 },
       };
@@ -291,7 +304,15 @@ export default function PharmacyPOS() {
           updatedItem.itemName = selectedItem.name;
           updatedItem.unit = selectedItem.unit || 'pack';
           updatedItem.conversionUnit = selectedItem.conversionUnit || 1;
-          updatedItem.rate = selectedItem.retailPrice;
+          // Set rate based on selected unit
+          if (updatedItem.unit === 'pack') {
+            updatedItem.rate = selectedItem.retailPrice;
+          } else {
+            // For unit/piece, calculate rate from retail price and conversion unit
+            updatedItem.rate = selectedItem.conversionUnit > 0 
+              ? selectedItem.retailPrice / selectedItem.conversionUnit 
+              : selectedItem.retailPrice;
+          }
           updatedItem.unitCost = selectedItem.unitCost;
           updatedItem.tax = selectedItem.taxRate || 0;
           // Calculate unit quantity (if quantity is in packs, unitQuantity is in units)
@@ -301,6 +322,25 @@ export default function PharmacyPOS() {
             updatedItem.unitCost = selectedItem.batches[0].purchasePrice;
           }
           // Always recalculate amounts after selecting item
+          updatedItem.netAmount = updatedItem.rate * updatedItem.quantity;
+          const taxAmount = (updatedItem.netAmount * (updatedItem.tax / 100)) || 0;
+          updatedItem.totalAmount = updatedItem.netAmount + taxAmount - updatedItem.discount;
+        }
+      }
+      
+      // Update rate when unit changes
+      if (field === 'unit' && updatedItem.pharmItemId) {
+        const selectedItem = itemsList.find(i => i._id === updatedItem.pharmItemId);
+        if (selectedItem) {
+          if (value === 'pack') {
+            updatedItem.rate = selectedItem.retailPrice;
+          } else {
+            // For unit/piece, calculate rate from retail price and conversion unit
+            updatedItem.rate = selectedItem.conversionUnit > 0 
+              ? selectedItem.retailPrice / selectedItem.conversionUnit 
+              : selectedItem.retailPrice;
+          }
+          // Recalculate amounts
           updatedItem.netAmount = updatedItem.rate * updatedItem.quantity;
           const taxAmount = (updatedItem.netAmount * (updatedItem.tax / 100)) || 0;
           updatedItem.totalAmount = updatedItem.netAmount + taxAmount - updatedItem.discount;
@@ -322,7 +362,7 @@ export default function PharmacyPOS() {
       }
       
       // Recalculate amounts when relevant fields change
-      if (["quantity", "rate", "discount", "unit", "batchNumber", "tax"].includes(field)) {
+      if (["quantity", "rate", "discount", "batchNumber", "tax"].includes(field)) {
         // Update unit quantity when quantity changes
         if (field === 'quantity') {
           updatedItem.unitQuantity = updatedItem.quantity * updatedItem.conversionUnit;
@@ -334,6 +374,32 @@ export default function PharmacyPOS() {
       
       // Update quantity when unit quantity changes
       if (field === 'unitQuantity') {
+        const selectedItem = itemsList.find(i => i._id === updatedItem.pharmItemId);
+        
+        // Validate: Unit quantity should not be below 1 for certain product types
+        if (value < 1 && selectedItem) {
+          const categoryName = (selectedItem as any).pharmCategoryId?.name?.toLowerCase() || '';
+          const itemName = selectedItem.name.toLowerCase();
+          
+          // Check if it's a syrup, skin care, or similar product that shouldn't be sold below 1
+          const restrictedCategories = ['syrup', 'skin care', 'cream', 'lotion', 'serum', 'product'];
+          const restrictedKeywords = ['syrup', 'cream', 'lotion', 'serum', 'gel', 'lightening', 'cleanser', 'face wash'];
+          
+          const isRestricted = restrictedCategories.some(cat => categoryName.includes(cat)) ||
+                              restrictedKeywords.some(keyword => itemName.includes(keyword));
+          
+          if (isRestricted) {
+            toast.error(`Cannot sell ${selectedItem.name} below 1 quantity. Minimum quantity is 1.`);
+            // Reset to minimum value of 1
+            updatedItem.unitQuantity = 1;
+            updatedItem.quantity = updatedItem.conversionUnit > 0 ? 1 / updatedItem.conversionUnit : 1;
+            updatedItem.netAmount = updatedItem.rate * updatedItem.quantity;
+            const taxAmount = (updatedItem.netAmount * (updatedItem.tax / 100)) || 0;
+            updatedItem.totalAmount = updatedItem.netAmount + taxAmount - updatedItem.discount;
+            return updatedItem;
+          }
+        }
+        
         updatedItem.quantity = updatedItem.conversionUnit > 0 ? updatedItem.unitQuantity / updatedItem.conversionUnit : 0;
         updatedItem.netAmount = updatedItem.rate * updatedItem.quantity;
         const taxAmount = (updatedItem.netAmount * (updatedItem.tax / 100)) || 0;
@@ -438,13 +504,33 @@ export default function PharmacyPOS() {
         const conversionUnit = selectedItem.conversionUnit || 1;
         const actualQty = item.quantity;
         
+        // Validate: Unit quantity should not be below 1 for certain product types
+        if (item.unitQuantity < 1 && !item.isReturn) {
+          const categoryName = (selectedItem as any).pharmCategoryId?.name?.toLowerCase() || '';
+          const itemName = selectedItem.name.toLowerCase();
+          
+          const restrictedCategories = ['syrup', 'skin care', 'cream', 'lotion', 'serum'];
+          const restrictedKeywords = ['syrup', 'cream', 'lotion', 'serum', 'gel'];
+          
+          const isRestricted = restrictedCategories.some(cat => categoryName.includes(cat)) ||
+                              restrictedKeywords.some(keyword => itemName.includes(keyword));
+          
+          if (isRestricted) {
+            toast.error(`Cannot sell ${selectedItem.name} below 1 quantity`);
+            setIsSubmitting(false);
+            return;
+          }
+        }
+        
         if (!item.isReturn && selectedItem.availableQuantity < actualQty) {
           toast.error(`Insufficient stock for ${selectedItem.name}. Available: ${selectedItem.availableQuantity}`);
+          setIsSubmitting(false);
           return;
         }
         
         if (item.isReturn && item.returnQuantity > item.quantity) {
           toast.error(`Return quantity cannot exceed sold quantity for ${selectedItem.name}`);
+          setIsSubmitting(false);
           return;
         }
       }
@@ -524,12 +610,47 @@ export default function PharmacyPOS() {
         // Store the created invoice ID for reference
         const invoiceId = response.data.data?._id;
         
-        // Navigate back to create new invoice after a short delay
+        // Reset form state
+        setPosItems([{
+          id: 1,
+          pharmItemId: '',
+          itemName: '',
+          unit: 'pack',
+          unitQuantity: 1,
+          conversionUnit: 1,
+          batchNumber: '',
+          unitCost: 0,
+          rate: 0,
+          quantity: 1,
+          returnQuantity: 0,
+          discount: 0,
+          tax: 0,
+          netAmount: 0,
+          totalAmount: 0,
+          isReturn: false,
+        }]);
+        setPaymentInstallments([{
+          id: 1,
+          date: new Date().toISOString().split('T')[0],
+          method: 'Cash',
+          amount: 0,
+          reference: ''
+        }]);
+        setPatientInfo(null);
+        setManualPatientName('');
+        setUseManualPatient(false);
+        setReferDoctor(null);
+        setManualDoctorName('');
+        setUseManualDoctor(false);
+        setRemarks('');
+        
+        // Show success message with invoice details
+        toast.info(`Invoice ID: ${invoiceId}`);
+        
+        // Force page reload to ensure clean state
         setTimeout(() => {
-          navigate('/admin/pharmacy/invoices/new');
-          // Show success message with invoice details
-          toast.info(`Invoice ID: ${invoiceId}`);
-        }, 1500);
+          window.location.reload();
+        }, 2000);
       } else {
         throw new Error(response.data.message || 'Transaction failed');
       }
@@ -746,8 +867,8 @@ export default function PharmacyPOS() {
                 <th className="px-3 py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Batch</th>
                 <th className="px-3 py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Cost</th>
                 <th className="px-3 py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Rate <span className="text-red-500">*</span></th>
-                <th className="px-3 py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Qty <span className="text-red-500">*</span></th>
-                <th className="px-3 py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Unit Qty</th>
+                <th className="px-3 py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Pack <span className="text-red-500">*</span></th>
+                <th className="px-3 py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Single Piece</th>
                 <th className="px-3 py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Amount</th>
                 <th className="px-3 py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Discount</th>
                 <th className="px-3 py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Tax %</th>
@@ -825,6 +946,7 @@ export default function PharmacyPOS() {
                       className="w-24 rounded-lg border border-gray-300 bg-white py-2 px-3 text-sm text-gray-700 outline-none transition focus:border-green-500 focus:ring-2 focus:ring-green-200"
                       value={item.rate}
                       onChange={(e) => updatePosItem(item.id, 'rate', parseFloat(e.target.value))}
+                      onWheel={(e) => e.currentTarget.blur()}
                       min="0"
                       step="0.01"
                       required
@@ -836,6 +958,7 @@ export default function PharmacyPOS() {
                       className="w-20 rounded-lg border border-gray-300 bg-white py-2 px-3 text-sm text-gray-700 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
                       value={item.quantity}
                       onChange={(e) => updatePosItem(item.id, 'quantity', parseInt(e.target.value))}
+                      onWheel={(e) => e.currentTarget.blur()}
                       min="1"
                       disabled={item.isReturn}
                       required
@@ -846,6 +969,7 @@ export default function PharmacyPOS() {
                         className="w-20 rounded-lg border border-red-300 bg-red-50 py-2 px-3 text-sm text-gray-700 outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-200 mt-1"
                         value={item.returnQuantity}
                         onChange={(e) => updatePosItem(item.id, 'returnQuantity', parseInt(e.target.value))}
+                        onWheel={(e) => e.currentTarget.blur()}
                         min="0"
                         max={item.quantity}
                         placeholder="Return Qty"
@@ -858,6 +982,7 @@ export default function PharmacyPOS() {
                       className="w-20 rounded-lg border border-gray-300 bg-blue-50 py-2 px-3 text-sm text-gray-700 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
                       value={item.unitQuantity}
                       onChange={(e) => updatePosItem(item.id, 'unitQuantity', parseInt(e.target.value))}
+                      onWheel={(e) => e.currentTarget.blur()}
                       min="1"
                       disabled={!item.pharmItemId || item.conversionUnit <= 1}
                       title={`Conversion: 1 ${item.unit} = ${item.conversionUnit} units`}
@@ -874,6 +999,7 @@ export default function PharmacyPOS() {
                       className="w-24 rounded-lg border border-gray-300 bg-white py-2 px-3 text-sm text-gray-700 outline-none transition focus:border-orange-500 focus:ring-2 focus:ring-orange-200"
                       value={item.discount}
                       onChange={(e) => updatePosItem(item.id, 'discount', parseFloat(e.target.value))}
+                      onWheel={(e) => e.currentTarget.blur()}
                       min="0"
                       max={item.netAmount}
                       step="0.01"
@@ -885,6 +1011,7 @@ export default function PharmacyPOS() {
                       className="w-20 rounded-lg border border-gray-300 bg-white py-2 px-3 text-sm text-gray-700 outline-none transition focus:border-purple-500 focus:ring-2 focus:ring-purple-200"
                       value={item.tax}
                       onChange={(e) => updatePosItem(item.id, 'tax', parseFloat(e.target.value))}
+                      onWheel={(e) => e.currentTarget.blur()}
                       min="0"
                       step="0.01"
                     />
@@ -1006,6 +1133,7 @@ export default function PharmacyPOS() {
                         className="w-full rounded-lg border border-gray-300 bg-white py-2.5 pl-12 pr-4 text-sm text-gray-700 font-semibold outline-none transition focus:border-green-500 focus:ring-2 focus:ring-green-200"
                         value={item.amount}
                         onChange={(e) => updatePaymentInstallment(item.id, 'amount', parseFloat(e.target.value))}
+                        onWheel={(e) => e.currentTarget.blur()}
                         min="0"
                         step="0.01"
                         required

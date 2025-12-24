@@ -101,10 +101,37 @@ const AddPharmacyItems = ({
   const handleNumberChange = (e) => {
     const { name, value } = e.target;
     if (value === '' || /^[0-9]*\.?[0-9]*$/.test(value)) {
-      setFormData(prev => ({
-        ...prev,
-        [name]: value
-      }));
+      const numValue = value === '' ? 0 : parseFloat(value);
+      
+      setFormData(prev => {
+        const updated = { ...prev, [name]: value };
+        
+        // Auto-calculate Piece Cost from Unit Cost (Pack)
+        if (name === 'unitCost' && numValue > 0 && prev.conversionUnit > 0) {
+          updated.pieceCost = (numValue / prev.conversionUnit).toFixed(2);
+        }
+        
+        // Auto-calculate Unit Cost (Pack) from Piece Cost
+        if (name === 'pieceCost' && numValue > 0 && prev.conversionUnit > 0) {
+          updated.unitCost = (numValue * prev.conversionUnit).toFixed(2);
+        }
+        
+        // Update conversion unit and recalculate costs
+        if (name === 'conversionUnit' && numValue > 0) {
+          if (prev.unitCost > 0) {
+            updated.pieceCost = (prev.unitCost / numValue).toFixed(2);
+          } else if (prev.pieceCost > 0) {
+            updated.unitCost = (prev.pieceCost * numValue).toFixed(2);
+          }
+        }
+        
+        // Validate Retail Price should not be below Cost Price
+        if (name === 'retailPrice' && numValue > 0 && prev.unitCost > 0 && numValue < prev.unitCost) {
+          toast.warning('Retail Price should not be below Unit Cost (Pack)');
+        }
+        
+        return updated;
+      });
     }
   };
 
@@ -340,14 +367,14 @@ const AddPharmacyItems = ({
                 </div>
                 <div>
                   <label className="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
-                    Conversion Unit
+                    Quantity/Pack
                   </label>
                   <input
                     type="number"
                     name="conversionUnit"
                     value={formData.conversionUnit}
                     onChange={handleNumberChange}
-                    placeholder="Conversion factor"
+                    placeholder="Quantity per pack"
                     className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                   />
                 </div>
@@ -377,6 +404,8 @@ const AddPharmacyItems = ({
                     value={formData.retailPrice}
                     onChange={handleNumberChange}
                     placeholder="Retail price"
+                    min={formData.unitCost || 0}
+                    onWheel={(e) => e.currentTarget.blur()}
                     className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                   />
                 </div>
@@ -406,6 +435,7 @@ const AddPharmacyItems = ({
                     value={formData.unitCost}
                     onChange={handleNumberChange}
                     placeholder="Cost per pack"
+                    onWheel={(e) => e.currentTarget.blur()}
                     className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                   />
                 </div>
@@ -423,6 +453,7 @@ const AddPharmacyItems = ({
                     value={formData.pieceCost}
                     onChange={handleNumberChange}
                     placeholder="Cost per piece"
+                    onWheel={(e) => e.currentTarget.blur()}
                     className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                   />
                 </div>
@@ -434,10 +465,11 @@ const AddPharmacyItems = ({
                     type="number"
                     name="availableQuantity"
                     value={formData.availableQuantity}
-                    onChange={handleNumberChange}
                     placeholder="Auto-set from opening stock"
-                    className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
-                    title="Will be automatically set from opening stock if not specified"
+                    className="w-full rounded border-[1.5px] border-stroke bg-gray-100 py-3 px-5 text-gray-600 outline-none cursor-not-allowed dark:border-form-strokedark dark:bg-gray-800 dark:text-gray-400"
+                    title="This field is locked and automatically calculated"
+                    disabled
+                    readOnly
                   />
                 </div>
               </div>
@@ -451,9 +483,11 @@ const AddPharmacyItems = ({
                     type="number"
                     name="expiredQuantity"
                     value={formData.expiredQuantity}
-                    onChange={handleNumberChange}
                     placeholder="Expired quantity"
-                    className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                    className="w-full rounded border-[1.5px] border-stroke bg-gray-100 py-3 px-5 text-gray-600 outline-none cursor-not-allowed dark:border-form-strokedark dark:bg-gray-800 dark:text-gray-400"
+                    title="This field is locked and automatically calculated"
+                    disabled
+                    readOnly
                   />
                 </div>
               </div>

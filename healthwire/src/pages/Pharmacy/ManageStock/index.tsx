@@ -1,11 +1,13 @@
-import React, { useEffect, useState } from 'react';
-import { Table, Button, message, Input, Select, DatePicker, Space } from 'antd';
+import React, { useEffect, useState, useRef } from 'react';
+import { Table, Button, message, Input, Select, DatePicker, Space, Modal } from 'antd';
 import { PlusOutlined, DownloadOutlined, PrinterOutlined, EyeOutlined, EditOutlined, DeleteOutlined, SearchOutlined } from '@ant-design/icons';
 import axios from 'axios';
 import Swal from 'sweetalert2';
 import { Base_url } from '../../../utils/Base_url';
 import { Dayjs } from 'dayjs';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
+import * as XLSX from 'xlsx';
+import { useReactToPrint } from 'react-to-print';
 
 const { Search } = Input;
 const { Option } = Select;
@@ -64,6 +66,8 @@ const PharmacyStocks: React.FC = () => {
   const [dateRange, setDateRange] = useState<[Dayjs | null, Dayjs | null]>([null, null]);
   const [totalInboundedPrice, setTotalInboundedPrice] = useState(0);
   const [netPurchase, setNetPurchase] = useState(0);
+  const [printPreviewVisible, setPrintPreviewVisible] = useState(false);
+  const printRef = useRef<HTMLDivElement>(null);
 
   // Table row selection
   const onSelectChange = (newSelectedRowKeys: React.Key[]) => {
@@ -209,24 +213,37 @@ const PharmacyStocks: React.FC = () => {
   const fetchStocks = async () => {
     try {
       setLoading(true);
-      const params = new URLSearchParams({
+      const params: any = {
         page: currentPage.toString(),
         limit: '20',
-        ...(searchTerm && { search: searchTerm }),
-        ...(supplierFilter && { supplierId: supplierFilter }),
-        ...(manufacturerFilter && { manufacturerId: manufacturerFilter }),
-        ...(dateRange[0] && dateRange[1] && {
-          from: dateRange[0].format('YYYY-MM-DD'),
-          to: dateRange[1].format('YYYY-MM-DD')
-        })
-      });
+      };
+      
+      if (searchTerm) {
+        params.search = searchTerm;
+      }
+      
+      if (supplierFilter) {
+        params.supplierId = supplierFilter;
+      }
+      
+      if (manufacturerFilter) {
+        params.manufacturerId = manufacturerFilter;
+      }
+      
+      if (dateRange[0] && dateRange[1]) {
+        params.fromDate = dateRange[0].format('YYYY-MM-DD');
+        params.toDate = dateRange[1].format('YYYY-MM-DD');
+      }
 
-      const response = await axios.get(`${Base_url}/apis/pharmAddStock/get?${params}`);
-      setStocks(response.data.data || []);
+      const queryString = new URLSearchParams(params).toString();
+      const response = await axios.get(`${Base_url}/apis/pharmAddStock/get?${queryString}`);
+      
+      const stocksData = response.data.data || [];
+      setStocks(stocksData);
       setTotalPages(response.data.totalPages || 1);
       
-      // Calculate totals
-      const inboundedPrice = response.data.data?.reduce((sum: number, stock: PharmacyStock) => sum + stock.totalCost, 0) || 0;
+      // Calculate totals from filtered results
+      const inboundedPrice = stocksData.reduce((sum: number, stock: PharmacyStock) => sum + (stock.totalCost || 0), 0);
       setTotalInboundedPrice(inboundedPrice);
       setNetPurchase(inboundedPrice);
     } catch (error) {
@@ -252,8 +269,11 @@ const PharmacyStocks: React.FC = () => {
   };
 
   useEffect(() => {
-    fetchStocks();
     fetchReferenceData();
+  }, []);
+
+  useEffect(() => {
+    fetchStocks();
     // eslint-disable-next-line
   }, [currentPage, searchTerm, supplierFilter, manufacturerFilter, dateRange]);
 
@@ -277,8 +297,20 @@ const PharmacyStocks: React.FC = () => {
             ${record.items?.map((item, index) => `
               <div style="border-bottom: 1px solid #e5e7eb; padding: 8px 0;">
                 <p style="margin: 4px 0;"><strong>${index + 1}. ${item.pharmItemId?.name}</strong></p>
-                <p style="margin: 4px 0;">Manufacturer: ${item.pharmItemId?.manufacturer}</p>
-                <p style="margin: 4px 0;">Quantity: ${item.quantity} ${item.pharmItemId?.unit}</p>
+                <p style="margin: 4px 0;">Manufacturer: ${item.pharmItemId?.manufacturer || 'N/A'}</p>
+                <p style="margin: 4px 0;">Quantity: ${(() => {
+                  const conversionUnit = item.pharmItemId?.conversionUnit || 1;
+                  const totalQty = item.quantity || 0;
+                  const packQty = Math.floor(totalQty / conversionUnit);
+                  const pieceQty = totalQty % conversionUnit;
+                  if (conversionUnit > 1 && pieceQty > 0) {
+                    return `${packQty} ${item.pharmItemId?.unit || 'pack'} ${pieceQty} piece`;
+                  } else if (conversionUnit > 1) {
+                    return `${packQty} ${item.pharmItemId?.unit || 'pack'}`;
+                  } else {
+                    return `${totalQty} ${item.pharmItemId?.unit || 'pack'}`;
+                  }
+                })()}</p>
                 <p style="margin: 4px 0;">Unit Cost: Rs. ${item.unitCost}</p>
                 <p style="margin: 4px 0;">Total Cost: Rs. ${item.totalCost}</p>
                 ${item.batchNumber ? `<p style="margin: 4px 0;">Batch: ${item.batchNumber}</p>` : ''}
@@ -328,12 +360,74 @@ const PharmacyStocks: React.FC = () => {
   };
 
   const handleExcelExport = () => {
-    message.info('Excel export functionality will be implemented');
+    try {
+      if (stocks.length === 0) {
+        message.warning('No data to export');
+        return;
+      }
+
+      // Prepare data for export
+      const exportData = stocks.map((stock) => ({
+        'Document #': stock.documentNumber || '',
+        'Supplier': stock.supplierId?.name || '',
+        'Supplier Phone': stock.supplierId?.phone || '',
+        'SKUs': stock.items?.length || 0,
+        'Created At': new Date(stock.createdAt).toLocaleDateString(),
+        'Supplier Invoice Date': stock.supplierInvoiceDate ? new Date(stock.supplierInvoiceDate).toLocaleDateString() : '',
+        'Supplier Invoice #': stock.supplierInvoiceNumber || '',
+        'Total Cost': stock.totalCost || 0,
+        'Status': stock.status || 'Active',
+      }));
+
+      // Create worksheet
+      const ws = XLSX.utils.json_to_sheet(exportData);
+
+      // Set column widths
+      const columnWidths = [
+        { wch: 15 }, // Document #
+        { wch: 25 }, // Supplier
+        { wch: 15 }, // Supplier Phone
+        { wch: 8 },  // SKUs
+        { wch: 12 }, // Created At
+        { wch: 18 }, // Supplier Invoice Date
+        { wch: 18 }, // Supplier Invoice #
+        { wch: 15 }, // Total Cost
+        { wch: 12 }, // Status
+      ];
+      ws['!cols'] = columnWidths;
+
+      // Create workbook
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Stock Documents');
+
+      // Generate filename with current date
+      const fileName = `Stock_Documents_${new Date().toISOString().split('T')[0]}.xlsx`;
+      
+      // Export file
+      XLSX.writeFile(wb, fileName);
+      
+      message.success('Excel file exported successfully');
+    } catch (error) {
+      console.error('Error exporting to Excel:', error);
+      message.error('Failed to export Excel file');
+    }
   };
 
   const handlePrint = () => {
-    window.print();
+    setPrintPreviewVisible(true);
   };
+
+  const handlePrintConfirm = useReactToPrint({
+    content: () => printRef.current,
+    documentTitle: 'Stock Documents Report',
+    onBeforeGetContent: () => {
+      return Promise.resolve();
+    },
+    onAfterPrint: () => {
+      setPrintPreviewVisible(false);
+      message.success('Print completed');
+    },
+  });
 
   const handleAddStock = () => {
     // Navigate to add stock page
@@ -394,14 +488,22 @@ const PharmacyStocks: React.FC = () => {
           <div className="flex flex-wrap gap-4 items-center">
             <RangePicker
               value={dateRange}
-              onChange={(dates) => setDateRange(dates as [Dayjs | null, Dayjs | null])}
+              onChange={(dates) => {
+                setDateRange(dates as [Dayjs | null, Dayjs | null]);
+                setCurrentPage(1);
+              }}
               placeholder={['From Date', 'To Date']}
               className="w-80"
             />
             <Search
               placeholder="Search by Document No..."
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                if (!e.target.value) {
+                  setCurrentPage(1);
+                }
+              }}
               onSearch={(value) => {
                 setSearchTerm(value);
                 setCurrentPage(1);
@@ -413,7 +515,10 @@ const PharmacyStocks: React.FC = () => {
             <Select
               placeholder="Select Supplier"
               value={supplierFilter}
-              onChange={setSupplierFilter}
+              onChange={(value) => {
+                setSupplierFilter(value || '');
+                setCurrentPage(1);
+              }}
               className="w-48"
               allowClear
             >
@@ -426,7 +531,10 @@ const PharmacyStocks: React.FC = () => {
             <Select
               placeholder="Select Manufacturer"
               value={manufacturerFilter}
-              onChange={setManufacturerFilter}
+              onChange={(value) => {
+                setManufacturerFilter(value || '');
+                setCurrentPage(1);
+              }}
               className="w-48"
               allowClear
             >
@@ -503,6 +611,92 @@ const PharmacyStocks: React.FC = () => {
 
         
       </div>
+
+      {/* Print Preview Modal */}
+      <Modal
+        title="Print Preview - Stock Documents"
+        open={printPreviewVisible}
+        onCancel={() => setPrintPreviewVisible(false)}
+        width={1200}
+        footer={[
+          <Button key="cancel" onClick={() => setPrintPreviewVisible(false)}>
+            Cancel
+          </Button>,
+          <Button key="print" type="primary" icon={<PrinterOutlined />} onClick={handlePrintConfirm}>
+            Print
+          </Button>,
+        ]}
+      >
+        <div ref={printRef} className="print-preview-content">
+          <div className="text-center mb-4">
+            <h2 className="text-2xl font-bold">Holistic Care</h2>
+            <p className="text-gray-600">Stock Documents Report</p>
+            <p className="text-sm text-gray-500">
+              Generated on: {new Date().toLocaleString()}
+            </p>
+          </div>
+
+          {/* Summary Cards */}
+          <div className="grid grid-cols-2 gap-4 mb-6">
+            <div className="bg-blue-50 p-4 rounded border border-blue-200">
+              <p className="text-sm text-blue-600 font-medium mb-1">Total Inbounded Price</p>
+              <p className="text-2xl font-bold text-blue-700">
+                Rs. {totalInboundedPrice.toLocaleString()}
+              </p>
+            </div>
+            <div className="bg-green-50 p-4 rounded border border-green-200">
+              <p className="text-sm text-green-600 font-medium mb-1">Net Purchase</p>
+              <p className="text-2xl font-bold text-green-700">
+                Rs. {netPurchase.toLocaleString()}
+              </p>
+            </div>
+          </div>
+
+          {/* Table */}
+          <table className="w-full border-collapse border border-gray-300">
+            <thead>
+              <tr className="bg-gray-100">
+                <th className="border border-gray-300 px-3 py-2 text-left text-xs font-bold">Document #</th>
+                <th className="border border-gray-300 px-3 py-2 text-left text-xs font-bold">Supplier</th>
+                <th className="border border-gray-300 px-3 py-2 text-left text-xs font-bold">SKUs</th>
+                <th className="border border-gray-300 px-3 py-2 text-left text-xs font-bold">Created At</th>
+                <th className="border border-gray-300 px-3 py-2 text-left text-xs font-bold">Invoice Date</th>
+                <th className="border border-gray-300 px-3 py-2 text-left text-xs font-bold">Invoice #</th>
+                <th className="border border-gray-300 px-3 py-2 text-left text-xs font-bold">Total Cost</th>
+              </tr>
+            </thead>
+            <tbody>
+              {stocks.map((stock) => (
+                <tr key={stock._id}>
+                  <td className="border border-gray-300 px-3 py-2 text-sm">{stock.documentNumber}</td>
+                  <td className="border border-gray-300 px-3 py-2 text-sm">
+                    {stock.supplierId?.name || 'N/A'}
+                    {stock.supplierId?.phone && <br />}
+                    {stock.supplierId?.phone && <span className="text-xs text-gray-500">{stock.supplierId.phone}</span>}
+                  </td>
+                  <td className="border border-gray-300 px-3 py-2 text-sm text-center">{stock.items?.length || 0}</td>
+                  <td className="border border-gray-300 px-3 py-2 text-sm">{new Date(stock.createdAt).toLocaleDateString()}</td>
+                  <td className="border border-gray-300 px-3 py-2 text-sm">
+                    {stock.supplierInvoiceDate ? new Date(stock.supplierInvoiceDate).toLocaleDateString() : 'N/A'}
+                  </td>
+                  <td className="border border-gray-300 px-3 py-2 text-sm">{stock.supplierInvoiceNumber || 'N/A'}</td>
+                  <td className="border border-gray-300 px-3 py-2 text-sm font-semibold">
+                    Rs. {(stock.totalCost || 0).toLocaleString()}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="bg-gray-100 font-bold">
+                <td colSpan={6} className="border border-gray-300 px-3 py-2 text-right">Total:</td>
+                <td className="border border-gray-300 px-3 py-2 text-sm">
+                  Rs. {totalInboundedPrice.toLocaleString()}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </Modal>
     </div>
   );
 };

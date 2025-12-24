@@ -218,33 +218,86 @@ const AddPurchaseOrder: React.FC = () => {
     setItems(updatedItems);
   };
 
-  const handleItemSelect = (id: number, pharmItemId: string) => {
+  const handleItemSelect = async (id: number, pharmItemId: string) => {
     console.log('Item selected - ID:', id, 'PharmItemId:', pharmItemId);
     const selectedItem = pharmItems.find(item => item._id === pharmItemId);
     console.log('Selected item:', selectedItem);
     
     if (selectedItem) {
-      // Update all fields at once to ensure all details are set
-      const updatedItems = items.map(item => {
-        if (item.id === id) {
-          return {
-            ...item,
-            pharmItemId: pharmItemId,
-            itemName: selectedItem.name,
-            manufacturerName: selectedItem.pharmManufacturerId?.name || '',
-            b2bCategory: selectedItem.pharmCategoryId?.name || '',
-            conversionUnit: selectedItem.conversionUnit || 1,
-            currentStock: selectedItem.availableQuantity || 0,
-            unitCost: selectedItem.unitCost || 0,
-            // Keep existing values for these fields
-            unitsRequired: item.unitsRequired,
-            totalCost: item.totalCost,
-          };
+      try {
+        // Fetch sales statistics for this item
+        let soldQuantity = 0;
+        let avgSaleQuantity = 0;
+        let projectedSales = 0;
+        
+        try {
+          // Try to fetch POS sales data for this item
+          const salesResponse = await axios.get(`${Base_url}/apis/pharmPos/get`, {
+            params: {
+              itemId: pharmItemId,
+              limit: 1000
+            }
+          });
+          
+          if (salesResponse.data && salesResponse.data.data) {
+            const sales = salesResponse.data.data;
+            const itemSales = sales.flatMap((sale: any) => 
+              sale.allItem?.filter((item: any) => item.pharmItemId === pharmItemId) || []
+            );
+            
+            // Calculate sold quantity (total quantity sold)
+            soldQuantity = itemSales.reduce((sum: number, item: any) => 
+              sum + (item.quantity || 0) - (item.returnQuantity || 0), 0
+            );
+            
+            // Calculate average sale quantity (if we have sales data)
+            if (itemSales.length > 0) {
+              avgSaleQuantity = soldQuantity / itemSales.length;
+            }
+            
+            // Projected sales (simple projection based on average)
+            projectedSales = Math.ceil(avgSaleQuantity * 30); // 30 days projection
+          }
+        } catch (error) {
+          console.log('Could not fetch sales statistics:', error);
+          // Use default values if fetch fails
         }
-        return item;
-      });
-      console.log('Updated items:', updatedItems);
-      setItems(updatedItems);
+        
+        // Update all fields at once to ensure all details are set
+        const updatedItems = items.map(item => {
+          if (item.id === id) {
+            const newItem = {
+              ...item,
+              pharmItemId: pharmItemId,
+              itemName: selectedItem.name,
+              manufacturerName: selectedItem.pharmManufacturerId?.name || '',
+              b2bCategory: selectedItem.pharmCategoryId?.name || '',
+              conversionUnit: selectedItem.conversionUnit || 1,
+              currentStock: selectedItem.availableQuantity || 0,
+              unitCost: selectedItem.unitCost || 0,
+              soldQuantity: soldQuantity,
+              avgSaleQuantity: Math.round(avgSaleQuantity * 100) / 100,
+              projectedSales: projectedSales,
+              // Keep existing values for these fields
+              unitsRequired: item.unitsRequired,
+              totalCost: item.totalCost,
+            };
+            
+            // Recalculate total cost if units required is set
+            if (newItem.unitsRequired > 0) {
+              newItem.totalCost = newItem.unitsRequired * newItem.unitCost;
+            }
+            
+            return newItem;
+          }
+          return item;
+        });
+        console.log('Updated items:', updatedItems);
+        setItems(updatedItems);
+      } catch (error) {
+        console.error('Error fetching item statistics:', error);
+        message.error('Failed to load item statistics');
+      }
     } else {
       console.error('Item not found with ID:', pharmItemId);
     }
@@ -350,9 +403,10 @@ const AddPurchaseOrder: React.FC = () => {
             String(option?.children || '').toLowerCase().includes(input.toLowerCase())
           }
           className="w-full"
+          notFoundContent={pharmItems.length === 0 ? 'Loading items...' : 'No items found'}
         >
           {pharmItems.map(item => (
-            <Option key={item._id} value={item._id}>
+            <Option key={item._id} value={item._id} title={item.name}>
               {item.name}
             </Option>
           ))}
@@ -388,18 +442,21 @@ const AddPurchaseOrder: React.FC = () => {
       dataIndex: 'soldQuantity',
       key: 'soldQuantity',
       width: 120,
+      render: (value: number) => value || 0,
     },
     {
       title: 'AVG. SALE QTY',
       dataIndex: 'avgSaleQuantity',
       key: 'avgSaleQuantity',
       width: 120,
+      render: (value: number) => value ? value.toFixed(2) : '0.00',
     },
     {
       title: 'PROJECTED SALES',
       dataIndex: 'projectedSales',
       key: 'projectedSales',
       width: 120,
+      render: (value: number) => value || 0,
     },
     {
       title: 'UNITS REQ',

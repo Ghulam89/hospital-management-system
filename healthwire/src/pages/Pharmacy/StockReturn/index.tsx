@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Table, Button, message, Input, Space, Tag, Select, DatePicker } from 'antd';
+import React, { useEffect, useState, useRef } from 'react';
+import { Table, Button, message, Input, Space, Tag, Select, DatePicker, Modal } from 'antd';
 import { SearchOutlined, PlusOutlined, EditOutlined, DeleteOutlined, DownloadOutlined, PrinterOutlined, EyeOutlined } from '@ant-design/icons';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 import axios from 'axios';
@@ -7,6 +7,8 @@ import Swal from 'sweetalert2';
 import { Base_url } from '../../../utils/Base_url';
 import type { Dayjs } from 'dayjs';
 import AddStockReturnModal from './AddStockReturnModal';
+import * as XLSX from 'xlsx';
+import { useReactToPrint } from 'react-to-print';
 
 const { Search } = Input;
 const { Option } = Select;
@@ -54,6 +56,8 @@ const StockReturn: React.FC = () => {
   const [totalReturnCount, setTotalReturnCount] = useState(0);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingStockReturn, setEditingStockReturn] = useState<StockReturn | null>(null);
+  const [printPreviewVisible, setPrintPreviewVisible] = useState(false);
+  const printRef = useRef<HTMLDivElement>(null);
 
   const onSelectChange = (newSelectedRowKeys: React.Key[]) => {
     setSelectedRowKeys(newSelectedRowKeys);
@@ -276,12 +280,74 @@ const StockReturn: React.FC = () => {
   };
 
   const handleExcelExport = () => {
-    message.info('Excel export functionality will be implemented');
+    try {
+      if (stockReturns.length === 0) {
+        message.warning('No data to export');
+        return;
+      }
+
+      // Prepare data for export
+      const exportData = stockReturns.map((returnItem) => ({
+        'Return Number': returnItem.returnNumber || '',
+        'Supplier': returnItem.supplierId?.name || '',
+        'Return Date': returnItem.returnDate ? new Date(returnItem.returnDate).toLocaleDateString() : '',
+        'Reason': returnItem.reason || '',
+        'Items Count': returnItem.itemsCount || 0,
+        'Total Amount': returnItem.totalAmount || 0,
+        'Status': returnItem.status || '',
+        'Created By': returnItem.createdBy || 'N/A',
+        'Created At': returnItem.createdAt ? new Date(returnItem.createdAt).toLocaleDateString() : '',
+      }));
+
+      // Create worksheet
+      const ws = XLSX.utils.json_to_sheet(exportData);
+
+      // Set column widths
+      const columnWidths = [
+        { wch: 15 }, // Return Number
+        { wch: 25 }, // Supplier
+        { wch: 12 }, // Return Date
+        { wch: 20 }, // Reason
+        { wch: 12 }, // Items Count
+        { wch: 15 }, // Total Amount
+        { wch: 12 }, // Status
+        { wch: 20 }, // Created By
+        { wch: 12 }, // Created At
+      ];
+      ws['!cols'] = columnWidths;
+
+      // Create workbook
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Stock Returns');
+
+      // Generate filename with current date
+      const fileName = `Stock_Returns_${new Date().toISOString().split('T')[0]}.xlsx`;
+      
+      // Export file
+      XLSX.writeFile(wb, fileName);
+      
+      message.success('Excel file exported successfully');
+    } catch (error) {
+      console.error('Error exporting to Excel:', error);
+      message.error('Failed to export Excel file');
+    }
   };
 
   const handlePrint = () => {
-    window.print();
+    setPrintPreviewVisible(true);
   };
+
+  const handlePrintConfirm = useReactToPrint({
+    content: () => printRef.current,
+    documentTitle: 'Stock Returns Report',
+    onBeforeGetContent: () => {
+      return Promise.resolve();
+    },
+    onAfterPrint: () => {
+      setPrintPreviewVisible(false);
+      message.success('Print completed');
+    },
+  });
 
   return (
     <div className="mx-auto max-w-[1800px] px-4 py-6">

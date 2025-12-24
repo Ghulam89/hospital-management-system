@@ -147,8 +147,8 @@ const PharmacyPurchaseOrders: React.FC = () => {
       title: 'Status',
       dataIndex: 'status',
       key: 'status',
-      width: 120,
-      render: (status: string) => {
+      width: 150,
+      render: (status: string, record: PurchaseOrder) => {
         const colorMap: { [key: string]: string } = {
           'Draft': 'default',
           'Pending': 'processing',
@@ -157,7 +157,47 @@ const PharmacyPurchaseOrders: React.FC = () => {
           'Delivered': 'success',
           'Cancelled': 'error',
         };
-        return <Tag color={colorMap[status] || 'default'}>{status}</Tag>;
+        
+        const handleStatusChange = async (newStatus: string) => {
+          try {
+            await axios.put(`${Base_url}/apis/pharmPurchaseOrder/update/${record._id}`, {
+              status: newStatus
+            });
+            message.success('Status updated successfully');
+            fetchPurchaseOrders();
+          } catch (error) {
+            console.error('Error updating status:', error);
+            message.error('Failed to update status');
+          }
+        };
+        
+        return (
+          <Select
+            value={status}
+            onChange={handleStatusChange}
+            style={{ width: '100%' }}
+            size="small"
+          >
+            <Option value="Draft">
+              <Tag color="default">Draft</Tag>
+            </Option>
+            <Option value="Pending">
+              <Tag color="processing">Pending</Tag>
+            </Option>
+            <Option value="Approved">
+              <Tag color="success">Approved</Tag>
+            </Option>
+            <Option value="Ordered">
+              <Tag color="warning">Ordered</Tag>
+            </Option>
+            <Option value="Delivered">
+              <Tag color="success">Delivered</Tag>
+            </Option>
+            <Option value="Cancelled">
+              <Tag color="error">Cancelled</Tag>
+            </Option>
+          </Select>
+        );
       },
     },
     {
@@ -380,14 +420,22 @@ const PharmacyPurchaseOrders: React.FC = () => {
           <div className="flex flex-wrap gap-4 items-center">
             <RangePicker
               value={dateRange}
-              onChange={setDateRange}
+              onChange={(dates) => {
+                setDateRange(dates);
+                setCurrentPage(1);
+              }}
               placeholder={['From Date', 'To Date']}
               className="w-80"
             />
             <Search
               placeholder="Search by Item Name or PO #"
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                if (!e.target.value) {
+                  setCurrentPage(1);
+                }
+              }}
               onSearch={(value) => {
                 setSearchTerm(value);
                 setCurrentPage(1);
@@ -399,7 +447,10 @@ const PharmacyPurchaseOrders: React.FC = () => {
             <Select
               placeholder="Select Supplier"
               value={supplierFilter}
-              onChange={setSupplierFilter}
+              onChange={(value) => {
+                setSupplierFilter(value || '');
+                setCurrentPage(1);
+              }}
               className="w-48"
               allowClear
             >

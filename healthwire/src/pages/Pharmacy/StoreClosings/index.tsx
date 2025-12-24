@@ -209,11 +209,41 @@ const StoreClosings = () => {
     });
   };
 
-  const handleAddStoreClosing = () => {
+  const fetchTotalSalesForDate = async (date: string) => {
+    try {
+      const response = await axios.get(`${Base_url}/apis/pharmPos/get`, {
+        params: {
+          date: date,
+          status: 'completed'
+        }
+      });
+      
+      const sales = response.data.data || [];
+      const totalSales = sales.reduce((sum: number, sale: any) => {
+        return sum + (sale.grandTotal || sale.totalAmount || 0);
+      }, 0);
+      
+      return totalSales;
+    } catch (error) {
+      console.error('Error fetching sales:', error);
+      return 0;
+    }
+  };
+
+  const handleAddStoreClosing = async () => {
     form.resetFields();
+    const today = dayjs();
     form.setFieldsValue({
-      closingDate: dayjs(),
+      closingDate: today,
     });
+    
+    // Auto-fetch total sales for today
+    const todayStr = today.format('YYYY-MM-DD');
+    const totalSales = await fetchTotalSalesForDate(todayStr);
+    form.setFieldsValue({
+      totalSales: totalSales,
+    });
+    
     setIsModalOpen(true);
   };
 
@@ -299,15 +329,29 @@ const StoreClosings = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <RangePicker
               value={dateRange}
-              onChange={(dates) => setDateRange(dates as [Dayjs | null, Dayjs | null])}
+              onChange={(dates) => {
+                setDateRange(dates as [Dayjs | null, Dayjs | null]);
+                setCurrentPage(1);
+              }}
               placeholder={['From Date', 'To Date']}
               className="w-full"
             />
             <Search
               placeholder="Search by Closed By Name"
               value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
+              onChange={(e) => {
+                setSearchTerm(e.target.value);
+                if (!e.target.value) {
+                  setCurrentPage(1);
+                }
+              }}
+              onSearch={(value) => {
+                setSearchTerm(value);
+                setCurrentPage(1);
+              }}
+              allowClear
               className="w-full"
+              enterButton={<SearchOutlined />}
             />
           </div>
         </div>
@@ -414,6 +458,15 @@ const StoreClosings = () => {
                   className="w-full" 
                   placeholder="Select closing date"
                   format="DD/MM/YYYY"
+                  onChange={async (date) => {
+                    if (date) {
+                      const dateStr = date.format('YYYY-MM-DD');
+                      const totalSales = await fetchTotalSalesForDate(dateStr);
+                      form.setFieldsValue({
+                        totalSales: totalSales,
+                      });
+                    }
+                  }}
                 />
               </Form.Item>
 
@@ -442,16 +495,20 @@ const StoreClosings = () => {
                 label={
                   <span className="font-semibold text-gray-700">
                     Total Sales <span className="text-red-500">*</span>
+                    <span className="text-xs text-gray-500 ml-2">(Auto-calculated from POS)</span>
                   </span>
                 }
-                rules={[{ required: true, message: 'Please enter total sales' }]}
+                rules={[{ required: true, message: 'Total sales is required' }]}
               >
                 <Input 
                   type="number" 
                   min={0}
                   step={0.01}
-                  placeholder="Enter total sales" 
+                  placeholder="Auto-calculated from POS sales" 
                   prefix="Rs."
+                  readOnly
+                  className="bg-gray-50 cursor-not-allowed"
+                  title="Total sales is automatically calculated from POS transactions for the selected date"
                 />
               </Form.Item>
 

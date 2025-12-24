@@ -44,6 +44,8 @@ const PharmacyItems: React.FC = () => {
   const [isUploadModalOpen, setIsUploadModalOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [totalItems, setTotalItems] = useState(0);
+  const [pageSize] = useState(20);
   const [editingItem, setEditingItem] = useState<PharmacyItem | null>(null);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -161,12 +163,24 @@ const PharmacyItems: React.FC = () => {
   const fetchItems = async (page: number, search = '') => {
     try {
       setLoading(true);
-      const url = `${Base_url}/apis/pharmItem/get?page=${page}&search=${search}`;
+      const url = `${Base_url}/apis/pharmItem/get?page=${page}&limit=${pageSize}&search=${encodeURIComponent(search)}`;
       const res = await axios.get(url);
-      setItems(res.data.data);
-      setTotalPages(res.data.totalPages);
-    } catch (error) {
-      message.error('Failed to fetch pharmacy items');
+      
+      if (res.data && res.data.status === 'ok') {
+        setItems(res.data.data || []);
+        setTotalPages(res.data.totalPages || 1);
+        setTotalItems(res.data.count || 0);
+      } else {
+        setItems([]);
+        setTotalPages(1);
+        setTotalItems(0);
+      }
+    } catch (error: any) {
+      console.error('Error fetching items:', error);
+      message.error(error.response?.data?.error || 'Failed to fetch pharmacy items');
+      setItems([]);
+      setTotalPages(1);
+      setTotalItems(0);
     } finally {
       setLoading(false);
     }
@@ -356,10 +370,11 @@ const PharmacyItems: React.FC = () => {
           dataSource={items}
           pagination={{ 
             current: currentPage, 
-            pageSize: 10, 
-            total: totalPages * 10,
+            pageSize: pageSize, 
+            total: totalItems,
             showSizeChanger: false,
             showQuickJumper: true,
+            showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} items`,
           }}
           onChange={handleTableChange}
           loading={loading}
