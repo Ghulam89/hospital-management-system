@@ -367,7 +367,7 @@ const UploadPharmacyItem: React.FC<UploadPharmacyItemProps> = (props) => {
               </p>
             </div>
           )}
-
+{/* 
           {previewData.length > 0 && (
             <div>
               <label className="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -394,7 +394,7 @@ const UploadPharmacyItem: React.FC<UploadPharmacyItemProps> = (props) => {
                 </table>
               </div>
             </div>
-          )}
+          )} */}
          
           <div className="pt-2">
             <button 
