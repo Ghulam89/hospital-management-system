@@ -249,7 +249,7 @@ export default function AddNewStock() {
     {
       title: 'ITEMS',
       key: 'items',
-      width: 200,
+      width: 300,
       render: (_: any, record: StockItem, index: number) => (
         <Select
           showSearch
@@ -549,7 +549,7 @@ export default function AddNewStock() {
               dataSource={rows}
               rowKey="id"
               pagination={false}
-              scroll={{ x: 1500 }}
+              scroll={{ x: 1600 }}
               size="small"
               rowClassName={(record) => {
                 // Highlight rows with missing item or quantity
