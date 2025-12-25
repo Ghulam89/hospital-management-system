@@ -199,8 +199,8 @@ const ConsumeStocks: React.FC = () => {
   const handleEdit = (record: ConsumedStock) => {
     form.setFieldsValue({
       ...record,
-      pharmItemId: record.pharmItemId?._id,
-      departmentId: record.departmentId?._id,
+      pharmItemId: (record.pharmItemId as any)?._id || record.pharmItemId,
+      departmentId: (record.departmentId as any)?._id || record.departmentId,
       consumptionDate: dayjs(record.consumptionDate),
     });
     setIsModalOpen(true);
@@ -237,10 +237,37 @@ const ConsumeStocks: React.FC = () => {
   const handleModalSubmit = async () => {
     try {
       const values = await form.validateFields();
+      
+      // Get current user ID from localStorage
+      const userDataStr = localStorage.getItem('userData');
+      let consumedById = null;
+      
+      if (userDataStr) {
+        try {
+          const userData = JSON.parse(userDataStr);
+          consumedById = userData._id || userData.id || null;
+        } catch (error) {
+          console.error('Error parsing user data:', error);
+        }
+      }
+      
+      if (!consumedById) {
+        message.error('User information not found. Please login again.');
+        return;
+      }
+      
+      // Validate quantity is a valid number
+      const quantity = Number(values.quantity);
+      if (isNaN(quantity) || quantity <= 0) {
+        message.error('Please enter a valid quantity greater than 0');
+        return;
+      }
+      
       const data = {
         ...values,
+        quantity: quantity,
         consumptionDate: values.consumptionDate?.format('YYYY-MM-DD'),
-        consumedBy: 'current-user-id', // Replace with actual user ID
+        consumedBy: consumedById,
       };
 
       if (form.getFieldValue('_id')) {

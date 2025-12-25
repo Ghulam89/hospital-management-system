@@ -186,18 +186,39 @@ export default function AddNewStock() {
         supplierId: values.supplierId,
         supplierInvoiceDate: values.supplierInvoiceDate.format('YYYY-MM-DD'),
         supplierInvoiceNumber: values.supplierInvoiceNumber,
-        items: validItems.map(row => ({
-          pharmItemId: row.pharmItemId,
-          quantity: Number(row.quantity) || 0,
-          looseUnitQty: Number(row.looseUnitQty) || 0,
-          unitCost: Number(row.unitCost) || 0,
-          totalCost: Number(row.totalCost) || 0,
-          batchNumber: row.batchNumber || '',
-          expiryDate: row.expiryDate || '',
-        })),
-        totalCost: Number(totalCost) || 0,
-        totalTax: Number(totalTax) || 0,
-        grandTotal: Number(grandTotal) || 0,
+        items: validItems.map(row => {
+          const quantity = Number(row.quantity);
+          const looseUnitQty = Number(row.looseUnitQty);
+          const unitCost = Number(row.unitCost);
+          const totalCost = Number(row.totalCost);
+          
+          // Validate that all numbers are valid (not NaN)
+          if (isNaN(quantity) || quantity < 0) {
+            throw new Error(`Invalid quantity for item: ${row.itemName || row.pharmItemId}`);
+          }
+          if (isNaN(looseUnitQty) || looseUnitQty < 0) {
+            throw new Error(`Invalid loose unit quantity for item: ${row.itemName || row.pharmItemId}`);
+          }
+          if (isNaN(unitCost) || unitCost < 0) {
+            throw new Error(`Invalid unit cost for item: ${row.itemName || row.pharmItemId}`);
+          }
+          if (isNaN(totalCost) || totalCost < 0) {
+            throw new Error(`Invalid total cost for item: ${row.itemName || row.pharmItemId}`);
+          }
+          
+          return {
+            pharmItemId: row.pharmItemId,
+            quantity: quantity,
+            looseUnitQty: looseUnitQty,
+            unitCost: unitCost,
+            totalCost: totalCost,
+            batchNumber: row.batchNumber || '',
+            expiryDate: row.expiryDate || '',
+          };
+        }),
+        totalCost: isNaN(Number(totalCost)) ? 0 : Number(totalCost),
+        totalTax: isNaN(Number(totalTax)) ? 0 : Number(totalTax),
+        grandTotal: isNaN(Number(grandTotal)) ? 0 : Number(grandTotal),
         remarks: values.remarks || '',
       };
 

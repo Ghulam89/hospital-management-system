@@ -102,15 +102,24 @@ pharmItemSchema.pre('save', async function(next) {
             }
         }
         
-        // Ensure numeric values are actually numbers
+        // Ensure numeric values are actually numbers and not NaN
         if (this.openingStock !== undefined && this.openingStock !== null) {
-            this.openingStock = Number(this.openingStock) || 0;
+            const openingStockNum = Number(this.openingStock);
+            this.openingStock = isNaN(openingStockNum) ? 0 : openingStockNum;
         }
         if (this.availableQuantity !== undefined && this.availableQuantity !== null) {
-            this.availableQuantity = Number(this.availableQuantity) || 0;
+            const availableQtyNum = Number(this.availableQuantity);
+            // If it's NaN, try to use openingStock as fallback, otherwise default to 0
+            if (isNaN(availableQtyNum)) {
+                const openingStockNum = Number(this.openingStock) || 0;
+                this.availableQuantity = isNaN(openingStockNum) ? 0 : openingStockNum;
+            } else {
+                this.availableQuantity = availableQtyNum;
+            }
         }
         if (this.expiredQuantity !== undefined && this.expiredQuantity !== null) {
-            this.expiredQuantity = Number(this.expiredQuantity) || 0;
+            const expiredQtyNum = Number(this.expiredQuantity);
+            this.expiredQuantity = isNaN(expiredQtyNum) ? 0 : expiredQtyNum;
         }
         
         next();

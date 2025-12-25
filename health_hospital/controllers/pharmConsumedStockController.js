@@ -5,6 +5,28 @@ const addConsumedStock = async (req, res) => {
   try {
     console.log('Creating consumed stock with data:', req.body);
     
+    // Validate required fields
+    if (!req.body.pharmItemId) {
+      return res.status(400).json({ 
+        status: "error", 
+        message: "Pharmacy item ID is required" 
+      });
+    }
+    
+    if (!req.body.quantity || req.body.quantity <= 0) {
+      return res.status(400).json({ 
+        status: "error", 
+        message: "Valid quantity is required" 
+      });
+    }
+    
+    if (!req.body.consumedBy) {
+      return res.status(400).json({ 
+        status: "error", 
+        message: "User ID (consumedBy) is required" 
+      });
+    }
+    
     // Map itemId to pharmItemId if itemId is provided
     const dataToSave = { ...req.body };
     if (dataToSave.itemId && !dataToSave.pharmItemId) {
@@ -25,10 +47,15 @@ const addConsumedStock = async (req, res) => {
     const data = await PharmConsumedStock.create(dataToSave);
     console.log('Consumed stock created successfully:', data._id);
     
-    return res.status(200).json({ status: "ok", data: data });
+    return res.status(200).json({ status: "ok", message: "Stock consumed successfully", data: data });
   } catch (err) {
     console.error('Error creating consumed stock:', err);
-    res.status(500).json({ error: err.message });
+    const errorMessage = err.message || 'Failed to consume stock';
+    return res.status(500).json({ 
+      status: "error",
+      message: errorMessage,
+      error: err.message 
+    });
   }
 };
 

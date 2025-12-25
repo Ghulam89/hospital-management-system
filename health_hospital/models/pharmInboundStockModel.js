@@ -132,12 +132,26 @@ pharmInboundStockSchema.pre('save', async function(next) {
         if (this.isNew) {
             for (const item of this.items) {
                 const pharmItem = await PharmItem.findById(item.pharmItemId);
-                if (pharmItem) {
-                    // Calculate the total quantity to add based on quantity and looseUnitQty
-                    const totalToAdd = (item.quantity * pharmItem.conversionUnit) + (item.looseUnitQty || 0);
-                    pharmItem.availableQuantity += totalToAdd;
-                    await pharmItem.save();
+                if (!pharmItem) {
+                    return next(new Error(`Pharmacy item not found with ID: ${item.pharmItemId}`));
                 }
+                
+                // Ensure all values are numbers
+                const quantity = Number(item.quantity) || 0;
+                const looseUnitQty = Number(item.looseUnitQty) || 0;
+                const conversionUnit = Number(pharmItem.conversionUnit) || 1;
+                const currentAvailableQty = Number(pharmItem.availableQuantity) || 0;
+                
+                // Calculate the total quantity to add based on quantity and looseUnitQty
+                const totalToAdd = (quantity * conversionUnit) + looseUnitQty;
+                
+                // Ensure totalToAdd is a valid number
+                if (isNaN(totalToAdd)) {
+                    return next(new Error(`Invalid quantity calculation for item: ${pharmItem.name || item.pharmItemId}`));
+                }
+                
+                pharmItem.availableQuantity = currentAvailableQty + totalToAdd;
+                await pharmItem.save();
             }
         }
 
@@ -156,11 +170,19 @@ pharmInboundStockSchema.post('findOneAndDelete', async function(doc) {
         for (const item of doc.items) {
             const pharmItem = await PharmItem.findById(item.pharmItemId);
             if (pharmItem) {
-                const totalToRevert = (item.quantity * pharmItem.conversionUnit) + (item.looseUnitQty || 0);
-                pharmItem.availableQuantity -= totalToRevert;
-                // Ensure availableQuantity doesn't go negative
-                if (pharmItem.availableQuantity < 0) pharmItem.availableQuantity = 0;
-                await pharmItem.save();
+                // Ensure all values are numbers
+                const quantity = Number(item.quantity) || 0;
+                const looseUnitQty = Number(item.looseUnitQty) || 0;
+                const conversionUnit = Number(pharmItem.conversionUnit) || 1;
+                const currentAvailableQty = Number(pharmItem.availableQuantity) || 0;
+                
+                const totalToRevert = (quantity * conversionUnit) + looseUnitQty;
+                
+                // Ensure totalToRevert is a valid number
+                if (!isNaN(totalToRevert)) {
+                    pharmItem.availableQuantity = Math.max(0, currentAvailableQty - totalToRevert);
+                    await pharmItem.save();
+                }
             }
         }
     } catch (err) {

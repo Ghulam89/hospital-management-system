@@ -56,10 +56,20 @@ pharmAddStock.pre('save', async function (next) {
         const pharm = await PharmItem.findById(pharmAdd.pharmItemId);
         if (!pharm) return next(new Error("PharmItem not found"));
 
-        const quant = pharmAdd.unit === 'pack' ? pharm.conversionUnit : 1;
-        const totalStock = pharmAdd.stock * quant;
+        // Ensure all values are numbers
+        const stock = Number(pharmAdd.stock) || 0;
+        const conversionUnit = Number(pharm.conversionUnit) || 1;
+        const currentAvailableQty = Number(pharm.availableQuantity) || 0;
+        
+        const quant = pharmAdd.unit === 'pack' ? conversionUnit : 1;
+        const totalStock = stock * quant;
 
-        pharm.availableQuantity += totalStock;
+        // Validate totalStock is a valid number
+        if (isNaN(totalStock)) {
+            return next(new Error(`Invalid stock calculation for item: ${pharm.name || pharmAdd.pharmItemId}`));
+        }
+
+        pharm.availableQuantity = currentAvailableQty + totalStock;
         await pharm.save();
 
         next();
@@ -81,16 +91,24 @@ pharmAddStock.pre('findOneAndUpdate', async function (next) {
         const pharm = await PharmItem.findById(original.pharmItemId);
         if (!pharm) return next(new Error("PharmItem not found"));
 
-        const conversionUnit = pharm.conversionUnit || 1;
+        // Ensure all values are numbers
+        const conversionUnit = Number(pharm.conversionUnit) || 1;
+        const currentAvailableQty = Number(pharm.availableQuantity) || 0;
+        const originalStock = Number(original.stock) || 0;
+        const newStockValue = Number(newStock) || 0;
 
         // Revert original stock
-        const oldQty = original.unit === 'pack' ? original.stock * conversionUnit : original.stock;
-        pharm.availableQuantity -= oldQty;
-
+        const oldQty = original.unit === 'pack' ? originalStock * conversionUnit : originalStock;
+        
         // Apply new stock
-        const newQty = newUnit === 'pack' ? newStock * conversionUnit : newStock;
-        pharm.availableQuantity += newQty;
+        const newQty = newUnit === 'pack' ? newStockValue * conversionUnit : newStockValue;
 
+        // Validate calculations
+        if (isNaN(oldQty) || isNaN(newQty)) {
+            return next(new Error(`Invalid stock calculation for item: ${pharm.name || original.pharmItemId}`));
+        }
+
+        pharm.availableQuantity = Math.max(0, currentAvailableQty - oldQty + newQty);
         await pharm.save();
         next();
     } catch (err) {
@@ -106,11 +124,18 @@ pharmAddStock.post('findOneAndDelete', async function (doc) {
         const pharm = await PharmItem.findById(doc.pharmItemId);
         if (!pharm) return;
 
-        const conversionUnit = pharm.conversionUnit || 1;
-        const actualQty = doc.unit === 'pack' ? doc.stock * conversionUnit : doc.stock;
+        // Ensure all values are numbers
+        const conversionUnit = Number(pharm.conversionUnit) || 1;
+        const stock = Number(doc.stock) || 0;
+        const currentAvailableQty = Number(pharm.availableQuantity) || 0;
+        
+        const actualQty = doc.unit === 'pack' ? stock * conversionUnit : stock;
 
-        pharm.availableQuantity -= actualQty;
-        await pharm.save();
+        // Validate calculation
+        if (!isNaN(actualQty)) {
+            pharm.availableQuantity = Math.max(0, currentAvailableQty - actualQty);
+            await pharm.save();
+        }
     } catch (err) {
         console.error("Error reverting stock on delete:", err);
     }

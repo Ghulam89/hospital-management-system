@@ -392,7 +392,8 @@ const AddPurchaseOrder: React.FC = () => {
     {
       title: 'ITEMS',
       key: 'items',
-      width: 200,
+      width: 300,
+      fixed: 'left' as const,
       render: (_: any, record: PurchaseOrderItem) => (
         <Select
           placeholder="Search for Items"
@@ -402,12 +403,27 @@ const AddPurchaseOrder: React.FC = () => {
           filterOption={(input, option) =>
             String(option?.children || '').toLowerCase().includes(input.toLowerCase())
           }
-          className="w-full"
+          style={{ width: '100%', minWidth: '280px' }}
+          dropdownStyle={{ minWidth: '300px' }}
+          dropdownMatchSelectWidth={false}
           notFoundContent={pharmItems.length === 0 ? 'Loading items...' : 'No items found'}
+          optionLabelProp="label"
         >
           {pharmItems.map(item => (
-            <Option key={item._id} value={item._id} title={item.name}>
-              {item.name}
+            <Option 
+              key={item._id} 
+              value={item._id} 
+              title={item.name}
+              label={item.name}
+            >
+              <div style={{ 
+                whiteSpace: 'nowrap', 
+                overflow: 'hidden', 
+                textOverflow: 'ellipsis',
+                maxWidth: '280px'
+              }}>
+                {item.name}
+              </div>
             </Option>
           ))}
         </Select>
@@ -683,7 +699,7 @@ const AddPurchaseOrder: React.FC = () => {
           dataSource={items}
           rowKey="id"
           pagination={false}
-          scroll={{ x: 1400 }}
+          scroll={{ x: 1500 }}
           size="small"
         />
 

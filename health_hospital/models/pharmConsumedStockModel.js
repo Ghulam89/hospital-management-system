@@ -50,11 +50,23 @@ pharmConsumedStockSchema.pre('save', async function(next) {
         try {
             const PharmItem = require('./pharmItemModel');
             const item = await PharmItem.findById(this.pharmItemId);
-            if (item) {
-                this.totalCost = this.quantity * item.unitCost;
+            if (!item) {
+                return next(new Error(`Pharmacy item not found with ID: ${this.pharmItemId}`));
+            }
+            
+            // Ensure all values are numbers
+            const quantity = Number(this.quantity) || 0;
+            const unitCost = Number(item.unitCost) || 0;
+            
+            this.totalCost = quantity * unitCost;
+            
+            // Ensure totalCost is a valid number
+            if (isNaN(this.totalCost)) {
+                this.totalCost = 0;
             }
         } catch (error) {
             console.error('Error calculating total cost:', error);
+            return next(error);
         }
     }
     next();
@@ -66,15 +78,31 @@ pharmConsumedStockSchema.pre('save', async function(next) {
         try {
             const PharmItem = require('./pharmItemModel');
             const item = await PharmItem.findById(this.pharmItemId);
-            if (item) {
-                if (item.availableQuantity < this.quantity) {
-                    return next(new Error(`Insufficient stock. Available: ${item.availableQuantity}, Required: ${this.quantity}`));
-                }
-                item.availableQuantity -= this.quantity;
-                await item.save();
+            if (!item) {
+                return next(new Error(`Pharmacy item not found with ID: ${this.pharmItemId}`));
             }
+            
+            // Ensure all values are numbers
+            const quantity = Number(this.quantity) || 0;
+            const currentAvailableQty = Number(item.availableQuantity) || 0;
+            
+            // Validate quantity
+            if (isNaN(quantity) || quantity <= 0) {
+                return next(new Error(`Invalid quantity: ${this.quantity}`));
+            }
+            
+            if (isNaN(currentAvailableQty)) {
+                return next(new Error(`Invalid available quantity for item: ${item.name || this.pharmItemId}`));
+            }
+            
+            if (currentAvailableQty < quantity) {
+                return next(new Error(`Insufficient stock. Available: ${currentAvailableQty}, Required: ${quantity}`));
+            }
+            
+            item.availableQuantity = currentAvailableQty - quantity;
+            await item.save();
         } catch (error) {
-            next(error);
+            return next(error);
         }
     }
     next();

@@ -67,8 +67,10 @@ const addpharmAddStock = async (req, res) => {
     
   } catch (err) {
     console.error('Error adding stock:', err);
-    res.status(500).json({ 
+    const errorMessage = err.message || 'Failed to add stock';
+    return res.status(500).json({ 
       status: "error",
+      message: errorMessage,
       error: err.message 
     });
   }
