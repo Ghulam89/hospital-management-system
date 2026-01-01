@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, message, TablePaginationConfig } from 'antd';
+import { Table, Button, message, TablePaginationConfig, Input } from 'antd';
+import { SearchOutlined } from '@ant-design/icons';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 import axios from 'axios';
 import { FaCloudUploadAlt, FaRegEdit } from 'react-icons/fa';
@@ -8,6 +9,8 @@ import Swal from 'sweetalert2';
 import { Base_url } from '../../../utils/Base_url';
 import AddPharmacyItems from './AddPharmacyItems';
 import UploadPharmacyItem from './UploadPharmacyItem';
+
+const { Search } = Input;
 
 // Types for pharmacy item and reference data
 interface PharmacyItem {
@@ -310,17 +313,8 @@ const PharmacyItems: React.FC = () => {
         categories={categories}
       />
 
+      {/* Header Actions */}
       <div className="mb-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
-        <div className="w-full md:w-1/3">
-          <input
-            type="text"
-            placeholder="Search Items..."
-            value={searchTerm}
-            onChange={handleSearch}
-            className="w-full rounded border-[1.5px] bg-white border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
-          />
-        </div>
-
         <div className="flex items-center gap-4">
           <button
             onClick={handleAddExcel}
@@ -345,6 +339,38 @@ const PharmacyItems: React.FC = () => {
             </svg>
             Add Item
           </button>
+        </div>
+      </div>
+
+      {/* Filter Section */}
+      <div className="bg-white rounded-lg shadow-sm border border-gray-100 p-4 mb-5">
+        <div className="flex items-center mb-4">
+          <svg className="w-5 h-5 text-primary mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+          </svg>
+          <h4 className="text-sm font-semibold text-gray-700">Filter & Search</h4>
+        </div>
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="flex flex-col md:col-span-1 lg:col-span-2">
+            <label className="text-xs font-medium text-gray-600 mb-1.5 flex items-center">
+              <svg className="w-3.5 h-3.5 mr-1 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+              </svg>
+              Search Items
+            </label>
+            <Search
+              placeholder="Search by item name, barcode, or generic name..."
+              value={searchTerm}
+              onChange={(e) => handleSearch(e)}
+              onSearch={(value) => {
+                setSearchTerm(value);
+                setCurrentPage(1);
+              }}
+              allowClear
+              className="w-full"
+              enterButton={<SearchOutlined />}
+            />
+          </div>
         </div>
       </div>
 

@@ -74,6 +74,7 @@ type PosItem = {
   netAmount: number;
   totalAmount: number;
   isReturn: boolean;
+  originalInvoiceNumber?: string; // Invoice number for return items
 };
 
 type PaymentMethod = 'Cash' | 'Credit' | 'Card' | 'Bank Transfer' | 'Cheque';
@@ -119,6 +120,7 @@ export default function PharmacyPOS() {
       netAmount: 0,
       totalAmount: 0,
       isReturn: false,
+      originalInvoiceNumber: '',
     }
   ]);
 
@@ -281,6 +283,7 @@ export default function PharmacyPOS() {
       netAmount: 0,
       totalAmount: 0,
       isReturn: false,
+      originalInvoiceNumber: '',
     }]);
   };
 
@@ -362,14 +365,24 @@ export default function PharmacyPOS() {
       }
       
       // Recalculate amounts when relevant fields change
-      if (["quantity", "rate", "discount", "batchNumber", "tax"].includes(field)) {
+      if (["quantity", "rate", "discount", "batchNumber", "tax", "returnQuantity"].includes(field)) {
         // Update unit quantity when quantity changes
         if (field === 'quantity') {
           updatedItem.unitQuantity = updatedItem.quantity * updatedItem.conversionUnit;
         }
-        updatedItem.netAmount = updatedItem.rate * updatedItem.quantity;
-        const taxAmount = (updatedItem.netAmount * (updatedItem.tax / 100)) || 0;
-        updatedItem.totalAmount = updatedItem.netAmount + taxAmount - updatedItem.discount;
+        
+        // For return items with returnQuantity
+        if (updatedItem.isReturn && updatedItem.returnQuantity > 0) {
+          // Return quantity is in same unit as quantity (packs)
+          updatedItem.netAmount = -(updatedItem.rate * updatedItem.returnQuantity);
+          const taxAmount = (Math.abs(updatedItem.netAmount) * (updatedItem.tax / 100)) || 0;
+          updatedItem.totalAmount = updatedItem.netAmount - taxAmount + updatedItem.discount;
+        } else {
+          // For regular sales
+          updatedItem.netAmount = updatedItem.rate * updatedItem.quantity;
+          const taxAmount = (updatedItem.netAmount * (updatedItem.tax / 100)) || 0;
+          updatedItem.totalAmount = updatedItem.netAmount + taxAmount - updatedItem.discount;
+        }
       }
       
       // Update quantity when unit quantity changes
@@ -408,6 +421,20 @@ export default function PharmacyPOS() {
       
       if (field === 'isReturn') {
         updatedItem.returnQuantity = 0;
+        // Clear invoice number if unchecking return
+        if (!value) {
+          updatedItem.originalInvoiceNumber = '';
+        }
+      }
+      
+      // Calculate profit - for return items, profit should be negative (loss)
+      if (field === 'isReturn' || field === 'quantity' || field === 'rate' || field === 'unitCost' || field === 'returnQuantity') {
+        if (updatedItem.isReturn && updatedItem.returnQuantity > 0) {
+          // For returns, profit is negative (loss)
+          updatedItem.netAmount = -(updatedItem.rate * updatedItem.returnQuantity);
+          const taxAmount = (Math.abs(updatedItem.netAmount) * (updatedItem.tax / 100)) || 0;
+          updatedItem.totalAmount = updatedItem.netAmount - taxAmount + updatedItem.discount;
+        }
       }
       
       return updatedItem;
@@ -450,7 +477,13 @@ export default function PharmacyPOS() {
   };
 
   const calculateSubTotal = () => {
-    return posItems.reduce((sum, item) => sum + item.netAmount, 0);
+    return posItems.reduce((sum, item) => {
+      // For return items with returnQuantity, use negative amount
+      if (item.isReturn && item.returnQuantity > 0) {
+        return sum - (item.rate * item.returnQuantity);
+      }
+      return sum + item.netAmount;
+    }, 0);
   };
 
   const calculateTotalDiscount = () => {
@@ -533,6 +566,13 @@ export default function PharmacyPOS() {
           setIsSubmitting(false);
           return;
         }
+        
+        // Validate: Return items must have original invoice number
+        if (item.isReturn && item.returnQuantity > 0 && !item.originalInvoiceNumber?.trim()) {
+          toast.error(`Please enter original invoice number for return item: ${selectedItem.name}`);
+          setIsSubmitting(false);
+          return;
+        }
       }
       
       const totalPaid = calculateTotalPaid();
@@ -588,9 +628,14 @@ export default function PharmacyPOS() {
           returnQuantity: item.isReturn ? item.returnQuantity : 0,
           discount: item.discount,
           tax: item.tax,
-          netAmount: item.netAmount,
-          totalAmount: item.totalAmount,
-          isReturn: item.isReturn
+          netAmount: item.isReturn && item.returnQuantity > 0 
+            ? -(item.rate * item.returnQuantity) 
+            : item.netAmount,
+          totalAmount: item.isReturn && item.returnQuantity > 0
+            ? -(item.rate * item.returnQuantity) + (item.rate * item.returnQuantity * (item.tax / 100)) - item.discount
+            : item.totalAmount,
+          isReturn: item.isReturn,
+          originalInvoiceNumber: item.isReturn ? item.originalInvoiceNumber : undefined
         })),
         payment: paymentInstallments.map(payment => ({
           method: payment.method,
@@ -610,7 +655,10 @@ export default function PharmacyPOS() {
         // Store the created invoice ID for reference
         const invoiceId = response.data.data?._id;
         
-        // Reset form state
+        // Show success message with invoice details
+        toast.success(`POS invoice created successfully! Invoice ID: ${invoiceId?.slice(-8).toUpperCase()}`);
+        
+        // Reset form state immediately
         setPosItems([{
           id: 1,
           pharmItemId: '',
@@ -628,6 +676,7 @@ export default function PharmacyPOS() {
           netAmount: 0,
           totalAmount: 0,
           isReturn: false,
+          originalInvoiceNumber: '',
         }]);
         setPaymentInstallments([{
           id: 1,
@@ -644,13 +693,10 @@ export default function PharmacyPOS() {
         setUseManualDoctor(false);
         setRemarks('');
         
-        // Show success message with invoice details
-        toast.info(`Invoice ID: ${invoiceId}`);
-        
-        // Force page reload to ensure clean state
+        // Reload page after short delay to ensure clean state
         setTimeout(() => {
           window.location.reload();
-        }, 2000);
+        }, 1500);
       } else {
         throw new Error(response.data.message || 'Transaction failed');
       }
@@ -886,12 +932,14 @@ export default function PharmacyPOS() {
                         label: item.itemName,
                         value: item.pharmItemId
                       } : null}
-                      onChange={(selectedOption) => {
-                        updatePosItem(item.id, 'pharmItemId', selectedOption?.value || '');
+                      onChange={(selectedOption: any) => {
+                        if (selectedOption) {
+                          updatePosItem(item.id, 'pharmItemId', selectedOption.value || '');
+                        }
                       }}
                       loadOptions={loadItemOptions as unknown as LoadOptions<any, never, { page: number }>}
-                      getOptionLabel={(option) => option.label}
-                      getOptionValue={(option) => option.value}
+                      getOptionLabel={(option: any) => option?.label || option?.itemData?.name || ''}
+                      getOptionValue={(option: any) => option?.value || ''}
                       placeholder="Search by name, barcode or serial..."
                       additional={{ page: 1 }}
                       classNamePrefix="react-select"
@@ -899,7 +947,22 @@ export default function PharmacyPOS() {
                       required
                       menuPortalTarget={typeof window !== 'undefined' ? document.body : null}
                       menuPosition="fixed"
-                      styles={{ menuPortal: base => ({ ...base, zIndex: 9999 }) }}
+                      styles={{ 
+                        menuPortal: base => ({ ...base, zIndex: 9999 }),
+                        singleValue: (base) => ({
+                          ...base,
+                          color: '#1f2937',
+                          fontWeight: '500'
+                        })
+                      }}
+                      formatOptionLabel={(option: any) => (
+                        <div className="text-sm">
+                          <div className="font-medium text-gray-900">{option.itemData?.name || option.label}</div>
+                          {option.itemData?.barcode && (
+                            <div className="text-xs text-gray-500">Barcode: {option.itemData.barcode}</div>
+                          )}
+                        </div>
+                      )}
                     />
                   </td>
                   <td className="px-2 py-3 whitespace-nowrap">
@@ -1023,13 +1086,25 @@ export default function PharmacyPOS() {
                   </td>
                   <td className="px-2 py-3 whitespace-nowrap">
                     {/* Profit/Loss column */}
-                    <div className={`w-24 rounded-lg border-2 py-2 px-3 text-sm font-bold ${
-                      ((item.rate - item.unitCost) * item.quantity) >= 0 
-                        ? 'bg-green-50 border-green-300 text-green-700' 
-                        : 'bg-red-50 border-red-300 text-red-700'
-                    }`}>
-                      {((item.rate - item.unitCost) * item.quantity).toFixed(2)}
-                    </div>
+                    {(() => {
+                      let profit = 0;
+                      if (item.isReturn && item.returnQuantity > 0) {
+                        // For returns, profit is negative (loss)
+                        profit = -((item.rate - item.unitCost) * item.returnQuantity);
+                      } else {
+                        // For regular sales
+                        profit = (item.rate - item.unitCost) * item.quantity;
+                      }
+                      return (
+                        <div className={`w-24 rounded-lg border-2 py-2 px-3 text-sm font-bold ${
+                          profit >= 0 
+                            ? 'bg-green-50 border-green-300 text-green-700' 
+                            : 'bg-red-50 border-red-300 text-red-700'
+                        }`}>
+                          {profit.toFixed(2)}
+                        </div>
+                      );
+                    })()}
                   </td>
                   <td className="px-2 py-3 whitespace-nowrap">
                     <div className="flex flex-col items-center space-y-2">
@@ -1042,6 +1117,15 @@ export default function PharmacyPOS() {
                         />
                         <span className="ml-2 text-xs text-gray-600 font-medium">Return</span>
                       </label>
+                      {item.isReturn && (
+                        <input
+                          type="text"
+                          className="w-full mt-1 rounded-lg border border-red-300 bg-red-50 py-1.5 px-2 text-xs text-gray-700 outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-200"
+                          placeholder="Original Invoice #"
+                          value={item.originalInvoiceNumber || ''}
+                          onChange={(e) => updatePosItem(item.id, 'originalInvoiceNumber', e.target.value)}
+                        />
+                      )}
                       <button
                         onClick={() => removePosItem(item.id)}
                         className="bg-red-100 text-red-600 hover:bg-red-600 hover:text-white p-2 rounded-lg transition-all duration-200 disabled:opacity-30"
