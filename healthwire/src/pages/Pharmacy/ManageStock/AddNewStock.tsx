@@ -1,13 +1,12 @@
 import { useState, useEffect } from 'react';
-import { Form, Input, Button, Select, DatePicker, Table, Card, Row, Col, message, Upload } from 'antd';
+import { Form, Input, Button, DatePicker, Table, Card, Row, Col, message, Upload } from 'antd';
 import { PlusOutlined, DeleteOutlined, UploadOutlined } from '@ant-design/icons';
 import axios from 'axios';
 import { Base_url } from '../../../utils/Base_url';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 import dayjs from 'dayjs';
 import { useNavigate } from 'react-router-dom';
-
-const { Option } = Select;
+import { AsyncPaginate } from 'react-select-async-paginate';
 
 interface StockItem {
   id: string;
@@ -25,6 +24,20 @@ interface StockItem {
   totalCost: number;
   batchNumber: string;
   expiryDate: string;
+}
+
+interface SelectOption {
+  value: string;
+  label: string;
+  [key: string]: any;
+}
+
+interface LoadOptionsResult {
+  options: SelectOption[];
+  hasMore: boolean;
+  additional?: {
+    page: number;
+  };
 }
 
 const defaultRow: StockItem = {
@@ -54,25 +67,93 @@ export default function AddNewStock() {
   const [totalCost, setTotalCost] = useState(0);
   const [totalTax, setTotalTax] = useState(0);
   const [grandTotal, setGrandTotal] = useState(0);
-   const navigate = useNavigate();
-  // Fetch reference data
+  const navigate = useNavigate();
+
+  // Function to load items with pagination and search
+  const loadItems = async (search: string, prevOptions: any, { page }: any) => {
+    try {
+      const response = await axios.get(`${Base_url}/apis/pharmItem/get`, {
+        params: {
+          search: search || '',
+          page: page || 1,
+          limit: 20,
+        }
+      });
+
+      const data = response.data.data || [];
+      const options = data.map((item: any) => ({
+        value: item._id,
+        label: item.name,
+        ...item
+      }));
+
+      return {
+        options,
+        hasMore: data.length === 20,
+        additional: {
+          page: page + 1,
+        },
+      };
+    } catch (error) {
+      console.error('Error loading items:', error);
+      return {
+        options: [],
+        hasMore: false,
+      };
+    }
+  };
+
+  // Function to load suppliers with pagination and search
+  const loadSuppliers = async (search: string, prevOptions: any, { page }: any) => {
+    try {
+      const response = await axios.get(`${Base_url}/apis/pharmSupplier/get`, {
+        params: {
+          search: search || '',
+          page: page || 1,
+          limit: 20,
+        }
+      });
+
+      const data = response.data.data || [];
+      const options = data.map((supplier: any) => ({
+        value: supplier._id,
+        label: `${supplier.name} - ${supplier.phone}`,
+        ...supplier
+      }));
+
+      return {
+        options,
+        hasMore: data.length === 20,
+        additional: {
+          page: page + 1,
+        },
+      };
+    } catch (error) {
+      console.error('Error loading suppliers:', error);
+      return {
+        options: [],
+        hasMore: false,
+      };
+    }
+  };
+
+  // Initial data fetch for local state
   useEffect(() => {
-    const fetchData = async () => {
+    const fetchInitialData = async () => {
       try {
         const [itemsRes, suppliersRes] = await Promise.all([
-          axios.get(`${Base_url}/apis/pharmItem/get`),
-          axios.get(`${Base_url}/apis/pharmSupplier/get`)
+          axios.get(`${Base_url}/apis/pharmItem/get?limit=10`),
+          axios.get(`${Base_url}/apis/pharmSupplier/get?limit=10`)
         ]);
         
         setItemsList(itemsRes.data.data || []);
         setSuppliersList(suppliersRes.data.data || []);
       } catch (error) {
-        console.error('Error fetching data:', error);
-        message.error('Failed to fetch reference data');
+        console.error('Error fetching initial data:', error);
       }
     };
     
-    fetchData();
+    fetchInitialData();
   }, []);
 
   const handleRowChange = (idx: number, field: string, value: any) => {
@@ -97,7 +178,7 @@ export default function AddNewStock() {
         const categoryName = selectedItem.pharmCategoryId?.name?.toLowerCase() || '';
         if (categoryName === 'product' || categoryName.includes('product')) {
           message.warning('Loose quantity is not allowed for Product category items');
-          return; // Don't update if validation fails
+          return;
         }
       }
     }
@@ -120,14 +201,14 @@ export default function AddNewStock() {
     calculateTotals(updated);
   };
 
-  const handleItemSelect = (idx: number, itemId: string) => {
-    const selectedItem = itemsList.find(item => item._id === itemId);
-    if (selectedItem) {
+  const handleItemSelect = (idx: number, option: any) => {
+    if (option) {
+      const selectedItem = option;
       const updated = [...rows];
       updated[idx] = {
         ...updated[idx],
-        pharmItemId: itemId,
-        itemName: selectedItem.name,
+        pharmItemId: selectedItem.value,
+        itemName: selectedItem.label,
         manufacturer: selectedItem.pharmManufacturerId?.name || '',
         b2bCategory: selectedItem.pharmCategoryId?.name || '',
         rack: selectedItem.pharmRackId?.name || '',
@@ -138,7 +219,36 @@ export default function AddNewStock() {
       };
       setRows(updated);
       calculateTotals(updated);
+      
+      // Add to local cache for later use
+      if (!itemsList.some(item => item._id === selectedItem.value)) {
+        setItemsList(prev => [...prev, {
+          _id: selectedItem.value,
+          name: selectedItem.label,
+          ...selectedItem
+        }]);
+      }
+    } else {
+      // Clear selection
+      const updated = [...rows];
+      updated[idx] = {
+        ...updated[idx],
+        pharmItemId: '',
+        itemName: '',
+        manufacturer: '',
+        b2bCategory: '',
+        rack: '',
+        conversionUnit: 1,
+        unit: 'Pack',
+        availableQty: 0,
+      };
+      setRows(updated);
+      calculateTotals(updated);
     }
+  };
+
+  const handleSupplierSelect = (option: any) => {
+    form.setFieldsValue({ supplierId: option?.value || '' });
   };
 
   const calculateTotals = (updatedRows: StockItem[]) => {
@@ -224,7 +334,7 @@ export default function AddNewStock() {
 
       await axios.post(`${Base_url}/apis/pharmAddStock/create`, stockData);
       message.success('Stock added successfully!');
-      navigate('/admin/pharmacy/stocks')
+      navigate('/admin/pharmacy/stocks');
       // Reset form
       form.resetFields();
       setRows([{ ...defaultRow, id: '1' }]);
@@ -251,22 +361,35 @@ export default function AddNewStock() {
       key: 'items',
       width: 300,
       render: (_: any, record: StockItem, index: number) => (
-        <Select
-          showSearch
+        <AsyncPaginate
+          value={record.pharmItemId ? {
+            value: record.pharmItemId,
+            label: record.itemName,
+          } : null}
+          loadOptions={loadItems}
+          onChange={(option) => handleItemSelect(index, option)}
           placeholder="Search for Items"
-          value={record.pharmItemId}
-          onChange={(value) => handleItemSelect(index, value)}
-          style={{ width: '100%' }}
-          filterOption={(input, option) =>
-            (option?.children as unknown as string)?.toLowerCase().includes(input.toLowerCase())
-          }
-        >
-          {itemsList.map(item => (
-            <Option key={item._id} value={item._id}>
-              {item.name}
-            </Option>
-          ))}
-        </Select>
+          additional={{
+            page: 1,
+          }}
+          debounceTimeout={300}
+          isClearable
+          styles={{
+            control: (provided) => ({
+              ...provided,
+              minHeight: '32px',
+              fontSize: '14px',
+              borderColor: '#d9d9d9',
+            }),
+            menuPortal: (provided) => ({
+              ...provided,
+              zIndex: 999999,
+            }),
+          }}
+          menuPortalTarget={document.body}
+          menuPosition="fixed"
+          className="react-select-async"
+        />
       ),
     },
     {
@@ -422,7 +545,6 @@ export default function AddNewStock() {
     <div className="mx-auto max-w-[1800px] px-4 py-6">
       <Breadcrumb pageName="Add New Stock" />
       
-    
       <Form
         form={form}
         layout="vertical"
@@ -471,20 +593,31 @@ export default function AddNewStock() {
                 name="supplierId"
                 rules={[{ required: true, message: 'Please select supplier' }]}
               >
-                <Select
-                  showSearch
+                <AsyncPaginate
+                  loadOptions={loadSuppliers}
+                  onChange={handleSupplierSelect}
                   placeholder="Search by name or phone.."
-                  onChange={() => {}}
-                  filterOption={(input, option) =>
-                    (option?.children as unknown as string)?.toLowerCase().includes(input.toLowerCase())
-                  }
-                >
-                  {suppliersList.map(supplier => (
-                    <Option key={supplier._id} value={supplier._id}>
-                      {supplier.name} - {supplier.phone}
-                    </Option>
-                  ))}
-                </Select>
+                  additional={{
+                    page: 1,
+                  }}
+                  debounceTimeout={300}
+                  isClearable
+                  styles={{
+                    control: (provided) => ({
+                      ...provided,
+                      minHeight: '32px',
+                      fontSize: '14px',
+                      borderColor: '#d9d9d9',
+                    }),
+                    menuPortal: (provided) => ({
+                      ...provided,
+                      zIndex: 999999,
+                    }),
+                  }}
+                  menuPortalTarget={document.body}
+                  menuPosition="fixed"
+                  className="react-select-async"
+                />
               </Form.Item>
             </Col>
             <Col span={6}>
@@ -543,7 +676,7 @@ export default function AddNewStock() {
             </div>
           </div>
           
-          <div className="overflow-x-auto">
+          <div className="overflow-x-auto relative">
             <Table
               columns={columns}
               dataSource={rows}
@@ -673,6 +806,83 @@ export default function AddNewStock() {
           </div>
         </div>
       </Form>
+
+      {/* Add CSS styles for react-select-async-paginate */}
+      <style jsx global>{`
+        /* Fix for React Select dropdown - HIGHEST PRIORITY */
+        .react-select__menu {
+          z-index: 999999 !important;
+        }
+        
+        .react-select__menu-portal {
+          z-index: 999999 !important;
+        }
+        
+        /* Ensure the menu portal has fixed positioning */
+        .react-select__menu-portal > div {
+          position: fixed !important;
+        }
+        
+        /* Fix for Ant Design table cells */
+        .ant-table-cell {
+          position: static !important;
+          overflow: visible !important;
+        }
+        
+        .ant-table-tbody > tr > td {
+          position: relative !important;
+          z-index: auto !important;
+          overflow: visible !important;
+        }
+        
+        /* Ensure table doesn't create stacking context */
+        .ant-table-container {
+          position: static !important;
+          overflow: visible !important;
+        }
+        
+        .ant-table-wrapper {
+          position: relative !important;
+          z-index: 1 !important;
+          overflow: visible !important;
+        }
+        
+        /* Fix for table scroll */
+        .ant-table-body {
+          overflow: visible !important;
+        }
+        
+        .ant-table-content {
+          overflow: visible !important;
+        }
+        
+        /* Higher specificity for AsyncPaginate */
+        .react-select-async .react-select__menu {
+          z-index: 999999 !important;
+        }
+        
+        /* Make sure parent containers don't clip */
+        .ant-card-body {
+          overflow: visible !important;
+        }
+        
+        /* Fix for any modal or drawer if present */
+        .ant-modal-wrap,
+        .ant-drawer-wrap {
+          z-index: 1000 !important;
+        }
+        
+        /* React Select menu should be above everything */
+        .react-select__menu {
+          z-index: 999999 !important;
+          position: fixed !important;
+        }
+        
+        /* Additional safety for very high z-index */
+        .react-select__menu * {
+          z-index: 999999 !important;
+        }
+      `}</style>
     </div>
   );
 }

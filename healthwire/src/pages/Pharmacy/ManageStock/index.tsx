@@ -345,6 +345,7 @@ const PharmacyStocks: React.FC = () => {
         showCancelButton: true,
         confirmButtonText: 'Yes, Delete',
         cancelButtonText: 'Cancel',
+        cancelButtonColor: '#6b7280',
         confirmButtonColor: '#ef4444',
       });
 
