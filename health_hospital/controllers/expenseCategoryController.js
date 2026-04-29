@@ -1,4 +1,5 @@
 const ExpenseCategory = require("../models/expenseCategoryModel");
+const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible } = require("../utils/branchScope");
 
 // 1. Create expenseCategory
 const addexpenseCategory = async (req, res) => {
@@ -6,7 +7,7 @@ const addexpenseCategory = async (req, res) => {
 
 
 
-      const data = await ExpenseCategory.create({ ...req.body });
+      const data = await ExpenseCategory.create(assignBranchIdForCreate(req, { ...req.body }));
       return res.status(200).json({ status: "ok", data: data });
     
   } catch (err) {
@@ -25,6 +26,8 @@ const getexpenseCategorys = async (req, res) => {
     // Create base query with optional gender filter
     const baseQuery = {};
 
+    const branchQ = await mergeBranchScopedQuery(req);
+    if (branchQ) Object.assign(baseQuery, branchQ);
 
     const data = await ExpenseCategory.find(baseQuery).sort({createdAt:-1})
       .limit(limit)
@@ -53,6 +56,9 @@ const getexpenseCategoryById = async (req, res) => {
   try {
     const id = req.params.id;
     const data = await ExpenseCategory.findById(id);
+    if (!data || !(await branchDocumentVisible(req, data.branchId))) {
+      return res.status(404).json({ status: "fail", message: "Expense category not found" });
+    }
     return res.status(200).json({ status: "ok", data: data });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -64,6 +70,9 @@ const updateexpenseCategory = async (req, res) => {
   try {
     let id = req.params.id;
     let getImage = await ExpenseCategory.findById(id);
+    if (!getImage || !(await branchDocumentVisible(req, getImage.branchId))) {
+      return res.status(404).json({ status: "fail", message: "Expense category not found" });
+    }
     
 
     const data = await ExpenseCategory.findByIdAndUpdate(
@@ -81,6 +90,10 @@ const updateexpenseCategory = async (req, res) => {
 const deleteexpenseCategory = async (req, res) => {
   try {
     const id = req.params.id;
+    const row = await ExpenseCategory.findById(id);
+    if (!row || !(await branchDocumentVisible(req, row.branchId))) {
+      return res.status(404).json({ status: "fail", message: "Expense category not found" });
+    }
     await ExpenseCategory.findByIdAndDelete(id);
     return res
       .status(200)

@@ -1,10 +1,18 @@
 import { Document, Image, Page, Text, View,StyleSheet} from "@react-pdf/renderer";
 import logoDataUrl from '../../../images/logo-icon.png';
 import moment from "moment";
+import { getInvoiceHeaderForPdf } from "../../../utils/branchPdfHeader";
 
 // PDF Styles
 
 
+
+interface InvoiceExpense {
+  categoryName?: string;
+  description?: string;
+  amount?: number;
+  showInPrint?: boolean;
+}
 
 interface InvoiceItem {
   description: string;
@@ -12,6 +20,7 @@ interface InvoiceItem {
   quantity: number;
   amount: number;
   discount: number;
+  expenses?: InvoiceExpense[];
 }
 
 interface Doctor {
@@ -22,12 +31,14 @@ interface Invoice {
   _id: string;
   createdAt: string;
   doctorId?: Doctor;
+  branchId?: { name?: string; address?: string; location?: string; phone?: string; email?: string };
   item?: InvoiceItem[];
   subTotalBill?: number;
   discountBill?: number;
   totalBill?: number;
   totalPay?: number;
   duePay?: number;
+  invoiceExpenses?: InvoiceExpense[];
 }
 
 interface Patient {
@@ -43,7 +54,7 @@ interface InvoicePdfProps {
 const InvoicePdf = ({ invoice, patient }: InvoicePdfProps) => {
 
     console.log('invoice', invoice);
-    
+    const header = getInvoiceHeaderForPdf(invoice);
 
     const styles = StyleSheet.create({
   page: {
@@ -154,6 +165,14 @@ const InvoicePdf = ({ invoice, patient }: InvoicePdfProps) => {
     marginTop: 5,
     fontWeight: 'bold',
   },
+      sectionHeader: {
+        fontSize: 10,
+        marginBottom: 2,
+        textAlign: 'center',
+        borderTopWidth: 1,
+        borderTopColor: '#000',
+        paddingTop: 3,
+      },
   notes: {
     fontSize: 9,
     color: '#666',
@@ -178,9 +197,9 @@ const InvoicePdf = ({ invoice, patient }: InvoicePdfProps) => {
       <View style={styles.header}>
         <Image src={logoDataUrl} style={styles.logo} />
         <View style={styles.clinicInfo}>
-          <Text style={styles.clinicName}>HOLISTIC CARE CLINIC</Text>
-          <Text style={styles.clinicAddress}>188-Y Block Phase III, DHA, Lahore, Punjab, Pakistan</Text>
-          <Text style={styles.clinicAddress}>Phone: 0342-4211888 | Email: info@holisticcare.com</Text>
+          <Text style={styles.clinicName}>{header.clinicName}</Text>
+          {header.addressLine ? <Text style={styles.clinicAddress}>{header.addressLine}</Text> : null}
+          <Text style={styles.clinicAddress}>{header.contactLine}</Text>
         </View>
       </View>
 
@@ -191,7 +210,7 @@ const InvoicePdf = ({ invoice, patient }: InvoicePdfProps) => {
       <View style={styles.patientInfo}>
         <View style={styles.infoRow}>
           <Text style={styles.infoLabel}>Invoice #:</Text>
-          <Text>{invoice._id.substring(0, 6).toUpperCase()}</Text>
+          <Text>{invoice.invoiceNo || invoice.invoiceNumber || invoice._id?.substring?.(0, 6)?.toUpperCase?.() || 'N/A'}</Text>
         </View>
         <View style={styles.infoRow}>
           <Text style={styles.infoLabel}>Date:</Text>
@@ -229,6 +248,84 @@ const InvoicePdf = ({ invoice, patient }: InvoicePdfProps) => {
         </View>
       ))}
 
+      {invoice.item && invoice.item.map((item, index) => {
+        const printableExpenses = (item.expenses || []).filter(exp => exp.showInPrint);
+        if (printableExpenses.length === 0) return null;
+        return (
+          <View key={`exp-${index}`} style={{ marginBottom: 6 }}>
+            <Text style={styles.sectionHeader}>Breakdown Expense</Text>
+            {printableExpenses.map((exp, i) => (
+              <View key={`exp-row-${index}-${i}`} style={styles.tableRow}>
+                <Text style={styles.descriptionColumn}>
+                  {exp.description || exp.categoryName || 'Expense'}
+                </Text>
+                <Text style={styles.rateColumn}></Text>
+                <Text style={styles.quantityColumn}></Text>
+                <Text style={styles.amountColumn}>{(exp.amount || 0).toFixed(2)}</Text>
+                <Text style={styles.discountColumn}></Text>
+              </View>
+            ))}
+          </View>
+        );
+      })}
+
+      {Array.isArray(invoice.invoiceExpenses) && invoice.invoiceExpenses.filter(e => e.showInPrint).length > 0 && (
+        <View style={{ marginTop: 10, marginBottom: 6 }}>
+          <Text style={styles.sectionHeader}>Additional Expenses</Text>
+          {invoice.invoiceExpenses.filter(e => e.showInPrint).map((exp, i) => (
+            <View key={`inv-exp-${i}`} style={styles.tableRow}>
+              <Text style={styles.descriptionColumn}>
+                {exp.description || exp.categoryName || 'Expense'}
+              </Text>
+              <Text style={styles.rateColumn}></Text>
+              <Text style={styles.quantityColumn}></Text>
+              <Text style={styles.amountColumn}>{(exp.amount || 0).toFixed(2)}</Text>
+              <Text style={styles.discountColumn}></Text>
+            </View>
+          ))}
+        </View>
+      )}
+
+      {(() => {
+        const itemExpenses = (invoice.item || [])
+          .flatMap((it) => (it.expenses || []).filter((e) => e?.showInPrint))
+          .reduce((sum, e) => sum + (Number(e?.amount) || 0), 0);
+        const invoiceLevelExpenses = (invoice.invoiceExpenses || [])
+          .filter((e) => e?.showInPrint)
+          .reduce((sum, e) => sum + (Number(e?.amount) || 0), 0);
+        const expensesTotal = itemExpenses + invoiceLevelExpenses;
+        return (
+          <View style={styles.totalsContainer}>
+            <View style={styles.totalRow}>
+              <Text style={{fontSize:12}}>Sub Total:</Text>
+              <Text style={{fontSize:12}}>Rs. {invoice.subTotalBill?.toFixed?.(2)}</Text>
+            </View>
+            <View style={styles.totalRow}>
+              <Text style={{fontSize:12}}>Discount:</Text>
+              <Text style={{fontSize:12}}>Rs. {invoice.discountBill?.toFixed?.(2)}</Text>
+            </View>
+            {expensesTotal > 0 && (
+              <View style={styles.totalRow}>
+                <Text style={{fontSize:12}}>Additional Expenses:</Text>
+                <Text style={{fontSize:12}}>Rs. {expensesTotal.toFixed(2)}</Text>
+              </View>
+            )}
+            <View style={[styles.totalRow, styles.grandTotal]}>
+              <Text style={{fontSize:12}}>Grand Total:</Text>
+              <Text style={{fontSize:12}}>Rs. {Number(invoice.totalBill || 0).toFixed(2)}</Text>
+            </View>
+            <View style={styles.totalRow}>
+              <Text style={{fontSize:12}}>Amount Paid:</Text>
+              <Text style={{fontSize:12}}>Rs. {invoice.totalPay?.toFixed?.(2)}</Text>
+            </View>
+            <View style={[styles.totalRow, {marginTop: 5}]}>
+              <Text style={{fontSize:12}}>Balance Due:</Text>
+              <Text style={{fontSize:12}}>Rs. {invoice.duePay?.toFixed?.(2)}</Text>
+            </View>
+          </View>
+        );
+      })()}
+
       <View style={styles.totalsContainer}>
         <View style={styles.totalRow}>
           <Text style={{fontSize:12}}>Sub Total:</Text>
@@ -254,7 +351,7 @@ const InvoicePdf = ({ invoice, patient }: InvoicePdfProps) => {
 
       <View style={styles.notes}>
         <Text>* Procedures & Medicines once purchased are non-refundable.</Text>
-        <Text>* Purchased Packages Are Valid for 80m (CW).</Text>
+        <Text>* Purchased Packages Are Valid For 06 Months Only.</Text>
       </View>
 
       <View style={styles.signature}>
@@ -265,8 +362,8 @@ const InvoicePdf = ({ invoice, patient }: InvoicePdfProps) => {
       </View>
 
       <View style={styles.footer}>
-        <Text>Thank you for choosing Holistic Care Clinic</Text>
-        <Text>For any queries, please contact: 0342-4211888</Text>
+        <Text>{header.footerThanks}</Text>
+        <Text>{header.footerContactLine}</Text>
       </View>
     </Page>
   </Document>

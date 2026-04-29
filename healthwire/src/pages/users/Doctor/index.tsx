@@ -1,13 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { Table, message } from 'antd';
+import { Table, message, Modal } from 'antd';
 import { FaRegEdit } from 'react-icons/fa';
 import { Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import moment from 'moment';
+import { Base_url } from '../../../utils/Base_url';
 
 import { RiDeleteBin5Line } from 'react-icons/ri';
+import { canCreateUsers, canDeleteUsers, canEditUsers, getStoredUserForPermissions } from '../../../utils/permissions';
 
-const columns = (handleDelete, handleEdit) => [
+const columns = (handleDelete, canEdit, canDelete) => [
   {
     title: 'NAME',
     dataIndex: 'name',
@@ -23,22 +25,23 @@ const columns = (handleDelete, handleEdit) => [
   {
     title: 'LAST SIGNED IN ON',
     dataIndex: 'updatedAt',
-    render: (text) => moment(text).format('DD/MM/YYYY'),
+    render: (text) =>
+      text && moment(text).isValid() ? moment(text).format('DD/MM/YYYY') : '-',
   },
-  {
+  (canEdit || canDelete) && {
     title: 'ACTION',
     dataIndex: 'action',
     render: (text, record) => (
       <div className='flex items-center gap-2'>
-        <Link to={`/doctor/update/${record?._id}`}>
+        {canEdit && <Link to={`/doctor/update/${record?._id}`}>
         
         <FaRegEdit color='blue' size={20} />
-        </Link>
-        <RiDeleteBin5Line color='red' size={20} onClick={() => handleDelete(record._id)} />
+        </Link>}
+        {canDelete && <RiDeleteBin5Line color='red' size={20} onClick={() => handleDelete(record._id)} />}
       </div>
     ),
   },
-];
+].filter(Boolean);
 
 const Doctor = () => {
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
@@ -47,6 +50,10 @@ const Doctor = () => {
   const [totalPages, setTotalPages] = useState(1);
   const navigate = useNavigate();
 const [totalCount, setTotalCount] = useState(0);
+const userData = getStoredUserForPermissions();
+const allowCreate = canCreateUsers(userData);
+const allowEdit = canEditUsers(userData);
+const allowDelete = canDeleteUsers(userData);
 
   const onSelectChange = (newSelectedRowKeys) => {
     setSelectedRowKeys(newSelectedRowKeys);
@@ -81,14 +88,19 @@ const [totalCount, setTotalCount] = useState(0);
   };
 
   const fetchUsersData = (page) => {
-    axios.get(`https://api.holisticare.pk/apis/user/get?page=${page}&role=doctor`).then((res) => {
-      setUsers(res.data.data);
-      setTotalPages(res.data.totalPages);
-      setTotalCount(res.data.count); // Store total count
-
-      console.log(res);
-      
-    });
+    axios
+      .get(`${Base_url}/apis/user/get`, { params: { page, role: 'doctor', branchId: 'all' } })
+      .then((res) => {
+        const rows = Array.isArray(res.data?.data) ? res.data.data : [];
+        setUsers(rows);
+        setTotalPages(res.data?.totalPages ?? 1);
+        setTotalCount(res.data?.count ?? 0);
+      })
+      .catch(() => {
+        setUsers([]);
+        setTotalPages(1);
+        setTotalCount(0);
+      });
   };
 
   useEffect(() => {
@@ -104,11 +116,22 @@ const [totalCount, setTotalCount] = useState(0);
   };
 
   const handleDelete = (key) => {
-    axios.delete(`https://api.holisticare.pk/apis/user/delete/${key}`).then((res) => {
-      message.success('User deleted successfully');
-      fetchUsersData(currentPage);
-    }).catch(err => {
-      message.error('Failed to delete user');
+    Modal.confirm({
+      title: 'Delete Confirmation',
+      content: 'Are you sure you want to delete this user?',
+      okText: 'Yes, Delete',
+      cancelText: 'Cancel',
+      okButtonProps: { danger: true },
+      centered: true,
+      onOk: async () => {
+        try {
+          await axios.delete(`${Base_url}/apis/user/delete/${key}`);
+          message.success('User deleted successfully');
+          fetchUsersData(currentPage);
+        } catch (err) {
+          message.error('Failed to delete user');
+        }
+      },
     });
   };
 
@@ -116,7 +139,7 @@ const [totalCount, setTotalCount] = useState(0);
     <div className="rounded-sm border border-stroke bg-white px-5 pt-6 pb-2.5 shadow-default sm:px-7.5 xl:pb-1">
       <div className="mb-5 flex justify-between items-center">
         <h1 className="text-xl font-semibold text-black">Doctor</h1>
-        <Link
+        {allowCreate && <Link
           to="/doctor/new"
           className="inline-flex items-center justify-center gap-2.5 rounded-md bg-primary py-3 px-10 text-center font-medium text-white hover:bg-opacity-90 lg:px-8 xl:px-10"
         >
@@ -147,11 +170,11 @@ const [totalCount, setTotalCount] = useState(0);
             </g>
           </svg>
           Add Doctor
-        </Link>
+        </Link>}
       </div>
       <Table
   rowSelection={rowSelection}
-  columns={columns(handleDelete, handleEdit)}
+  columns={columns(handleDelete, allowEdit, allowDelete)}
   dataSource={users}
   pagination={{
     current: currentPage,

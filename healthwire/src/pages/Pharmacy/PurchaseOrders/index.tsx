@@ -2,12 +2,14 @@ import React, { useEffect, useState } from 'react';
 import { Table, Button, message, Tag, Space, Input, Select, DatePicker } from 'antd';
 import { SearchOutlined } from '@ant-design/icons';
 import axios from 'axios';
-import { FaRegEdit, FaEye, FaCheckCircle } from 'react-icons/fa';
+import { FaRegEdit, FaEye } from 'react-icons/fa';
 import { RiDeleteBin5Line } from 'react-icons/ri';
 import { FiDownload, FiPrinter, FiPlus } from 'react-icons/fi';
 import Swal from 'sweetalert2';
 import { Base_url } from '../../../utils/Base_url';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
+import { Link, useNavigate } from 'react-router-dom';
+import { AsyncPaginate, type LoadOptions } from 'react-select-async-paginate';
 // import dayjs from 'dayjs';
 
 const { Search } = Input;
@@ -32,17 +34,44 @@ interface PurchaseOrder {
     _id: string;
     name: string;
   };
+  // Optional fields (present in PO details endpoint)
+  projectDays?: number;
+  zeroQuantity?: boolean;
+  unit?: string;
+  notes?: string;
 }
 
+type SupplierOption = {
+  label: string;
+  value: string;
+  supplierData?: {
+    _id: string;
+    name: string;
+    phone?: string;
+  };
+};
+
+type ManufacturerOption = {
+  label: string;
+  value: string;
+  manufacturerData?: {
+    _id: string;
+    name: string;
+  };
+};
+
 const PharmacyPurchaseOrders: React.FC = () => {
+  const navigate = useNavigate();
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [purchaseOrders, setPurchaseOrders] = useState<PurchaseOrder[]>([]);
-  const [suppliers, setSuppliers] = useState<any[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [supplierFilter, setSupplierFilter] = useState('');
+  const [selectedSupplier, setSelectedSupplier] = useState<SupplierOption | null>(null);
+  const [manufacturerFilter, setManufacturerFilter] = useState('');
+  const [selectedManufacturer, setSelectedManufacturer] = useState<ManufacturerOption | null>(null);
   const [dateRange, setDateRange] = useState<[any, any] | null>(null);
   const [grandTotal, setGrandTotal] = useState(0);
 
@@ -70,6 +99,7 @@ const PharmacyPurchaseOrders: React.FC = () => {
         limit: '20',
         ...(searchTerm && { search: searchTerm }),
         ...(supplierFilter && { supplierId: supplierFilter }),
+        ...(manufacturerFilter && { manufacturerId: manufacturerFilter }),
         ...(dateRange && dateRange[0] && dateRange[1] && {
           from: dateRange[0].format('YYYY-MM-DD'),
           to: dateRange[1].format('YYYY-MM-DD')
@@ -77,11 +107,40 @@ const PharmacyPurchaseOrders: React.FC = () => {
       });
 
       const response = await axios.get(`${Base_url}/apis/pharmPurchaseOrder/get?${params}`);
-      setPurchaseOrders(response.data.data || []);
+      const rawData = response.data?.data || [];
+      const filteredByManufacturer =
+        manufacturerFilter
+          ? rawData.filter((order: any) => {
+              const items = order?.items || [];
+              const manufacturerName = selectedManufacturer?.label?.toLowerCase?.() || '';
+              return items.some((item: any) => {
+                const ref =
+                  item?.pharmItemId?.pharmManufacturerId ??
+                  item?.pharmItemId?.manufacturerId ??
+                  item?.pharmManufacturerId ??
+                  item?.manufacturerId;
+                const id =
+                  typeof ref === 'object' && ref !== null ? String(ref?._id || '') : String(ref || '');
+                if (id && id === manufacturerFilter) return true;
+
+                const nameFromRef =
+                  typeof ref === 'object' && ref !== null ? String(ref?.name || '') : '';
+                const name =
+                  String(item?.manufacturerName || nameFromRef || '').toLowerCase();
+                return !!manufacturerName && name === manufacturerName;
+              });
+            })
+          : rawData;
+
+      setPurchaseOrders(filteredByManufacturer);
       setTotalPages(response.data.totalPages || 1);
       
       // Calculate grand total
-      const total = response.data.data?.reduce((sum: number, order: PurchaseOrder) => sum + order.totalAmount, 0) || 0;
+      const total =
+        filteredByManufacturer?.reduce(
+          (sum: number, order: PurchaseOrder) => sum + order.totalAmount,
+          0
+        ) || 0;
       setGrandTotal(total);
     } catch (error) {
       console.error('Error fetching purchase orders:', error);
@@ -91,20 +150,77 @@ const PharmacyPurchaseOrders: React.FC = () => {
     }
   };
 
-  // Fetch suppliers
-  const fetchSuppliers = async () => {
+  const loadSupplierOptions: LoadOptions<SupplierOption, false, { page: number }> = async (
+    searchQuery,
+    _loadedOptions,
+    additional,
+  ) => {
+    const page = additional?.page || 1;
     try {
-      const response = await axios.get(`${Base_url}/apis/pharmSupplier/get`);
-      setSuppliers(response.data.data || []);
-    } catch (error) {
-      console.error('Error fetching suppliers:', error);
+      const response = await axios.get(`${Base_url}/apis/pharmSupplier/get`, {
+        params: {
+          page,
+          limit: 20,
+          search: searchQuery || '',
+        },
+      });
+
+      const raw = response.data || {};
+      const data = Array.isArray(raw?.data) ? raw.data : Array.isArray(raw?.data?.data) ? raw.data.data : [];
+      const totalPages = Number(raw?.totalPages || raw?.data?.totalPages || 1);
+      const currentPage = Number(raw?.currentPage || raw?.page || page);
+
+      return {
+        options: data.map((supplier: any) => ({
+          label: `${supplier.name}${supplier.phone ? ` - ${supplier.phone}` : ''}`,
+          value: supplier._id,
+          supplierData: supplier,
+        })),
+        hasMore: currentPage < totalPages,
+        additional: { page: currentPage + 1 },
+      };
+    } catch {
+      return { options: [], hasMore: false, additional: { page } };
+    }
+  };
+
+  const loadManufacturerOptions: LoadOptions<ManufacturerOption, false, { page: number }> = async (
+    searchQuery,
+    _loadedOptions,
+    additional,
+  ) => {
+    const page = additional?.page || 1;
+    try {
+      const response = await axios.get(`${Base_url}/apis/pharmManufacturer/get`, {
+        params: {
+          page,
+          limit: 20,
+          search: searchQuery || '',
+        },
+      });
+
+      const raw = response.data || {};
+      const data = Array.isArray(raw?.data) ? raw.data : Array.isArray(raw?.data?.data) ? raw.data.data : [];
+      const totalPages = Number(raw?.totalPages || raw?.data?.totalPages || 1);
+      const currentPage = Number(raw?.currentPage || raw?.page || page);
+
+      return {
+        options: data.map((m: any) => ({
+          label: m.name,
+          value: m._id,
+          manufacturerData: m,
+        })),
+        hasMore: currentPage < totalPages,
+        additional: { page: currentPage + 1 },
+      };
+    } catch {
+      return { options: [], hasMore: false, additional: { page } };
     }
   };
 
   useEffect(() => {
     fetchPurchaseOrders();
-    fetchSuppliers();
-  }, [currentPage, searchTerm, supplierFilter, dateRange]);
+  }, [currentPage, searchTerm, supplierFilter, manufacturerFilter, dateRange]);
 
   // Table columns
   const columns = [
@@ -252,14 +368,6 @@ const PharmacyPurchaseOrders: React.FC = () => {
             onClick={() => handleEdit(record)}
             title="Edit"
           />
-          {record.status === 'Pending' && (
-            <Button
-              type="text"
-              icon={<FaCheckCircle className="text-green-600" />}
-              onClick={() => handleApprove(record)}
-              title="Approve"
-            />
-          )}
           <Button
             type="text"
             icon={<RiDeleteBin5Line className="text-red-500" />}
@@ -272,53 +380,12 @@ const PharmacyPurchaseOrders: React.FC = () => {
   ];
 
   const handleView = (record: PurchaseOrder) => {
-    // Show detailed information in a modal
-    Swal.fire({
-      title: `Purchase Order ${record.purchaseOrderNumber}`,
-      html: `
-        <div style="text-align: left; font-size: 14px;">
-          <p><strong>Supplier:</strong> ${record.supplierId?.name}</p>
-          <p><strong>Order Date:</strong> ${new Date(record.orderDate).toLocaleDateString()}</p>
-          <p><strong>Expected Delivery:</strong> ${new Date(record.expectedDeliveryDate).toLocaleDateString()}</p>
-          <p><strong>Status:</strong> ${record.status}</p>
-          <p><strong>Category:</strong> ${record.poCategory}</p>
-          <p><strong>Total Amount:</strong> Rs. ${record.totalAmount.toLocaleString()}</p>
-          <p><strong>Items:</strong> ${record.items?.length || 0}</p>
-          <p><strong>Created By:</strong> ${record.createdBy?.name}</p>
-        </div>
-      `,
-      width: 600,
-      showCloseButton: true,
-    });
+    navigate(`/admin/pharmacy/purchase-orders/view/${record._id}`);
   };
 
   const handleEdit = (record: PurchaseOrder) => {
     // Navigate to edit page with the purchase order ID
     window.location.href = `/admin/pharmacy/purchase-orders/edit/${record._id}`;
-  };
-
-  const handleApprove = async (record: PurchaseOrder) => {
-    try {
-      const result = await Swal.fire({
-        title: 'Approve Purchase Order?',
-        text: `Are you sure you want to approve PO ${record.purchaseOrderNumber}?`,
-        icon: 'question',
-        showCancelButton: true,
-        confirmButtonText: 'Yes, Approve',
-        cancelButtonText: 'Cancel',
-      });
-
-      if (result.isConfirmed) {
-        await axios.put(`${Base_url}/apis/pharmPurchaseOrder/approve/${record._id}`, {
-          approvedBy: 'current-user-id' // Replace with actual user ID
-        });
-        message.success('Purchase order approved successfully');
-        fetchPurchaseOrders();
-      }
-    } catch (error) {
-      console.error('Error approving purchase order:', error);
-      message.error('Failed to approve purchase order');
-    }
   };
 
   const handleDelete = async (record: PurchaseOrder) => {
@@ -390,22 +457,24 @@ const PharmacyPurchaseOrders: React.FC = () => {
             >
               Print
             </Button>
+            <Link to={'/admin/pharmacy/purchase-orders/add'}>
             <Button
               type="default"
               icon={<FiPlus />}
-              onClick={handleAddPurchaseOrder}
+              // onClick={handleAddPurchaseOrder}
               className="flex items-center gap-2"
             >
               + Add Purchase Order
             </Button>
-            <Button
+            </Link>
+            {/* <Button
               type="default"
               icon={<FiPlus />}
               onClick={handleAddOrderList}
               className="flex items-center gap-2"
             >
               ▲ Add Order List
-            </Button>
+            </Button> */}
           </div>
         </div>
 
@@ -473,22 +542,30 @@ const PharmacyPurchaseOrders: React.FC = () => {
                 </svg>
                 Supplier
               </label>
-              <Select
-                placeholder="Select Supplier"
-                value={supplierFilter}
-                onChange={(value) => {
-                  setSupplierFilter(value || '');
-                  setCurrentPage(1);
-                }}
-                className="w-full"
-                allowClear
-              >
-                {suppliers.map(supplier => (
-                  <Option key={supplier._id} value={supplier._id}>
-                    {supplier.name}
-                  </Option>
-                ))}
-              </Select>
+              <div className="w-full">
+                <AsyncPaginate
+                  value={selectedSupplier}
+                  loadOptions={loadSupplierOptions}
+                  onChange={(opt) => {
+                    const option = (opt as SupplierOption | null) || null;
+                    setSelectedSupplier(option);
+                    setSupplierFilter(option?.value || '');
+                    setCurrentPage(1);
+                  }}
+                  additional={{ page: 1 }}
+                  placeholder="Select Supplier"
+                  classNamePrefix="react-select"
+                  className="w-full"
+                  debounceTimeout={400}
+                  menuPortalTarget={document.body}
+                  menuPosition="fixed"
+                  styles={{
+                    menuPortal: (base) => ({ ...base, zIndex: 9999 }),
+                    control: (base) => ({ ...base, minHeight: '40px' }),
+                  }}
+                  isClearable
+                />
+              </div>
             </div>
 
             {/* Manufacturer Filter */}
@@ -499,13 +576,30 @@ const PharmacyPurchaseOrders: React.FC = () => {
                 </svg>
                 Manufacturer
               </label>
-              <Select
-                placeholder="Select Manufacturer"
-                className="w-full"
-                allowClear
-              >
-                {/* Add manufacturer options */}
-              </Select>
+              <div className="w-full">
+                <AsyncPaginate
+                  value={selectedManufacturer}
+                  loadOptions={loadManufacturerOptions}
+                  onChange={(opt) => {
+                    const option = (opt as ManufacturerOption | null) || null;
+                    setSelectedManufacturer(option);
+                    setManufacturerFilter(option?.value || '');
+                    setCurrentPage(1);
+                  }}
+                  additional={{ page: 1 }}
+                  placeholder="Select Manufacturer"
+                  classNamePrefix="react-select"
+                  className="w-full"
+                  debounceTimeout={400}
+                  menuPortalTarget={document.body}
+                  menuPosition="fixed"
+                  styles={{
+                    menuPortal: (base) => ({ ...base, zIndex: 9999 }),
+                    control: (base) => ({ ...base, minHeight: '40px' }),
+                  }}
+                  isClearable
+                />
+              </div>
             </div>
           </div>
         </div>
@@ -588,9 +682,9 @@ const PharmacyPurchaseOrders: React.FC = () => {
       </div>
 
       {/* No Data Message */}
-      
+
     </div>
- 
+
 </>
   );
 };

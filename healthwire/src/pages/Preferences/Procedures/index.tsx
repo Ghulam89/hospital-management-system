@@ -1,18 +1,18 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, message } from 'antd';
+import { Table, message } from 'antd';
 
-import { Link } from 'react-router-dom';
-import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
-import axios from 'axios';
+import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';import axios from 'axios';
 import { FaCloudUploadAlt, FaRegEdit } from 'react-icons/fa';
 import { RiDeleteBin5Line } from 'react-icons/ri';
 import Swal from 'sweetalert2';
 import AddProcedure from './AddProcedure';
 import UploadExcel from '../../../components/UploadExcel/AddUploadExcel';
-
-
+import { Base_url } from '../../../utils/Base_url';
+import { getUserDataFromStorage, isSuperAdminRole } from '../../../utils/branchScope';
 
 const Procedure = () => {
+  const user = getUserDataFromStorage();
+  const canManageCatalog = isSuperAdminRole(user?.role);
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
   const [procedureData, setProcedureData] = useState([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -54,7 +54,8 @@ const Procedure = () => {
   };
 
 
- const columns = (handleDelete, handleEdit) => [
+ const columns = (handleDelete, handleEdit, showActions) => {
+  const base = [
   {
     title: 'Procedure Name',
     dataIndex: 'name',
@@ -100,16 +101,10 @@ const Procedure = () => {
     dataIndex: 'description',
     ellipsis: true,
   },
-  // {
-  //   title: 'Add Expense',
-  //   dataIndex: 'description',
-  //   ellipsis: true,
-  //   render: (text, record) => (
-  //     <div className='flex items-center gap-4'> 
-  //       <button onClick={() => handleEdit(record)}  className='  bg-primary text-white py-1 px-3 rounded-sm'>Add Expense</button>
-  //     </div>
-  //   ),
-  // },
+];
+  if (!showActions) return base;
+  return [
+    ...base,
   {
     title: 'Actions',
     dataIndex: 'action',
@@ -135,14 +130,16 @@ const Procedure = () => {
     ),
   },
 ];
+ };
 
   const fetchProcedureData = async (page, search = '') => {
   try {
     setLoading(true);
-    const url = `https://api.holisticare.pk/apis/procedure/get?page=${page}&search=${search}`;
+    const url = `${Base_url}/apis/procedure/get?page=${page}&search=${encodeURIComponent(search)}`;
     const res = await axios.get(url);
     
-    const transformedData = res.data.data.map(item => ({ 
+    const raw = Array.isArray(res?.data?.data) ? res.data.data : [];
+    const transformedData = raw.map(item => ({ 
       ...item, 
       key: item._id,
       amount: parseFloat(item.amount),
@@ -182,7 +179,7 @@ const Procedure = () => {
       cancelButtonText: "Cancel",
     }).then((result) => {
       if (result.isConfirmed) {
-        axios.delete(`https://api.holisticare.pk/apis/procedure/delete/${id}`)
+        axios.delete(`${Base_url}/apis/procedure/delete/${id}`)
           .then((res) => {
             if (res.data.status === 'ok') {
               Swal.fire({
@@ -299,8 +296,8 @@ const Procedure = () => {
       
       <div className="rounded-lg border border-stroke bg-white shadow-default dark:border-strokedark dark:bg-boxdark">
         <Table
-          rowSelection={rowSelection}
-          columns={columns(handleDelete, handleEdit)}
+          rowSelection={canManageCatalog ? rowSelection : undefined}
+          columns={columns(handleDelete, handleEdit, canManageCatalog)}
           dataSource={procedureData}
           pagination={{ 
   current: currentPage, // currentPage is already a number

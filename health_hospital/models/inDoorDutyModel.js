@@ -25,6 +25,10 @@ const inDoorDutySchema = new mongoose.Schema({
   status: {
     type: String,
   },
+  branchId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Branch',
+  },
 }, { timestamps: true });
 
 module.exports = mongoose.model('InDoorDuty', inDoorDutySchema);

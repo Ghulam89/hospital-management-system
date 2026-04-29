@@ -4,6 +4,7 @@ import { SearchOutlined, PlusOutlined, EditOutlined, DeleteOutlined, EyeOutlined
 import { Base_url } from '../../utils/Base_url';
 import axios from 'axios';
 import Swal from 'sweetalert2';
+import * as XLSX from 'xlsx';
 
 const { Search } = Input;
 const { Option } = Select;
@@ -42,47 +43,34 @@ const StockAdjustment: React.FC = () => {
   const fetchStockAdjustments = async () => {
     try {
       setLoading(true);
-      const params = new URLSearchParams({
-        ...(searchTerm && { search: searchTerm }),
-        ...(typeFilter && { type: typeFilter }),
-        ...(dateRange.length === 2 && {
-          from: dateRange[0].format('YYYY-MM-DD'),
-          to: dateRange[1].format('YYYY-MM-DD')
-        })
-      });
-
-      // Mock data for now - replace with actual API call
-      const mockData = [
-        {
-          _id: '1',
-          adjustmentDate: '2024-01-15',
-          itemName: 'Paracetamol 500mg',
-          itemCode: 'PAR001',
-          currentStock: 100,
-          adjustedStock: 95,
-          difference: -5,
-          adjustmentType: 'Physical Count',
-          reason: 'Damaged tablets found during inventory',
-          reference: 'INV-2024-001',
-          status: 'Approved',
-          createdBy: { name: 'Admin User' }
-        },
-        {
-          _id: '2',
-          adjustmentDate: '2024-01-14',
-          itemName: 'Amoxicillin 250mg',
-          itemCode: 'AMO001',
-          currentStock: 50,
-          adjustedStock: 55,
-          difference: 5,
-          adjustmentType: 'Found Stock',
-          reason: 'Additional stock found in back room',
-          reference: 'STK-2024-002',
-          status: 'Pending',
-          createdBy: { name: 'Pharmacy Staff' }
+      const params: any = {};
+      if (searchTerm) params.search = searchTerm;
+      if (dateRange.length === 2) {
+        params.from = dateRange[0].format('YYYY-MM-DD');
+        params.to = dateRange[1].format('YYYY-MM-DD');
+      }
+      const res = await axios.get(`${Base_url}/apis/pharmStockAdjustment/get`, { params });
+      const list = (res.data?.data || []).map((adj: any) => {
+        // flatten to table rows
+        if (Array.isArray(adj.items) && adj.items.length > 0) {
+          return adj.items.map((it: any) => ({
+            _id: adj._id,
+            adjustmentDate: adj.adjustmentDate,
+            itemName: it.identifier,
+            itemCode: String(it.pharmItemId || ''),
+            currentStock: it.previousQty,
+            adjustedStock: it.adjustedQty,
+            difference: it.difference,
+            adjustmentType: 'Physical Count',
+            reason: it.reason,
+            reference: it.reference,
+            status: 'Approved',
+            createdBy: { name: adj.createdBy?.name || 'System' }
+          }));
         }
-      ];
-      setStockAdjustments(mockData);
+        return [];
+      }).flat();
+      setStockAdjustments(list);
     } catch (error) {
       console.error('Error fetching stock adjustments:', error);
     } finally {
@@ -257,13 +245,16 @@ const StockAdjustment: React.FC = () => {
   const handleModalSubmit = async () => {
     try {
       const values = await form.validateFields();
-      const data = {
-        ...values,
-        adjustmentDate: values.adjustmentDate?.format('YYYY-MM-DD'),
-        difference: values.adjustedStock - values.currentStock,
-        createdBy: 'current-user-id',
+      const payload = {
+        note: `${values.adjustmentType} - ${values.reason}`,
+        items: [{
+          name: values.itemName,
+          adjustedQty: Number(values.adjustedStock) || 0,
+          reason: values.reason,
+          reference: values.reference
+        }]
       };
-
+      await axios.post(`${Base_url}/apis/pharmStockAdjustment/create`, payload);
       message.success('Stock adjustment saved successfully');
       setIsModalOpen(false);
       fetchStockAdjustments();
@@ -273,8 +264,29 @@ const StockAdjustment: React.FC = () => {
     }
   };
 
-  const handleExport = () => {
-    message.info('Export functionality will be implemented');
+  const handleExport = async () => {
+    try {
+      const res = await axios.get(`${Base_url}/apis/pharmItem/get`, { params: { limit: 10000 } });
+      const items = res.data?.data || [];
+      const rows = items.map((it: any) => ({
+        Name: it.name,
+        Barcode: it.barcode || '',
+        Unit: it.unit || 'pack',
+        QuantityPerPack: it.conversionUnit || 1,
+        AvailableUnits: it.availableQuantity || 0,
+        UnitCost: it.unitCost || 0,
+        RetailPrice: it.retailPrice || 0,
+        ReorderLevel: it.reOrderLevel || 0,
+      }));
+      const ws = XLSX.utils.json_to_sheet(rows);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'CurrentStock');
+      XLSX.writeFile(wb, `pharmacy_stock_${new Date().toISOString().slice(0,10)}.xlsx`);
+      message.success('Stock exported');
+    } catch (err) {
+      console.error(err);
+      message.error('Failed to export stock');
+    }
   };
 
   const handlePrint = () => {
@@ -365,6 +377,43 @@ const StockAdjustment: React.FC = () => {
             >
               Excel
             </Button>
+            <label className="inline-flex items-center px-3 py-2 border rounded-md cursor-pointer">
+              <input
+                type="file"
+                accept=".xlsx,.xls"
+                onChange={async (e) => {
+                  const file = e.target.files?.[0];
+                  if (!file) return;
+                  try {
+                    const data = await file.arrayBuffer();
+                    const wb = XLSX.read(data);
+                    const ws = wb.Sheets[wb.SheetNames[0]];
+                    const json = XLSX.utils.sheet_to_json(ws);
+                    const items = (json as any[]).map((row) => ({
+                      barcode: String(row['Barcode'] || '').trim() || undefined,
+                      name: String(row['Name'] || '').trim() || undefined,
+                      adjustedQty: Number(row['AdjustedUnits'] ?? row['AvailableUnits'] ?? 0) || 0,
+                      reason: String(row['Reason'] || '').trim(),
+                      reference: String(row['Reference'] || '').trim(),
+                    }));
+                    const filtered = items.filter((r) => (r.barcode || r.name) && (r.adjustedQty >= 0));
+                    if (filtered.length === 0) {
+                      message.warning('No valid rows found');
+                      return;
+                    }
+                    await axios.post(`${Base_url}/apis/pharmStockAdjustment/create`, { items: filtered });
+                    message.success('Stock adjusted via Excel');
+                    fetchStockAdjustments();
+                    e.target.value = '';
+                  } catch (err) {
+                    console.error(err);
+                    message.error('Failed to process Excel');
+                  }
+                }}
+                className="hidden"
+              />
+              <span>Upload Excel</span>
+            </label>
             <Button
               icon={<PrinterOutlined />}
               onClick={handlePrint}

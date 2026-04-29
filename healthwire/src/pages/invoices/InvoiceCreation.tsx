@@ -62,6 +62,10 @@ type ProcedureOption = {
   label: string;
   procedureData?: Procedure;
 };
+type ExpenseCategory = {
+  _id: string;
+  name: string;
+};
 
 export default function InvoiceCreation() {
     const [invoiceDate, setInvoiceDate] = useState<string>(
@@ -125,7 +129,11 @@ export default function InvoiceCreation() {
   }, [procedures]);
 
   const [localExpenses, setLocalExpenses] = useState<any[]>([]);
+  const [selectedProcedureRowId, setSelectedProcedureRowId] = useState<number | null>(null);
   const [isAddPatientModalOpen, setIsAddPatientModalOpen] = useState(false);
+  const [isProcedureExpenseModalOpen, setIsProcedureExpenseModalOpen] = useState(false);
+  const [editingExpense, setEditingExpense] = useState<any | null>(null);
+  const [categories, setCategories] = useState<ExpenseCategory[]>([]);
 
   const [invoiceNotes] = useState([
     'Procedures & Medicines once purchased are non-refundable.',
@@ -134,6 +142,35 @@ export default function InvoiceCreation() {
   const handleNumberInputWheel = (e: React.WheelEvent<HTMLInputElement>) => {
     e.preventDefault();
     e.currentTarget.blur();
+  };
+
+  const calculateDoctorShareBase = () => {
+    const procedureTotal = calculateSubTotal() - calculateTotalDiscount();
+    const preDoctorShareDeductExpenses = localExpenses
+      .filter(expense => expense.procedureRowId != null)
+      .reduce((sum, expense) => {
+      const deductSum = expense.expenses
+        ?.filter((exp: any) => exp.deductBeforeDoctorShare)
+        .reduce((expSum: number, exp: any) => expSum + (exp.amount || 0), 0) || 0;
+      return sum + deductSum;
+    }, 0);
+    return Math.max(0, procedureTotal - preDoctorShareDeductExpenses);
+  };
+
+  const calculateDoctorSharesTotal = () => {
+    const base = calculateDoctorShareBase();
+    return localExpenses
+      .filter(expense => expense.procedureRowId != null)
+      .reduce((sum, expense) => {
+      const sharesTotal =
+        expense.doctorShares
+          ?.reduce((shareSum: number, share: any) => {
+            const val = share.share || 0;
+            const amt = share.shareType === 'percentage' ? base * (val / 100) : val;
+            return shareSum + amt;
+          }, 0) || 0;
+      return sum + sharesTotal;
+    }, 0);
   };
 
   // Fetch procedures and users
@@ -284,6 +321,34 @@ export default function InvoiceCreation() {
   const removeProcedure = (id: number) => {
     setProcedures(procedures.filter((item) => item.id !== id));
   };
+  const handleLocalExpenseAdd = (procedureRowId: number | null, bundle: any) => {
+    setLocalExpenses(prev => {
+      const idx = prev.findIndex(e => e.procedureRowId === procedureRowId);
+      const proc = procedureRowId != null ? procedures.find(p => p.id === procedureRowId) : null;
+      const payload = { procedureRowId, procedureId: proc?.procedureId || '', ...bundle };
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = payload;
+        return next;
+      }
+      return [...prev, payload];
+    });
+    setIsProcedureExpenseModalOpen(false);
+    setEditingExpense(null);
+  };
+  useEffect(() => {
+    const fetchCategories = async () => {
+      try {
+        const res = await axios.get(`${Base_url}/apis/expenseCategory/get`, {
+          params: { page: 1, limit: 1000 },
+        });
+        setCategories(res.data.data || []);
+      } catch {
+        setCategories([]);
+      }
+    };
+    fetchCategories();
+  }, []);
 
  const calculateShares = (item: ProcedureItem) => {
   const totalAmount = item.rate * item.quantity;
@@ -478,7 +543,18 @@ export default function InvoiceCreation() {
   };
 
   const calculateGrandTotal = () => {
-    return calculateSubTotal() - calculateTotalDiscount();
+    const procedureTotal = calculateSubTotal() - calculateTotalDiscount();
+    const expensesTotal =
+      localExpenses.reduce((sum, expense) => {
+        const e = expense.expenses || [];
+        return (
+          sum +
+          e
+            .filter((row: any) => !row.deductBeforeDoctorShare)
+            .reduce((s: number, row: any) => s + (Number(row.amount) || 0), 0)
+        );
+      }, 0);
+    return procedureTotal + expensesTotal;
   };
 
   const calculateTotalPaid = () => {
@@ -573,7 +649,28 @@ export default function InvoiceCreation() {
       patientMr: patientInfo.mr,
       
       doctorId: doctorId,
-      item: procedures.map((item) => ({
+      item: procedures.map((item) => {
+        const bundle = localExpenses.find((b) => b.procedureRowId === item.id) || {};
+        const shownExpenses = bundle.expenses || [];
+        const shares = (bundle.doctorShares || [])
+          .filter((share: any) => {
+            const id = String(share.doctorId || '');
+            const isHex24 = /^[0-9a-fA-F]{24}$/.test(id);
+            const val = Number(share.share);
+            return isHex24 && Number.isFinite(val) && val > 0;
+          })
+          .map((share: any) => {
+            const base = calculateDoctorShareBase();
+            const val = Number(share.share) || 0;
+            const amount = share.shareType === 'percentage' ? base * (val / 100) : val;
+            return {
+              doctorId: String(share.doctorId),
+              shareType: share.shareType,
+              shareValue: val,
+              amount,
+            };
+          });
+        return ({
         procedureId: item.procedureId,
         description: item.description,
         rate: item.rate,
@@ -590,7 +687,13 @@ export default function InvoiceCreation() {
         performedBy: item.performedBy,
         doctorAmount: item.doctorAmount,
         hospitalAmount: item.hospitalAmount,
-      })),
+         expenses: shownExpenses,
+         doctorShares: shares,
+         consumptions: bundle.consumptions || [],
+        });
+      }),
+      invoiceExpenses: (localExpenses.find(e => e.procedureRowId == null)?.expenses || []).filter((exp: any) => exp.showInPrint),
+      invoiceConsumptions: localExpenses.find(e => e.procedureRowId == null)?.consumptions || [],
       subTotalBill: calculateSubTotal(),
       discountBill: calculateTotalDiscount(),
       taxBill: 0,
@@ -601,7 +704,25 @@ export default function InvoiceCreation() {
       totalPay: calculateTotalPaid(),
       payment: paymentInstallments.map((payment) => ({
         method: payment.method,
-        payDate: new Date(payment.date).toISOString(),
+        payDate: (() => {
+          if (!payment.date) return payment.date;
+          if (/^\d{4}-\d{2}-\d{2}$/.test(payment.date)) {
+            const [y, m, d] = payment.date.split('-').map((v) => Number(v));
+            if (!y || !m || !d) return payment.date;
+            const now = new Date();
+            return new Date(
+              y,
+              m - 1,
+              d,
+              now.getHours(),
+              now.getMinutes(),
+              now.getSeconds(),
+              now.getMilliseconds(),
+            ).toISOString();
+          }
+          const parsed = new Date(payment.date);
+          return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : payment.date;
+        })(),
         paid: payment.amount,
         reference: payment.reference,
       })),
@@ -1093,7 +1214,13 @@ export default function InvoiceCreation() {
                           />
                         </svg>
                       </button>
-                      <button className=' text-primary'>
+                   
+                      <button className={`text-primary ${!item.procedureId ? 'opacity-50 cursor-not-allowed' : ''}`} disabled={!item.procedureId} onClick={() => { 
+                        const existing = localExpenses.find(e => e.procedureRowId === item.id || e.procedureId === item.procedureId) || null;
+                        setSelectedProcedureRowId(item.id);
+                        setEditingExpense(existing);
+                        setIsProcedureExpenseModalOpen(true); 
+                      }}>
                       <BsFillFileEarmarkPdfFill size={20} className=' text-primary' />
                       </button>
 
@@ -1104,7 +1231,7 @@ export default function InvoiceCreation() {
               </tbody>
             </table>
           </div>
-          <div className="py-3 flex justify-end">
+          <div className="py-3 flex justify-end gap-3">
             <button
               onClick={addProcedure}
               className="bg-primary text-white px-4 py-2 rounded-md flex items-center"
@@ -1123,8 +1250,99 @@ export default function InvoiceCreation() {
               </svg>
               Add Procedure
             </button>
+            {/* <button
+              type="button"
+              onClick={() => {
+                const existing = localExpenses.find(e => e.procedureRowId == null) || null;
+                setSelectedProcedureRowId(null);
+                setEditingExpense(existing);
+                setIsProcedureExpenseModalOpen(true);
+              }}
+              className="bg-primary text-white px-4 py-2 rounded-md flex items-center"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                className="h-5 w-5 mr-1"
+                viewBox="0 0 20 20"
+                fill="currentColor"
+              >
+                <path
+                  fillRule="evenodd"
+                  d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z"
+                  clipRule="evenodd"
+                />
+              </svg>
+              Add Invoice Expense
+            </button> */}
           </div>
         </div>
+
+        {/* Pharmacy Consumption Section */}
+        {localExpenses.some(expense => expense.consumptions?.length > 0) && (
+          <div className="mb-8 bg-white p-4 rounded-lg shadow">
+            <h2 className="text-xl font-semibold mb-4 text-gray-700">Pharmacy Consumption</h2>
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 tracking-wider">Procedure</th>
+                    <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 tracking-wider">Item</th>
+                    <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 tracking-wider">Quantity</th>
+                    <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 tracking-wider">Batch</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {localExpenses.flatMap((expense, expenseIndex) =>
+                    (expense.consumptions || []).map((consumption: any, consIndex: number) => {
+                      const procedure = procedures.find(p => p.id === expense.procedureRowId);
+                      return (
+                        <tr key={`cons-${expenseIndex}-${consIndex}`} className="hover:bg-gray-50">
+                          <td className="px-4 py-3 text-sm text-gray-900">{procedure?.procedure || 'N/A'}</td>
+                          <td className="px-4 py-3 text-sm text-gray-900">{consumption.itemName || 'N/A'}</td>
+                          <td className="px-4 py-3 text-sm text-gray-900">{consumption.qty || 0}</td>
+                          <td className="px-4 py-3 text-sm text-gray-900">{consumption.batchNumber || 'N/A'}</td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {localExpenses.some(expense => expense.doctorShares?.length > 0) && (
+          <div className="mb-8 bg-white p-4 rounded-lg shadow">
+            <h2 className="text-xl font-semibold mb-4 text-gray-700">Doctor Shares</h2>
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 tracking-wider">Procedure</th>
+                    <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 tracking-wider">Doctor</th>
+                    <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 tracking-wider">Share</th>
+                    <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 tracking-wider">Type</th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {localExpenses.flatMap((expense, expenseIndex) =>
+                    (expense.doctorShares || []).map((share: any, shareIndex: number) => {
+                      const procedure = procedures.find(p => p.id === expense.procedureRowId);
+                      return (
+                        <tr key={`doc-${expenseIndex}-${shareIndex}`} className="hover:bg-gray-50">
+                          <td className="px-4 py-3 text-sm text-gray-900">{procedure?.procedure || 'N/A'}</td>
+                          <td className="px-4 py-3 text-sm text-gray-900">{share.doctorId || 'N/A'}</td>
+                          <td className="px-4 py-3 text-sm text-gray-900">{Number.isFinite(share.share) ? share.share : 0}</td>
+                          <td className="px-4 py-3 text-sm text-gray-900">{share.shareType || 'value'}</td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
         {/* Payment Section */}
         <div className="mb-8 bg-white p-4 rounded-lg shadow">
@@ -1306,6 +1524,96 @@ export default function InvoiceCreation() {
           </div>
         </div>
 
+        {/* Expenses Section - Only show if there are expenses with showInPrint */}
+        {localExpenses.some(expense => expense.expenses?.some(exp => exp.showInPrint)) && (
+          <div className="mb-8 bg-white p-4 rounded-lg shadow">
+            <h2 className="text-xl font-semibold mb-4 text-gray-700">Additional Expenses</h2>
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 tracking-wider">
+                      Category
+                    </th>
+                    <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 tracking-wider">
+                      Description
+                    </th>
+                    <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 tracking-wider">
+                      Amount
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {localExpenses.map((expense, expenseIndex) =>
+                    expense.expenses
+                      ?.filter(exp => exp.showInPrint)
+                      .map((exp, expIndex) => (
+                        <tr key={`${expenseIndex}-${expIndex}`} className="hover:bg-gray-50">
+                          <td className="px-4 py-3 text-sm text-gray-900">
+                            {exp.categoryName || 'N/A'}
+                          </td>
+                          <td className="px-4 py-3 text-sm text-gray-900">
+                            {exp.description || 'N/A'}
+                          </td>
+                          <td className="px-4 py-3 text-sm text-gray-900">
+                            Rs. {(exp.amount || 0).toFixed(2)}
+                          </td>
+                        </tr>
+                      ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Doctor Shares Section - shows deductions applied */}
+        {localExpenses.some(expense => (expense.doctorShares?.length || 0) > 0) && (
+          <div className="mb-8 bg-white p-4 rounded-lg shadow">
+            <h2 className="text-xl font-semibold mb-4 text-gray-700">Doctor Shares</h2>
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 tracking-wider">
+                      Doctor
+                    </th>
+                    <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 tracking-wider">
+                      Type
+                    </th>
+                    <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 tracking-wider">
+                      Deduction
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {localExpenses.flatMap((expense, expenseIndex) =>
+                    (expense.doctorShares || []).map((share: any, shareIndex: number) => {
+                      const doctor = usersList.find(u => u._id === share.doctorId);
+                      const base = calculateDoctorShareBase();
+                      const val = share.share || 0;
+                      const amount = share.shareType === 'percentage' ? base * (val / 100) : val;
+                      return (
+                        <tr key={`ds-${expenseIndex}-${shareIndex}`} className="hover:bg-gray-50">
+                          <td className="px-4 py-3 text-sm text-gray-900">
+                            {doctor?.name || 'Doctor'}
+                          </td>
+                          <td className="px-4 py-3 text-sm text-gray-900">
+                            {share.shareType === 'percentage' ? `${val}%` : 'Value'}
+                          </td>
+                          <td className="px-4 py-3 text-sm text-red-600">
+                            - Rs. {amount.toFixed(2)}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         {/* Remarks Section */}
         <div className="mb-8 bg-white p-4 rounded-lg shadow">
           <h2 className="text-xl font-semibold mb-2 text-gray-700">Remarks</h2>
@@ -1341,6 +1649,26 @@ export default function InvoiceCreation() {
                 <span>Tax:</span>
                 <span className="font-medium">Rs. 0.00</span>
               </div>
+              {localExpenses.some(expense => expense.expenses?.some(exp => exp.showInPrint)) && (
+                <div className="flex justify-between">
+                  <span>Additional Expenses:</span>
+                  <span className="font-medium text-green-600">
+                    + Rs. {localExpenses
+                      .reduce((sum, expense) => 
+                        sum + (expense.expenses?.filter(exp => exp.showInPrint).reduce((expSum, exp) => expSum + (exp.amount || 0), 0) || 0), 0
+                      ).toFixed(2)
+                    }
+                  </span>
+                </div>
+              )}
+              {localExpenses.some(expense => (expense.doctorShares?.length || 0) > 0) && (
+                <div className="flex justify-between">
+                  <span>Doctor Shares Deduction:</span>
+                  <span className="font-medium text-red-600">
+                    - Rs. {calculateDoctorSharesTotal().toFixed(2)}
+                  </span>
+                </div>
+              )}
               <div className="border-t pt-2 mt-2 flex justify-between font-bold text-lg">
                 <span>Grand Total:</span>
                 <span>Rs. {calculateGrandTotal().toFixed(2)}</span>
@@ -1420,15 +1748,15 @@ export default function InvoiceCreation() {
         </div>
       </div>
 
-{/* 
+
       <AddProcedureExpense
-        isModalOpen={isModalOpen}
-        setIsModalOpen={handleModalClose}
-        // fetchExpenses={() => fetchExpenses(currentPage, searchTerm, filterCategory)}
+        isModalOpen={isProcedureExpenseModalOpen}
+        setIsModalOpen={setIsProcedureExpenseModalOpen}
         selectedExpense={editingExpense}
         categories={categories}
+        selectedProcedureId={selectedProcedureRowId}
         onLocalExpenseAdd={handleLocalExpenseAdd}
-      /> */}
+      />
 
       {/* Add Patient Modal */}
       <AddPatients

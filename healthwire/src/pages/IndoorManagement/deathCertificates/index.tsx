@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, message, DatePicker, Space } from 'antd';
+import { Table, Button, message, DatePicker, Space, Modal } from 'antd';
 import { Link } from 'react-router-dom';
 import axios from 'axios';
 import { RiDeleteBin5Line, RiFile2Line } from 'react-icons/ri';
@@ -116,15 +116,24 @@ const DeathCertificates = () => {
   }, [pagination.current, pagination.pageSize, dateRange]);
 
   const handleDelete = (id) => {
-    axios.delete(`https://api.holisticare.pk/apis/deathCertificate/delete/${id}`)
-      .then(() => {
-        message.success('Birth certificate deleted successfully');
-        fetchBirthCertificates(pagination.current, pagination.pageSize);
-      })
-      .catch(err => {
-        message.error('Failed to delete birth certificate');
-        console.error(err);
-      });
+    Modal.confirm({
+      title: 'Are you sure you want to delete this death certificate?',
+      content: 'This action cannot be undone.',
+      okText: 'Yes',
+      okType: 'danger',
+      cancelText: 'No',
+      onOk() {
+        axios.delete(`https://api.holisticare.pk/apis/deathCertificate/delete/${id}`)
+          .then(() => {
+            message.success('Death certificate deleted successfully');
+            fetchBirthCertificates(pagination.current, pagination.pageSize);
+          })
+          .catch(err => {
+            message.error('Failed to delete death certificate');
+            console.error(err);
+          });
+      },
+    });
   };
 
   const handleDateChange = (dates) => {

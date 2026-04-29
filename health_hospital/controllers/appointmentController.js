@@ -1,7 +1,9 @@
+const mongoose = require('mongoose');
 const Appointment = require('../models/appointmentModel');
 const Leave = require('../models/leaveModel');
 const User = require('../models/userModel');
 const Patient = require('../models/patientModel');
+const { applyPatientIdScopeToQuery, getScopedPatientIds, getScopedDepartmentIds, patientVisibleForRequest } = require('../utils/branchScope');
 
 // Utility for recurrence
 
@@ -42,6 +44,9 @@ const addAppointment = async (req, res) => {
 
         if (!patientId || !doctorId || !appointmentDate || !startTime || !endTime || !consultationType) {
             return res.status(400).json({ status: 'fail', message: 'Required fields are missing' });
+        }
+        if (!(await patientVisibleForRequest(req, patientId))) {
+            return res.status(403).json({ status: 'fail', message: 'Patient not allowed for this branch' });
         }
 
         const formattedDate = new Date(appointmentDate);
@@ -163,37 +168,49 @@ const getAppointmentDashboard = async (req, res) => {
         }
 
         const limit = "20";
+        const limitNum = parseInt(limit, 10);
+        const pageNum = parseInt(page, 10) || 1;
 
-        const dctQuery={}
+        const scopedPatientIds = await getScopedPatientIds(req);
+        const scopedDeptIds = await getScopedDepartmentIds(req);
 
-        if(req.query.doctorId){
-            dctQuery.doctorId=req.query.doctorId
+        const scopeByPatient = {};
+        if (scopedPatientIds !== null) {
+            scopeByPatient.patientId = scopedPatientIds.length === 0 ? { $in: [] } : { $in: scopedPatientIds };
         }
 
-        const patQuery={}
+        const dctQuery = { ...scopeByPatient };
+        if (req.query.doctorId) {
+            dctQuery.doctorId = req.query.doctorId;
+        }
 
-        if(req.query.patientId){
-            patQuery.patientId=req.query.patientId
+        const patQuery = { ...scopeByPatient };
+        if (req.query.patientId) {
+            patQuery.patientId = req.query.patientId;
         }
 
         const allDoctorAppointments = await Appointment.find(dctQuery).populate(['doctorId', 'patientId']);
         const allPatientAppointments = await Appointment.find(patQuery).populate(['doctorId', 'patientId']);
-        // Fetch today's appointments with full data
-        const allAppointments = await Appointment.find({}).populate(['doctorId', 'patientId']);
-        const allDoctor = await User.find({ role: 'doctor' });
-        const allPatient = await Patient.find({});
+        const allAppointments = await Appointment.find(scopeByPatient).populate(['doctorId', 'patientId']);
 
-        // Fetch today's appointments with full data
-        const todayAppointments = await Appointment.find({
+        let doctorQuery = { role: 'doctor' };
+        if (scopedDeptIds !== null) {
+            doctorQuery.departmentId = scopedDeptIds.length === 0 ? { $in: [] } : { $in: scopedDeptIds };
+        }
+        const allDoctor = await User.find(doctorQuery);
+        const allPatient = await Patient.find(scopedPatientIds === null ? {} : { _id: { $in: scopedPatientIds } });
+
+        const todayQuery = {
+            ...scopeByPatient,
             appointmentDate: { $gte: startOfDay, $lte: endOfDay }
-        }).populate(['doctorId', 'patientId']).limit(limit * 1)
-            .skip((page - 1) * limit)
+        };
+        const todayAppointments = await Appointment.find(todayQuery)
+            .populate(['doctorId', 'patientId'])
+            .limit(limitNum)
+            .skip((pageNum - 1) * limitNum)
             .exec();
 
-
-        const count = await Appointment.find({
-            appointmentDate: { $gte: startOfDay, $lte: endOfDay }
-        }).populate(['doctorId', 'patientId']).countDocuments();
+        const count = await Appointment.countDocuments(todayQuery);
 
 
         // Unique today patients
@@ -221,7 +238,7 @@ const getAppointmentDashboard = async (req, res) => {
                 page,
                 count,
                 totalPages: Math.ceil(count / limit),
-                currentPage: page,
+                currentPage: pageNum,
                 limit
             }
         });
@@ -329,6 +346,17 @@ const getAppointments = async (req, res) => {
                 query.appointmentDate.$lte = endDate;
             }
         }
+
+        const scopeResult = await applyPatientIdScopeToQuery(req, query);
+        if (scopeResult === 'empty') {
+            return res.status(200).json({ 
+                status: 'ok', 
+                data: [],
+                total: 0,
+                page: parseInt(page),
+                totalPages: 1
+            });
+        }
         
         // Calculate skip value for pagination
         const skip = (page - 1) * limit;
@@ -382,6 +410,19 @@ const getAppointmentsOpdReport = async (req, res) => {
       filter.appointmentDate = {};
       if (startDate) filter.appointmentDate.$gte = new Date(startDate);
       if (endDate) filter.appointmentDate.$lte = new Date(endDate);
+    }
+
+    const scopeResult = await applyPatientIdScopeToQuery(req, filter);
+    if (scopeResult === 'empty') {
+      return res.status(200).json({
+        status: 'ok',
+        page,
+        limit,
+        totalAppointments: 0,
+        totalPages: 0,
+        topDoctor: null,
+        data: [],
+      });
     }
 
     // Count total filtered appointments (Total OPD card)
@@ -480,6 +521,18 @@ const getDoctorsWithAppointmentCount = async (req, res) => {
       if (endDate) appointmentFilter.appointmentDate.$lte = new Date(endDate);
     }
 
+    const scopeResult = await applyPatientIdScopeToQuery(req, appointmentFilter);
+    if (scopeResult === 'empty') {
+      return res.status(200).json({
+        status: 'ok',
+        page,
+        limit,
+        totalDoctors: 0,
+        totalPages: 0,
+        data: [],
+      });
+    }
+
     // Aggregate appointments to count per doctor
     const appointmentCounts = await Appointment.aggregate([
       { $match: appointmentFilter },
@@ -538,6 +591,11 @@ const getAppointmentStatusLength = async (req, res) => {
         if (req.query.patientId) query.patientId = req.query.patientId;
         if (req.query.appointmentStatus) query.appointmentStatus = req.query.appointmentStatus;
 
+        const scopeResult = await applyPatientIdScopeToQuery(req, query);
+        if (scopeResult === 'empty') {
+            return res.status(200).json({ status: 'ok', data: 0 });
+        }
+
         const data = await Appointment.find(query).populate(['doctorId', 'patientId']);
         res.status(200).json({ status: 'ok', data: data.length });
     } catch (err) {
@@ -552,6 +610,12 @@ const getAppointmentStatusLength = async (req, res) => {
 const getAppointmentById = async (req, res) => {
     try {
         const data = await Appointment.findById(req.params.id).populate(['doctorId', 'patientId']);
+        if (!data) {
+            return res.status(404).json({ status: 'fail', message: 'Appointment not found' });
+        }
+        if (data.patientId?._id && !(await patientVisibleForRequest(req, data.patientId._id))) {
+            return res.status(404).json({ status: 'fail', message: 'Appointment not found' });
+        }
         res.status(200).json({ status: 'ok', data });
     } catch (err) {
         res.status(500).json({ status: 'error', message: err.message });
@@ -562,7 +626,16 @@ const getAppointmentById = async (req, res) => {
 const updateAppointment = async (req, res) => {
     try {
         const id = req.params.id;
-        
+        const existing = await Appointment.findById(id).lean();
+        if (!existing) {
+            return res.status(404).json({ status: 'fail', message: 'Appointment not found' });
+        }
+        if (existing.patientId && !(await patientVisibleForRequest(req, existing.patientId))) {
+            return res.status(404).json({ status: 'fail', message: 'Appointment not found' });
+        }
+        if (req.body.patientId && !(await patientVisibleForRequest(req, req.body.patientId))) {
+            return res.status(403).json({ status: 'fail', message: 'Patient not allowed for this branch' });
+        }
 
         const updated = await Appointment.findByIdAndUpdate(id, {
            ...req.body
@@ -577,6 +650,13 @@ const updateAppointment = async (req, res) => {
 // 5. Delete Appointment
 const deleteAppointment = async (req, res) => {
     try {
+        const existing = await Appointment.findById(req.params.id).lean();
+        if (!existing) {
+            return res.status(404).json({ status: 'fail', message: 'Appointment not found' });
+        }
+        if (existing.patientId && !(await patientVisibleForRequest(req, existing.patientId))) {
+            return res.status(404).json({ status: 'fail', message: 'Appointment not found' });
+        }
         await Appointment.findByIdAndDelete(req.params.id);
         res.status(200).json({ status: 'ok', message: 'Appointment deleted' });
     } catch (err) {

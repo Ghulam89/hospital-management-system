@@ -1,6 +1,5 @@
 const PharmPurchaseOrder = require("../models/pharmPurchaseOrderModel");
-const PharmItem = require("../models/pharmItemModel");
-const PharmSupplier = require("../models/pharmSupplierModel");
+const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible } = require("../utils/branchScope");
 
 // 1. Create Purchase Order
 const addPurchaseOrder = async (req, res) => {
@@ -52,9 +51,10 @@ const addPurchaseOrder = async (req, res) => {
       }
     }
 
-    // Generate purchase order number
-    const count = await PharmPurchaseOrder.countDocuments();
-    const purchaseOrderNumber = `PO${String(count + 1).padStart(6, '0')}`;
+    // Generate purchase order number (per branch when scoped)
+    const branchQ = await mergeBranchScopedQuery(req);
+    const count = await PharmPurchaseOrder.countDocuments(branchQ || {});
+    const purchaseOrderNumber = `PO${String(count + 1).padStart(6, "0")}`;
 
     // Prepare data for creation
     const purchaseOrderData = {
@@ -83,7 +83,7 @@ const addPurchaseOrder = async (req, res) => {
       createdBy: createdBy || '65a1f1a1a1a1a1a1a1a1a1a1' // Fallback user ID
     };
 
-    const data = await PharmPurchaseOrder.create(purchaseOrderData);
+    const data = await PharmPurchaseOrder.create(assignBranchIdForCreate(req, purchaseOrderData));
     return res.status(200).json({ 
       status: "ok", 
       message: "Purchase order created successfully",
@@ -107,9 +107,20 @@ const getPurchaseOrders = async (req, res) => {
 
     const baseQuery = {};
 
+    const branchQList = await mergeBranchScopedQuery(req);
+    if (branchQList) Object.assign(baseQuery, branchQList);
+
     // Optional filters
     if (req.query.supplierId) {
-      baseQuery.supplierId = req.query.supplierId;
+      const sid = req.query.supplierId;
+      try {
+        const objId = require('mongoose').Types.ObjectId.isValid(sid)
+          ? new (require('mongoose').Types.ObjectId)(sid)
+          : sid;
+        baseQuery.supplierId = objId;
+      } catch {
+        baseQuery.supplierId = sid;
+      }
     }
 
     if (req.query.status) {
@@ -194,6 +205,10 @@ const getPurchaseOrderById = async (req, res) => {
 const updatePurchaseOrder = async (req, res) => {
   try {
     let id = req.params.id;
+    const existing = await PharmPurchaseOrder.findById(id);
+    if (!existing || !(await branchDocumentVisible(req, existing.branchId))) {
+      return res.status(404).json({ status: "fail", message: "Purchase order not found" });
+    }
     const data = await PharmPurchaseOrder.findByIdAndUpdate(
       id,
       { ...req.body },
@@ -231,7 +246,12 @@ const approvePurchaseOrder = async (req, res) => {
   try {
     const id = req.params.id;
     const { approvedBy } = req.body;
-    
+
+    const existing = await PharmPurchaseOrder.findById(id);
+    if (!existing || !(await branchDocumentVisible(req, existing.branchId))) {
+      return res.status(404).json({ status: "fail", message: "Purchase order not found" });
+    }
+
     const data = await PharmPurchaseOrder.findByIdAndUpdate(
       id,
       { 
@@ -283,6 +303,30 @@ const getPurchaseOrderStats = async (req, res) => {
   }
 };
 
+// 8. Get Next Purchase Order Number
+const getNextPONumber = async (req, res) => {
+  try {
+    const branchQ = await mergeBranchScopedQuery(req);
+    const lastOrder = await PharmPurchaseOrder.findOne(branchQ || {}, { purchaseOrderNumber: 1 }).sort({
+      createdAt: -1,
+    });
+    let newOrderNumber = 1;
+    
+    if (lastOrder && lastOrder.purchaseOrderNumber) {
+      const lastNumber = parseInt(lastOrder.purchaseOrderNumber.replace('PO', ''));
+      if (!isNaN(lastNumber)) {
+        newOrderNumber = lastNumber + 1;
+      }
+    }
+    
+    const nextPONumber = `PO${String(newOrderNumber).padStart(6, '0')}`;
+    return res.status(200).json({ status: "ok", nextPONumber });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
 module.exports = {
   addPurchaseOrder,
   getPurchaseOrders,
@@ -290,5 +334,6 @@ module.exports = {
   updatePurchaseOrder,
   deletePurchaseOrder,
   approvePurchaseOrder,
-  getPurchaseOrderStats
+  getPurchaseOrderStats,
+  getNextPONumber
 };

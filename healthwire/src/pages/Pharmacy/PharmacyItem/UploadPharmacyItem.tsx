@@ -171,6 +171,7 @@ const UploadPharmacyItem: React.FC<UploadPharmacyItemProps> = (props) => {
       const unit = getColumnValue(row, ['Unit', 'UOM', 'Unit of Measure']);
       const genericName = getColumnValue(row, ['Generic Name', 'Generic', 'Generic Name']);
       const openingStock = getColumnValue(row, ['Opening Stock', 'Stock', 'Quantity', 'Qty', 'Initial Stock']);
+      const conversionUnitStr = getColumnValue(row, ['Conversion Unit', 'Qty/Pack', 'Quantity Per Pack', 'Pack Size', 'Quantity/Pack', 'Quantity per pack']);
       const reOrderLevel = getColumnValue(row, ['Reorder Level', 'Min Stock', 'Minimum Stock', 'Reorder']);
       const categoryName = getColumnValue(row, ['Category', 'Category Name', 'Product Category']);
       const manufacturerName = getColumnValue(row, ['Manufacturer', 'Manufacturer Name', 'Brand', 'Company']);
@@ -231,7 +232,10 @@ const UploadPharmacyItem: React.FC<UploadPharmacyItemProps> = (props) => {
       const parsedRetailPrice = retailPrice ? parseFloat(retailPrice.replace(/,/g, '')) || 0 : 0;
       const parsedUnitCost = unitCost ? parseFloat(unitCost.replace(/,/g, '')) || 0 : 0;
       const parsedOpeningStock = openingStock ? parseFloat(openingStock.replace(/,/g, '')) || 0 : 0;
+      const parsedConversionUnit = conversionUnitStr ? parseFloat(conversionUnitStr.replace(/,/g, '')) || 1 : 1;
       const parsedReOrderLevel = reOrderLevel ? parseFloat(reOrderLevel.replace(/,/g, '')) || 0 : 0;
+      const isPack = String(unit || '').toLowerCase() === 'pack';
+      const initialAvailable = isPack ? parsedOpeningStock * parsedConversionUnit : parsedOpeningStock;
 
       return {
         name: name,
@@ -239,13 +243,13 @@ const UploadPharmacyItem: React.FC<UploadPharmacyItemProps> = (props) => {
         unitCost: parsedUnitCost,
         barcode: barcode || null,
         unit: unit || 'pack',
+        conversionUnit: parsedConversionUnit,
         genericName: genericName || null,
         openingStock: parsedOpeningStock,
-        availableQuantity: parsedOpeningStock, // Initialize from opening stock
+        availableQuantity: initialAvailable,
         reOrderLevel: parsedReOrderLevel,
         pharmCategoryId: categoryId,
         pharmManufacturerId: manufacturerId,
-        pharmSupplierId: supplierId,
         pharmRackId: rackId,
         active: true,
         departmentName: 'Pharmacy' // Default department for pharmacy items

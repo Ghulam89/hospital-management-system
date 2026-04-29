@@ -1,4 +1,5 @@
 const MedicalHistory = require("../models/medicalHistoryModel");
+const { applyPatientIdScopeToQuery } = require("../utils/branchScope");
 
 // 1. Create Detail
 const addDetail = async (req, res) => {
@@ -40,6 +41,19 @@ const getDetails = async (req, res) => {
       query.patientId=req.query.patientId
     }
 
+    const scopeResult = await applyPatientIdScopeToQuery(req, query);
+    if (scopeResult === "empty") {
+      return res.status(200).json({
+        status: "ok",
+        data: [],
+        search,
+        page,
+        count: 0,
+        totalPages: 0,
+        currentPage: page,
+        limit
+      });
+    }
 
     const Details = await MedicalHistory.find(query).sort({createdAt:-1})
     .populate(['patientId'])

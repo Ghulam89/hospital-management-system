@@ -106,7 +106,11 @@ const pharmPurchaseOrderSchema = new mongoose.Schema({
     },
     approvedAt: {
         type: Date
-    }
+    },
+    branchId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Branch',
+    },
 }, { timestamps: true });
 
 // Pre-save middleware to generate purchase order number (if not provided)

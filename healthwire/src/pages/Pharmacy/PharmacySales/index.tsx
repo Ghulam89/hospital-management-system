@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, message, Input, Select, DatePicker, Tag, Space } from 'antd';
-import { EyeOutlined, DownloadOutlined, PrinterOutlined, SearchOutlined } from '@ant-design/icons';
+import { Table, Button, message, Input, Select, DatePicker, Tag, Space, Popconfirm } from 'antd';
+import { EyeOutlined, DownloadOutlined, PrinterOutlined, SearchOutlined, DeleteOutlined } from '@ant-design/icons';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 import axios from 'axios';
 import { Base_url } from '../../../utils/Base_url';
@@ -40,6 +40,9 @@ interface POSSale {
     rate: number;
     quantity: number;
     totalAmount: number;
+    discount?: number;
+    tax?: number;
+    isReturn?: boolean;
   }>;
   payment: Array<{
     method: string;
@@ -55,27 +58,38 @@ const PharmacySales: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [paymentMethodFilter, setPaymentMethodFilter] = useState('');
   const [dateRange, setDateRange] = useState<[Dayjs | null, Dayjs | null]>([null, null]);
+  const [paymentDateRange, setPaymentDateRange] = useState<[Dayjs | null, Dayjs | null]>([null, null]);
+  const [statusFilter, setStatusFilter] = useState('');
+  const [discountPercentFilter, setDiscountPercentFilter] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
   const [totalPages, setTotalPages] = useState(1);
   const [totalCount, setTotalCount] = useState(0);
   const [totalRevenue, setTotalRevenue] = useState(0);
   const [totalDue, setTotalDue] = useState(0);
+  const [totalTax, setTotalTax] = useState(0);
 
   useEffect(() => {
     fetchSales();
-  }, [searchTerm, paymentMethodFilter, dateRange, currentPage]);
+  }, [searchTerm, paymentMethodFilter, statusFilter, discountPercentFilter, dateRange, paymentDateRange, currentPage, pageSize]);
 
   const fetchSales = async () => {
     try {
       setLoading(true);
       const params = new URLSearchParams({
         page: currentPage.toString(),
-        limit: '20',
+        limit: pageSize.toString(),
         ...(searchTerm && { search: searchTerm }),
         ...(paymentMethodFilter && { paymentMethod: paymentMethodFilter }),
+        ...(statusFilter && { status: statusFilter }),
+        ...(discountPercentFilter && { discountPercent: discountPercentFilter }),
         ...(dateRange[0] && dateRange[1] && {
           from: dateRange[0].format('YYYY-MM-DD'),
           to: dateRange[1].format('YYYY-MM-DD')
+        }),
+        ...(paymentDateRange[0] && paymentDateRange[1] && {
+          paymentFrom: paymentDateRange[0].format('YYYY-MM-DD'),
+          paymentTo: paymentDateRange[1].format('YYYY-MM-DD')
         })
       });
 
@@ -87,8 +101,10 @@ const PharmacySales: React.FC = () => {
       // Calculate totals
       const revenue = response.data.data?.reduce((sum: number, sale: POSSale) => sum + sale.paid, 0) || 0;
       const due = response.data.data?.reduce((sum: number, sale: POSSale) => sum + sale.due, 0) || 0;
+      const tax = response.data.data?.reduce((sum: number, sale: POSSale) => sum + (Number(sale.totalTax) || 0), 0) || 0;
       setTotalRevenue(revenue);
       setTotalDue(due);
+      setTotalTax(tax);
     } catch (error) {
       console.error('Error fetching POS sales:', error);
       message.error('Failed to fetch POS sales history');
@@ -176,6 +192,30 @@ const PharmacySales: React.FC = () => {
       sorter: (a: POSSale, b: POSSale) => (a.paid + a.due) - (b.paid + b.due),
     },
     {
+      title: 'Tax',
+      dataIndex: 'totalTax',
+      key: 'totalTax',
+      width: 110,
+      render: (value: number) => (
+        <span className="font-semibold text-gray-700">
+          Rs. {(Number(value) || 0).toLocaleString()}
+        </span>
+      ),
+      sorter: (a: POSSale, b: POSSale) => (Number(a.totalTax) || 0) - (Number(b.totalTax) || 0),
+    },
+    {
+      title: 'Discount',
+      dataIndex: 'totalDiscount',
+      key: 'totalDiscount',
+      width: 100,
+      render: (discount: number) => (
+        <span className={`font-semibold ${(discount || 0) > 0 ? 'text-green-600' : 'text-gray-400'}`}>
+          Rs. {(discount || 0).toLocaleString()}
+        </span>
+      ),
+      sorter: (a: POSSale, b: POSSale) => (Number(a.totalDiscount) || 0) - (Number(b.totalDiscount) || 0),
+    },
+    {
       title: 'Paid',
       dataIndex: 'paid',
       key: 'paid',
@@ -220,6 +260,27 @@ const PharmacySales: React.FC = () => {
             onClick={() => handleView(record)}
             title="View Details"
           />
+          <Button
+            type="text"
+            icon={<PrinterOutlined className="text-green-600" />}
+            onClick={() => handlePrintReceipt(record)}
+            title="Receipt Print"
+          />
+          <Popconfirm
+            title="Delete Confirmation"
+            description={`Kya aap is sale ko delete karna chahte hain?\nSale #${record._id.slice(-6).toUpperCase()}`}
+            okText="Yes, Delete"
+            cancelText="Cancel"
+            okButtonProps={{ danger: true }}
+            onConfirm={() => deleteSale(record)}
+          >
+            <Button
+              type="text"
+              danger
+              icon={<DeleteOutlined />}
+              title="Delete Sale"
+            />
+          </Popconfirm>
         </Space>
       ),
     },
@@ -246,6 +307,13 @@ const PharmacySales: React.FC = () => {
               <div style="border-bottom: 1px solid #e5e7eb; padding: 8px 0;">
                 <p style="margin: 4px 0;"><strong>${index + 1}. ${item.pharmItemId?.name || 'Item'}</strong></p>
                 <p style="margin: 4px 0;">Quantity: ${item.quantity} ${item.unit} @ Rs. ${item.rate}</p>
+                ${(Number(item.tax) || 0) > 0 || (Number(item.discount) || 0) > 0 ? `
+                  <p style="margin: 4px 0; font-size: 12px; color: #666;">
+                    ${(Number(item.tax) || 0) > 0 ? `Tax: ${Number(item.tax)}%` : ''}
+                    ${(Number(item.tax) || 0) > 0 && (Number(item.discount) || 0) > 0 ? ' | ' : ''}
+                    ${(Number(item.discount) || 0) > 0 ? `Discount: Rs. ${Number(item.discount).toFixed(2)}` : ''}
+                  </p>
+                ` : ''}
                 <p style="margin: 4px 0;">Amount: Rs. ${item.totalAmount?.toFixed(2)}</p>
               </div>
             `).join('') || '<p>No items found</p>'}
@@ -283,8 +351,30 @@ const PharmacySales: React.FC = () => {
     window.print();
   };
 
+  const handlePrintReceipt = (record: POSSale) => {
+    const url = `/admin/pharmacy/invoices/receipt/${record._id}`;
+    window.open(url, '_blank');
+  };
+
+  const deleteSale = async (record: POSSale) => {
+    try {
+      await axios.delete(`${Base_url}/apis/pharmPos/delete/${record._id}`);
+      message.success('Sale delete hogaya');
+      fetchSales();
+    } catch (err) {
+      console.error('POS sale delete error:', err);
+      message.error('Delete nahi ho saka');
+    }
+  };
   const handleTableChange = (pagination: any) => {
-    setCurrentPage(pagination.current);
+    const newPage = pagination?.current || 1;
+    const newPageSize = pagination?.pageSize || pageSize;
+    if (newPageSize !== pageSize) {
+      setPageSize(newPageSize);
+      setCurrentPage(1);
+    } else {
+      setCurrentPage(newPage);
+    }
   };
 
   return (
@@ -332,14 +422,22 @@ const PharmacySales: React.FC = () => {
                 </svg>
                 Date Range
               </label>
-              <RangePicker
-                value={dateRange}
-                onChange={(dates) => setDateRange(dates as [Dayjs | null, Dayjs | null])}
-                placeholder={['From Date', 'To Date']}
-                className="w-full"
-                format="DD/MM/YYYY"
-                allowClear
-              />
+              <div className="flex gap-2">
+                <RangePicker
+                  value={dateRange}
+                  onChange={(dates) => {
+                    setDateRange(dates as [Dayjs | null, Dayjs | null]);
+                    if (dates && dates[0] && dates[1]) {
+                      setPaymentDateRange([null, null]);
+                    }
+                  }}
+                  placeholder={['From Date', 'To Date']}
+                  className="w-full"
+                  format="DD/MM/YYYY"
+                  allowClear
+                />
+                <Button onClick={() => setDateRange([null, null])}>Cancel</Button>
+              </div>
             </div>
 
             {/* Search Filter */}
@@ -378,16 +476,78 @@ const PharmacySales: React.FC = () => {
               >
                 <Option value="Cash">Cash</Option>
                 <Option value="Card">Card</Option>
-                <Option value="Credit">Credit</Option>
                 <Option value="Bank Transfer">Bank Transfer</Option>
                 <Option value="Cheque">Cheque</Option>
               </Select>
+            </div>
+
+            {/* Payment Date Filter */}
+            <div className="flex flex-col">
+              <label className="text-xs font-medium text-gray-600 mb-1.5 flex items-center">
+                Payment Date
+              </label>
+              <div className="flex gap-2">
+                <RangePicker
+                  value={paymentDateRange}
+                  onChange={(dates) => {
+                    setPaymentDateRange(dates as [Dayjs | null, Dayjs | null]);
+                    if (dates && dates[0] && dates[1]) {
+                      setDateRange([null, null]);
+                    }
+                  }}
+                  placeholder={['From Date', 'To Date']}
+                  className="w-full"
+                  format="DD/MM/YYYY"
+                  allowClear
+                />
+                <Button onClick={() => setPaymentDateRange([null, null])}>Cancel</Button>
+              </div>
+            </div>
+
+            {/* Status Filter */}
+            <div className="flex flex-col">
+              <label className="text-xs font-medium text-gray-600 mb-1.5 flex items-center">
+                Status
+              </label>
+              <Select
+                placeholder="Select Status"
+                value={statusFilter}
+                onChange={setStatusFilter}
+                className="w-full"
+                allowClear
+              >
+                <Option value="Paid">Paid</Option>
+                <Option value="Pending">Pending</Option>
+                <Option value="Advance">Advance</Option>
+              </Select>
+            </div>
+
+            {/* Discount % Filter */}
+            <div className="flex flex-col">
+              <label className="text-xs font-medium text-gray-600 mb-1.5 flex items-center">
+                Discount %
+              </label>
+              <Input
+                type="number"
+                placeholder="0"
+                value={discountPercentFilter}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === '' || Number(val) <= 100) {
+                    setDiscountPercentFilter(val);
+                  }
+                }}
+                min={0}
+                max={100}
+                allowClear
+                className="w-full"
+              />
             </div>
           </div>
         </div>
 
         {/* Summary Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           {/* Total Sales */}
           <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-4 border border-blue-200 shadow-sm">
             <div className="flex items-center justify-between">
@@ -422,6 +582,23 @@ const PharmacySales: React.FC = () => {
             </div>
           </div>
 
+          {/* Total Tax */}
+          <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-lg p-4 border border-purple-200 shadow-sm">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-xs text-purple-600 font-medium mb-1">Total Tax</p>
+                <p className="text-2xl font-bold text-purple-700">
+                  Rs. {totalTax.toLocaleString()}
+                </p>
+              </div>
+              <div className="bg-purple-200 p-3 rounded-full">
+                <svg className="w-6 h-6 text-purple-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v8m4-4H8m13 0a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+              </div>
+            </div>
+          </div>
+
           {/* Total Due */}
           <div className="bg-gradient-to-br from-red-50 to-red-100 rounded-lg p-4 border border-red-200 shadow-sm">
             <div className="flex items-center justify-between">
@@ -450,9 +627,10 @@ const PharmacySales: React.FC = () => {
           loading={loading}
           pagination={{
             current: currentPage,
-            pageSize: 20,
+            pageSize: pageSize,
             total: totalCount,
             showSizeChanger: true,
+            pageSizeOptions: ['10', '20', '50', '100'],
             showQuickJumper: true,
             showTotal: (total, range) => `${range[0]}-${range[1]} of ${total} items`,
           }}

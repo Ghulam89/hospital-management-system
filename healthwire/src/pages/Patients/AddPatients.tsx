@@ -1,9 +1,27 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Modal from '../../components/modal';
 import { MdClose } from 'react-icons/md';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 import profile2 from '../../images/profile.jpg';
+import { Base_url } from '../../utils/Base_url';
+import {
+  getSuperadminSelectedBranchId,
+  getUserDataFromStorage,
+  isSuperAdminRole,
+} from '../../utils/branchScope';
+
+function appendBranchIdToFormData(form: FormData) {
+  try {
+    const raw = localStorage.getItem('userData');
+    if (!raw) return;
+    const u = JSON.parse(raw) as { branchId?: string | { _id?: string } };
+    const bid = u?.branchId && typeof u.branchId === 'object' ? u.branchId?._id : u?.branchId;
+    if (bid) form.append('branchId', String(bid));
+  } catch {
+    /* ignore */
+  }
+}
 
 const AddPatients = ({
   isModalOpen,
@@ -22,8 +40,16 @@ const AddPatients = ({
   const [doctors, setDoctors] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [cnicError, setCnicError] = useState('');
-  const [phoneExists, setPhoneExists] = useState(false);
-  const [allowDuplicatePhone, setAllowDuplicatePhone] = useState(false);
+  const [cnicCheckLoading, setCnicCheckLoading] = useState(false);
+  const [cnicDuplicateInfo, setCnicDuplicateInfo] = useState<{
+    exists: boolean;
+    inThisBranch: boolean;
+    unscoped?: boolean;
+    patient?: { mr?: string; name?: string; _id?: string };
+  } | null>(null);
+  const [linkingToBranch, setLinkingToBranch] = useState(false);
+  const cnicCheckAbortRef = useRef<AbortController | null>(null);
+  const cnicCheckGenRef = useRef(0);
 
   useEffect(() => {
     if (isModalOpen) {
@@ -31,6 +57,39 @@ const AddPatients = ({
       fetchDoctors();
     }
   }, [isModalOpen]);
+
+  const runCnicCheck = (cnicValue: string) => {
+    const cleaned = cnicValue.replace(/\D/g, '');
+    if (cleaned.length !== 13) {
+      setCnicDuplicateInfo(null);
+      setCnicCheckLoading(false);
+      return;
+    }
+    cnicCheckAbortRef.current?.abort();
+    const ac = new AbortController();
+    cnicCheckAbortRef.current = ac;
+    const gen = ++cnicCheckGenRef.current;
+    setCnicCheckLoading(true);
+    axios
+      .get(`${Base_url}/apis/patient/check-cnic`, {
+        params: { cnic: cnicValue },
+        signal: ac.signal,
+      })
+      .then((r) => {
+        if (gen !== cnicCheckGenRef.current) return;
+        const d = r.data;
+        if (d?.exists) setCnicDuplicateInfo(d);
+        else setCnicDuplicateInfo(null);
+      })
+      .catch((err) => {
+        if (err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError' || err?.name === 'AbortError') return;
+        if (gen !== cnicCheckGenRef.current) return;
+        setCnicDuplicateInfo(null);
+      })
+      .finally(() => {
+        if (gen === cnicCheckGenRef.current) setCnicCheckLoading(false);
+      });
+  };
 
   const generateMrNumber = () => {
     const newMrNumber = Math.floor(Math.random() * 1000000).toString();
@@ -117,6 +176,58 @@ const AddPatients = ({
     const formattedValue = formatCNIC(value);
     setCnic(formattedValue);
     validateCNIC(formattedValue);
+    const cleaned = formattedValue.replace(/\D/g, '');
+    if (cleaned.length < 13) {
+      cnicCheckAbortRef.current?.abort();
+      setCnicDuplicateInfo(null);
+      setCnicCheckLoading(false);
+      return;
+    }
+    runCnicCheck(formattedValue);
+  };
+
+  const cnicDuplicateMessage = (info: typeof cnicDuplicateInfo) => {
+    if (!info?.exists) return null;
+    if (info.unscoped) {
+      return 'This CNIC is already registered. Search the patient in the list instead of creating a duplicate.';
+    }
+    if (info.inThisBranch) {
+      return 'This patient is already on file at this branch. Do not create a duplicate record.';
+    }
+    return 'This CNIC is already registered in another branch. You can link this patient to the current branch using the button below, or find them in the list.';
+  };
+
+  const showLinkOtherBranchButton =
+    cnicDuplicateInfo &&
+    cnicDuplicateInfo.exists &&
+    !cnicDuplicateInfo.inThisBranch &&
+    !cnicDuplicateInfo.unscoped &&
+    cnicDuplicateInfo.patient?._id;
+
+  const linkPatientToThisBranch = async () => {
+    const id = cnicDuplicateInfo?.patient?._id;
+    if (!id) return;
+    const u = getUserDataFromStorage();
+    const payload: Record<string, string> = { patientId: String(id), visitType: 'OPD' };
+    if (isSuperAdminRole(u?.role)) {
+      const bid = getSuperadminSelectedBranchId();
+      if (!bid) {
+        toast.error('Select a branch in the top bar, then try again.');
+        return;
+      }
+      payload.branchId = bid;
+    }
+    setLinkingToBranch(true);
+    try {
+      await axios.post(`${Base_url}/apis/visits`, payload);
+      toast.success('Patient linked to this branch. You can find them in the list.');
+      runCnicCheck(cnic);
+      fetchPatientData();
+    } catch {
+      toast.error('Could not link to this branch. Try again or use Open visit from the patient list.');
+    } finally {
+      setLinkingToBranch(false);
+    }
   };
 
   const handleSubmit = async (e) => {
@@ -130,26 +241,24 @@ const AddPatients = ({
       toast.error('Must checked gender');
     } else if (!mrNumber) {
       toast.error('Must enter MR number');
-    } else if (cnic && !validateCNIC(cnic)) {
-      return;
     } else {
+      const cleanedCnic = cnic.replace(/\D/g, '');
+      if (cleanedCnic.length !== 13) {
+        setCnicError('CNIC is required and must be 13 digits (with or without dashes).');
+        toast.error('Enter a valid 13-digit CNIC before registering a patient.');
+        return;
+      }
+      if (!validateCNIC(cnic)) {
+        return;
+      }
       try {
-        // Check for existing phone when duplicate has not been explicitly allowed
-        if (!allowDuplicatePhone && phone) {
-          const checkRes = await axios.get(
-            'https://api.holisticare.pk/apis/patient/get',
-            {
-              params: { phone, limit: 1 },
-            },
-          );
-          const existing = checkRes?.data?.data || [];
-          if (Array.isArray(existing) && existing.length > 0) {
-            setPhoneExists(true);
-            toast.warn(
-              'This phone number already exists. Tick the checkbox below if you still want to use it.',
-            );
-            return;
-          }
+        const cnicRes = await axios.get(`${Base_url}/apis/patient/check-cnic`, {
+          params: { cnic: cnic },
+        });
+        const d = cnicRes.data;
+        if (d?.exists) {
+          toast.error(cnicDuplicateMessage(d) || 'This CNIC is already registered.');
+          return;
         }
 
         setIsLoading(true);
@@ -165,10 +274,9 @@ const AddPatients = ({
           newPatient.append('image', selectedImages);
         }
 
-        const res = await axios.post(
-          'https://api.holisticare.pk/apis/patient/create',
-          newPatient,
-        );
+        appendBranchIdToFormData(newPatient);
+
+        const res = await axios.post(`${Base_url}/apis/patient/create`, newPatient);
         if (res.data.status === 'ok') {
           setIsLoading(false);
           toast.success('Patient added successfully!');
@@ -196,8 +304,9 @@ const AddPatients = ({
     setDoctor('');
     setCnic('');
     setCnicError('');
-    setPhoneExists(false);
-    setAllowDuplicatePhone(false);
+    setCnicDuplicateInfo(null);
+    cnicCheckAbortRef.current?.abort();
+    setLinkingToBranch(false);
     setTimeout(() => {
       setSuccessMessage('');
       setIsModalOpen(false);
@@ -291,23 +400,6 @@ const AddPatients = ({
                     placeholder=""
                     className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                   />
-                  {phoneExists && (
-                    <div className="mt-2 flex items-center gap-2 text-sm">
-                      <span className="text-gray-700">
-                        This phone number already exists. Allow duplicate?
-                      </span>
-                      <label className="inline-flex items-center gap-1">
-                        <input
-                          type="checkbox"
-                          checked={allowDuplicatePhone}
-                          onChange={(e) =>
-                            setAllowDuplicatePhone(e.target.checked)
-                          }
-                        />
-                        <span>Yes</span>
-                      </label>
-                    </div>
-                  )}
                 </div>
 
                 <div>
@@ -398,7 +490,7 @@ const AddPatients = ({
 
                 <div className="mb-4.5">
                   <label className="mb-2.5 block text-black dark:text-white">
-                    CNIC
+                    CNIC <span className="text-red-500">*</span>
                   </label>
                   <input
                     type="text"
@@ -409,6 +501,38 @@ const AddPatients = ({
                   />
                   {cnicError && (
                     <p className="text-red-500 text-sm mt-1">{cnicError}</p>
+                  )}
+                  {cnicCheckLoading && !cnicError && (
+                    <p className="text-body dark:text-bodydark text-sm mt-1">Checking CNIC…</p>
+                  )}
+                  {!cnicError && cnicDuplicateMessage(cnicDuplicateInfo) && (
+                    <div
+                      className={`mt-2 rounded-md border p-2.5 text-sm ${
+                        cnicDuplicateInfo &&
+                        cnicDuplicateInfo.exists &&
+                        !cnicDuplicateInfo.inThisBranch &&
+                        !cnicDuplicateInfo.unscoped
+                          ? 'border-amber-200 bg-amber-50 text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-100'
+                          : 'border-red-200 bg-red-50 text-red-800 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-200'
+                      }`}
+                    >
+                      <p className="leading-snug">{cnicDuplicateMessage(cnicDuplicateInfo)}</p>
+                      {cnicDuplicateInfo?.patient && (
+                        <p className="mt-1 text-xs opacity-90">
+                          MR# {cnicDuplicateInfo.patient.mr || '—'} · {cnicDuplicateInfo.patient.name || '—'}
+                        </p>
+                      )}
+                      {showLinkOtherBranchButton && (
+                        <button
+                          type="button"
+                          onClick={linkPatientToThisBranch}
+                          disabled={linkingToBranch}
+                          className="mt-2 inline-flex w-full items-center justify-center rounded-md border border-primary bg-primary px-3 py-2 text-xs font-semibold text-white shadow-sm transition hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 sm:w-auto"
+                        >
+                          {linkingToBranch ? 'Linking…' : 'Link to this branch'}
+                        </button>
+                      )}
+                    </div>
                   )}
                 </div>
 
@@ -422,8 +546,12 @@ const AddPatients = ({
                   </button>
                   <button
                     type="submit"
-                    className="flex justify-center rounded bg-primary py-2 px-6 font-medium text-gray"
-                    disabled={isLoading}
+                    className="flex justify-center rounded bg-primary py-2 px-6 font-medium text-white disabled:opacity-50"
+                    disabled={
+                      isLoading ||
+                      !!(cnicDuplicateInfo && cnicDuplicateInfo.exists) ||
+                      cnic.replace(/\D/g, '').length !== 13
+                    }
                   >
                     {isLoading ? (
                       <div className="flex items-center gap-2">

@@ -6,6 +6,7 @@ import axios from 'axios';
 import Swal from 'sweetalert2';
 import { Base_url } from '../../../utils/Base_url';
 import dayjs from 'dayjs';
+import { AsyncPaginate } from 'react-select-async-paginate';
 
 const { Search } = Input;
 const { Option } = Select;
@@ -230,8 +231,16 @@ const MissedSales = () => {
 
   const handleEdit = (record: MissedSale) => {
     setEditingMissedSale(record);
+    // When editing, we need to set the itemName field with an object that AsyncPaginate can understand
+    // if we want it to show the selected value correctly.
+    // Since we only have the itemName string in the record, we'll create a simple object for it.
+    // If you had the full item object or ID in the record, you could look it up or use it.
+    
+    // Check if itemName matches an existing item in pharmacyItems (loaded in fetchReferenceData)
+    // to provide better context if possible, though not strictly necessary for display if we just use label.
+    
     form.setFieldsValue({
-      itemName: record.itemName,
+      itemName: { label: record.itemName, value: record.itemName },
       quantity: record.quantity,
       phone: record.phone,
       supplierId: record.supplierId?._id,
@@ -304,8 +313,16 @@ const MissedSales = () => {
   const handleModalSubmit = async () => {
     try {
       const values = await form.validateFields();
+      
+      // If itemName is an object (from AsyncPaginate), extract the value or label
+      let itemName = values.itemName;
+      if (typeof values.itemName === 'object' && values.itemName !== null) {
+        itemName = values.itemName.label || values.itemName.value;
+      }
+
       const data = {
         ...values,
+        itemName,
         createdAt: new Date().toISOString(),
         status: values.status || 'Open'
       };
@@ -323,6 +340,39 @@ const MissedSales = () => {
     } catch (error) {
       console.error('Error saving missed sale:', error);
       message.error('Failed to save missed sale');
+    }
+  };
+
+  const loadItemOptions = async (search, loadedOptions, { page }) => {
+    try {
+      const response = await axios.get(`${Base_url}/apis/pharmItem/get`, {
+        params: {
+          search: search || '',
+          page: page || 1,
+          limit: 20
+        }
+      });
+      
+      const data = response.data.data || [];
+      const hasMore = response.data.totalPages > page;
+      
+      return {
+        options: data.map(item => ({
+          value: item._id,
+          label: `${item.name} (${item.availableQuantity} in stock)`,
+          item: item
+        })),
+        hasMore,
+        additional: {
+          page: page + 1
+        }
+      };
+    } catch (error) {
+      console.error('Error loading items:', error);
+      return {
+        options: [],
+        hasMore: false
+      };
     }
   };
 
@@ -548,7 +598,47 @@ const MissedSales = () => {
             label="Item Name"
             rules={[{ required: true, message: 'Please enter item name' }]}
           >
-            <Input placeholder="Enter item name" />
+            <AsyncPaginate
+              loadOptions={loadItemOptions}
+              placeholder="Search product..."
+              additional={{
+                page: 1,
+              }}
+              debounceTimeout={300}
+              isClearable
+              styles={{
+                control: (provided) => ({
+                  ...provided,
+                  minHeight: '32px',
+                  fontSize: '14px',
+                  borderColor: '#d9d9d9',
+                }),
+                menuPortal: (provided) => ({
+                  ...provided,
+                  zIndex: 999999,
+                }),
+              }}
+              menuPortalTarget={document.body}
+              menuPosition="fixed"
+              className="react-select-async"
+              // Re-enable creation of custom items for Missed Sales
+              formatCreateLabel={(inputValue) => `Use "${inputValue}"`}
+              onCreateOption={(inputValue) => {
+                 form.setFieldsValue({ 
+                   itemName: { label: inputValue, value: inputValue }
+                 });
+              }}
+              isValidNewOption={() => true}
+              onChange={(value) => {
+                // If an existing item is selected, try to auto-fill supplier
+                if (value && value.item && value.item.pharmSupplierId) {
+                  const supplierId = value.item.pharmSupplierId._id || value.item.pharmSupplierId;
+                  if (supplierId) {
+                    form.setFieldsValue({ supplierId });
+                  }
+                }
+              }}
+            />
           </Form.Item>
           
           <Form.Item

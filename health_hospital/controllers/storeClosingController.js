@@ -1,4 +1,5 @@
 const StoreClosing = require("../models/storeClosingModel");
+const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible } = require("../utils/branchScope");
 
 // Create store closing
 const createStoreClosing = async (req, res) => {
@@ -102,6 +103,9 @@ const getStoreClosings = async (req, res) => {
     // Create base query
     let baseQuery = {};
 
+    const branchQ = await mergeBranchScopedQuery(req);
+    if (branchQ) Object.assign(baseQuery, branchQ);
+
     // Date range filter
     if (from && to) {
       baseQuery.closingDate = {
@@ -159,13 +163,13 @@ const getStoreClosingById = async (req, res) => {
         select: 'name email'
       });
     
-    if (!data) {
+    if (!data || !(await branchDocumentVisible(req, data.branchId))) {
       return res.status(404).json({
         status: "error",
         message: "Store closing not found"
       });
     }
-    
+
     return res.status(200).json({
       status: "ok",
       data: data
@@ -221,7 +225,7 @@ const deleteStoreClosing = async (req, res) => {
     const id = req.params.id;
     
     const existingClosing = await StoreClosing.findById(id);
-    if (!existingClosing) {
+    if (!existingClosing || !(await branchDocumentVisible(req, existingClosing.branchId))) {
       return res.status(404).json({
         status: "error",
         message: "Store closing not found"

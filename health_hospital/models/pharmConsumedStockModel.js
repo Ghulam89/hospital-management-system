@@ -41,7 +41,11 @@ const pharmConsumedStockSchema = new mongoose.Schema({
     totalCost: {
         type: Number,
         min: 0
-    }
+    },
+    branchId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Branch',
+    },
 }, { timestamps: true });
 
 // Pre-save middleware to calculate total cost

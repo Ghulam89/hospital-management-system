@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Table, DatePicker, Select, Input, Button, message, Col } from 'antd';
+import { Table, DatePicker, Select, Input, Button, message, Col, Modal } from 'antd';
 import axios from 'axios';
 import moment from 'moment';
 import {
@@ -175,15 +175,24 @@ const PatientReports = () => {
   }, []); // Empty dependency array for initial load
 
   const handleDelete = (id) => {
-    axios
-      .delete(`${Base_url}/apis/patient/delete/${id}`)
-      .then((res) => {
-        message.success('Patient deleted successfully');
-        fetchPatients();
-      })
-      .catch((err) => {
-        message.error('Failed to delete patient');
-      });
+    Modal.confirm({
+      title: 'Are you sure you want to delete this patient?',
+      content: 'This action cannot be undone.',
+      okText: 'Yes',
+      okType: 'danger',
+      cancelText: 'No',
+      onOk() {
+        axios
+          .delete(`${Base_url}/apis/patient/delete/${id}`)
+          .then((res) => {
+            message.success('Patient deleted successfully');
+            fetchPatients();
+          })
+          .catch((err) => {
+            message.error('Failed to delete patient');
+          });
+      },
+    });
   };
 
   const exportToExcel = () => {

@@ -1,12 +1,16 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Table, message, Select, DatePicker, Card, Row, Col, Input, Button } from 'antd';
+import { Table, message, Select, DatePicker, Card, Row, Col, Input, Button, Modal } from 'antd';
 import { Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import moment from 'moment';
+import dayjs, { Dayjs } from 'dayjs';
 import { RiDeleteBin5Line, RiEdit2Fill, RiFile2Line, RiPenNibFill, RiPrinterLine } from 'react-icons/ri';
 import { Base_url } from '../../utils/Base_url';
+import { getInvoiceHeaderForPdf } from '../../utils/branchPdfHeader';
+import { enrichInvoiceForPdf } from '../../utils/enrichInvoiceForPdf';
 import logoDataUrl from '../../images/logo-icon.png';
 import Breadcrumb from '../../components/Breadcrumbs/Breadcrumb';
+import { AsyncPaginate, type LoadOptions } from 'react-select-async-paginate';
 
 import {
   PDFDownloadLink,
@@ -21,6 +25,44 @@ import {
 
 const { Option } = Select;
 const { RangePicker } = DatePicker;
+
+type DoctorOption = {
+  label: string;
+  value: string;
+  doctorData?: {
+    _id: string;
+    name: string;
+  };
+};
+
+type DepartmentOption = {
+  label: string;
+  value: string;
+  departmentData?: {
+    _id: string;
+    name: string;
+  };
+};
+
+type ProcedureOption = {
+  label: string;
+  value: string;
+  procedureData?: {
+    _id: string;
+    name: string;
+  };
+};
+
+type PatientOption = {
+  label: string;
+  value: string;
+  patientData?: {
+    _id: string;
+    mr: string;
+    name: string;
+    phone?: string;
+  };
+};
 
 
 
@@ -150,17 +192,21 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'flex-end',
   },
-});
+}); 
 
-const InvoicePdf = ({ invoice, patient }) => (
+const InvoicePdf = ({ invoice, patient }) => {
+  const header = getInvoiceHeaderForPdf(invoice);
+  return (
   <Document>
     <Page size="A4" style={styles.page}>
       <View style={styles.header}>
         <Image src={logoDataUrl} style={styles.logo} />
         <View style={styles.clinicInfo}>
           <Text style={styles.clinicName}>HOLISTIC CARE CLINIC</Text>
-          <Text style={styles.clinicAddress}>188-Y Block Phase III, DHA, Lahore, Punjab, Pakistan</Text>
-          <Text style={styles.clinicAddress}>Phone: 0342-4211888 | Email: info@holisticcare.com</Text>
+          <Text style={styles.clinicAddress}> <Text style={styles.clinicAddress}>Branch: {invoice.branchId?.name}</Text> | Branch Code: {invoice.branchId?.code}</Text>
+          {header.addressLine ? <Text style={styles.clinicAddress}>{header.addressLine}</Text> : null}
+          <Text style={styles.clinicAddress}>{header.contactLine} | Email: info@holisticcare.com</Text>
+         
         </View>
       </View>
 
@@ -171,7 +217,7 @@ const InvoicePdf = ({ invoice, patient }) => (
       <View style={styles.patientInfo}>
         <View style={styles.infoRow}>
           <Text style={styles.infoLabel}>Invoice #:</Text>
-          <Text>{invoice._id.substring(0, 6).toUpperCase()}</Text>
+          <Text>{invoice.invoiceNo || invoice.invoiceNumber || invoice._id?.substring?.(0, 6)?.toUpperCase?.() || 'N/A'}</Text>
         </View>
         <View style={styles.infoRow}>
           <Text style={styles.infoLabel}>Date:</Text>
@@ -209,32 +255,89 @@ const InvoicePdf = ({ invoice, patient }) => (
         </View>
       ))}
 
+      {invoice.item && invoice.item.map((item, index) => {
+        const printableExpenses = (item.expenses || []).filter((exp: any) => exp?.showInPrint);
+        if (printableExpenses.length === 0) return null;
+        return (
+          <View key={`exp-${index}`} style={{ marginBottom: 6 }}>
+            <Text style={{ fontSize: 10, marginBottom: 2, textAlign: 'center', borderTopWidth: 1, borderTopColor: '#000', paddingTop: 3 }}>Breakdown Expense</Text>
+            {printableExpenses.map((exp: any, i: number) => (
+              <View key={`exp-row-${index}-${i}`} style={styles.tableRow}>
+                <Text style={styles.descriptionColumn}>
+                  {exp.description || exp.categoryName || 'Expense'}
+                </Text>
+                <Text style={styles.rateColumn}></Text>
+                <Text style={styles.quantityColumn}></Text>
+                <Text style={styles.amountColumn}>{(Number(exp.amount) || 0).toFixed(2)}</Text>
+                <Text style={styles.discountColumn}></Text>
+              </View>
+            ))}
+          </View>
+        );
+      })}
+
+      {Array.isArray(invoice.invoiceExpenses) && invoice.invoiceExpenses.filter((e: any) => e?.showInPrint).length > 0 && (
+        <View style={{ marginTop: 10, marginBottom: 6 }}>
+          <Text style={{ fontSize: 10, marginBottom: 2, textAlign: 'center', borderTopWidth: 1, borderTopColor: '#000', paddingTop: 3 }}>Additional Expenses</Text>
+          {invoice.invoiceExpenses.filter((e: any) => e?.showInPrint).map((exp: any, i: number) => (
+            <View key={`inv-exp-${i}`} style={styles.tableRow}>
+              <Text style={styles.descriptionColumn}>
+                {exp.description || exp.categoryName || 'Expense'}
+              </Text>
+              <Text style={styles.rateColumn}></Text>
+              <Text style={styles.quantityColumn}></Text>
+              <Text style={styles.amountColumn}>{(Number(exp.amount) || 0).toFixed(2)}</Text>
+              <Text style={styles.discountColumn}></Text>
+            </View>
+          ))}
+        </View>
+      )}
+
       <View style={styles.totalsContainer}>
-        <View style={styles.totalRow}>
-          <Text style={{fontSize:12}}>Sub Total:</Text>
-          <Text style={{fontSize:12}}>Rs. {invoice.subTotal?.toFixed(2)}</Text>
-        </View>
-        <View style={styles.totalRow}>
-          <Text style={{fontSize:12}}>Discount:</Text>
-          <Text style={{fontSize:12}}>Rs. {invoice.discount?.toFixed(2)}</Text>
-        </View>
-        <View style={[styles.totalRow, styles.grandTotal]}>
-          <Text style={{fontSize:12}}>Grand Total:</Text>
-          <Text style={{fontSize:12}}>Rs. {invoice.total?.toFixed(2)}</Text>
-        </View>
-        <View style={styles.totalRow}>
-          <Text style={{fontSize:12}}>Amount Paid:</Text>
-          <Text style={{fontSize:12}}>Rs. {invoice.paid?.toFixed(2)}</Text>
-        </View>
-        <View style={[styles.totalRow, {marginTop: 5}]}>
-          <Text style={{fontSize:12}}>Balance Due:</Text>
-          <Text style={{fontSize:12}}>Rs. {invoice.due?.toFixed(2)}</Text>
-        </View>
+        {(() => {
+          const itemExpenses = (invoice.item || [])
+            .flatMap((it: any) => (it.expenses || []).filter((e: any) => e?.showInPrint))
+            .reduce((sum: number, e: any) => sum + (Number(e?.amount) || 0), 0);
+          const invoiceLevelExpenses = (invoice.invoiceExpenses || [])
+            .filter((e: any) => e?.showInPrint)
+            .reduce((sum: number, e: any) => sum + (Number(e?.amount) || 0), 0);
+          const expensesTotal = itemExpenses + invoiceLevelExpenses;
+          return (
+            <>
+              <View style={styles.totalRow}>
+                <Text style={{fontSize:12}}>Sub Total:</Text>
+                <Text style={{fontSize:12}}>Rs. {invoice.subTotal?.toFixed?.(2)}</Text>
+              </View>
+              <View style={styles.totalRow}>
+                <Text style={{fontSize:12}}>Discount:</Text>
+                <Text style={{fontSize:12}}>Rs. {invoice.discount?.toFixed?.(2)}</Text>
+              </View>
+              {expensesTotal > 0 && (
+                <View style={styles.totalRow}>
+                  <Text style={{fontSize:12}}>Additional Expenses:</Text>
+                  <Text style={{fontSize:12}}>Rs. {expensesTotal.toFixed(2)}</Text>
+                </View>
+              )}
+              <View style={[styles.totalRow, styles.grandTotal]}>
+                <Text style={{fontSize:12}}>Grand Total:</Text>
+                <Text style={{fontSize:12}}>Rs. {Number(invoice.total || 0).toFixed(2)}</Text>
+              </View>
+              <View style={styles.totalRow}>
+                <Text style={{fontSize:12}}>Amount Paid:</Text>
+                <Text style={{fontSize:12}}>Rs. {Number(invoice.paid || 0).toFixed(2)}</Text>
+              </View>
+              <View style={[styles.totalRow, {marginTop: 5}]}>
+                <Text style={{fontSize:12}}>Balance Due:</Text>
+                <Text style={{fontSize:12}}>Rs. {Number(invoice.due || 0).toFixed(2)}</Text>
+              </View>
+            </>
+          );
+        })()}
       </View>
 
       <View style={styles.notes}>
         <Text>* Procedures & Medicines once purchased are non-refundable.</Text>
-        <Text>* Purchased Packages Are Valid for 80m (CW).</Text>
+        <Text>* Purchased Packages Are Valid For 06 Months Only.</Text>
       </View>
 
       <View style={styles.signature}>
@@ -245,21 +348,19 @@ const InvoicePdf = ({ invoice, patient }) => (
       </View>
 
       <View style={styles.footer}>
-        <Text>Thank you for choosing Holistic Care Clinic</Text>
-        <Text>For any queries, please contact: 0342-4211888</Text>
+        <Text>{header.footerThanks}</Text>
+        <Text>{header.footerContactLine}</Text>
       </View>
     </Page>
   </Document>
-);
+  );
+};
 
 const Invoice = () => {
  const [selectedRowKeys, setSelectedRowKeys] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [filteredInvoices, setFilteredInvoices] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [departments, setDepartments] = useState([]);
-  const [doctors, setDoctors] = useState([]);
-  const [procedures, setProcedures] = useState([]);
   const [pagination, setPagination] = useState({
     current: 1,
     pageSize: 20,
@@ -269,13 +370,16 @@ const Invoice = () => {
   const [paymentModes, setPaymentModes] = useState([
     'Cash',
     'Card',
-    'Credit',
     'Bank Transfer',
     'Cheque',
     'Insurance',
   ]);
   const navigate = useNavigate();
   const tableRef = useRef();
+  const [selectedDoctor, setSelectedDoctor] = useState<DoctorOption | null>(null);
+  const [selectedDepartment, setSelectedDepartment] = useState<DepartmentOption | null>(null);
+  const [selectedProcedure, setSelectedProcedure] = useState<ProcedureOption | null>(null);
+  const [selectedPatient, setSelectedPatient] = useState<PatientOption | null>(null);
 
   const [filters, setFilters] = useState({
      startDate: moment().startOf('month'),
@@ -284,6 +388,8 @@ const Invoice = () => {
     paymentMode: '',
     doctor: '',
     procedure: '',
+    // which amount field min/max applies to: 'paid' by default
+    amountField: 'paid',
     patientName: '',
     patientMR: '',
     patientPhone: '',
@@ -294,11 +400,457 @@ const Invoice = () => {
     paymentDateStart: '',
     paymentDateEnd: '',
         dateRange: [moment().startOf('month'), moment()],
+        discountPercent: '',
     
   });
 
+  const [paymentModalOpen, setPaymentModalOpen] = useState(false);
+  const [savingPayment, setSavingPayment] = useState(false);
+  const [paymentInvoice, setPaymentInvoice] = useState<any>(null);
+  const [paymentRows, setPaymentRows] = useState([
+    {
+      method: 'Cash',
+      paid: '',
+      payDate: dayjs().format('YYYY-MM-DD'),
+      reference: '',
+      chequeNo: '',
+      bankName: '',
+      chequeDate: '',
+      notes: '',
+    },
+  ]);
+
+  const [refundModalOpen, setRefundModalOpen] = useState(false);
+  const [savingRefund, setSavingRefund] = useState(false);
+  const [refundInvoice, setRefundInvoice] = useState<any>(null);
+  const [refundType, setRefundType] = useState<'invoice' | 'procedure'>('invoice');
+  const [refundForm, setRefundForm] = useState({
+    method: 'Cash',
+    paid: '',
+    payDate: dayjs().format('YYYY-MM-DD'),
+    reference: '',
+    notes: '',
+    procedureId: '',
+  });
+
   console.log(filters, 'filters');
+
+  const dateRangePresets = [
+    {
+      label: 'Today',
+      value: [dayjs().startOf('day'), dayjs().endOf('day')],
+    },
+    {
+      label: 'Yesterday',
+      value: [
+        dayjs().subtract(1, 'day').startOf('day'),
+        dayjs().subtract(1, 'day').endOf('day'),
+      ],
+    },
+    {
+      label: 'This Week',
+      value: [dayjs().startOf('week').startOf('day'), dayjs().endOf('week').endOf('day')],
+    },
+    {
+      label: 'Last Week',
+      value: [
+        dayjs().subtract(1, 'week').startOf('week').startOf('day'),
+        dayjs().subtract(1, 'week').endOf('week').endOf('day'),
+      ],
+    },
+    {
+      label: 'This Month',
+      value: [dayjs().startOf('month').startOf('day'), dayjs().endOf('month').endOf('day')],
+    },
+    {
+      label: 'Last Month',
+      value: [
+        dayjs().subtract(1, 'month').startOf('month').startOf('day'),
+        dayjs().subtract(1, 'month').endOf('month').endOf('day'),
+      ],
+    },
+  ] satisfies Array<{ label: string; value: [Dayjs, Dayjs] }>;
+
+  const disabledDate = (current: Dayjs) => current && current > dayjs().endOf('day');
   
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('invoiceFilters');
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      const startDate = saved.startDate ? moment(saved.startDate) : undefined;
+      const endDate = saved.endDate ? moment(saved.endDate) : undefined;
+      const dateRange = startDate && endDate ? [startDate, endDate] : undefined;
+      setFilters((prev) => ({
+        ...prev,
+        ...saved,
+        startDate: startDate || prev.startDate,
+        endDate: endDate || prev.endDate,
+        dateRange: dateRange || prev.dateRange,
+      }));
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    try {
+      const payload = {
+        ...filters,
+        startDate: filters.startDate ? filters.startDate.toISOString() : '',
+        endDate: filters.endDate ? filters.endDate.toISOString() : '',
+        paymentDateStart: filters.paymentDateStart || '',
+        paymentDateEnd: filters.paymentDateEnd || '',
+      };
+      localStorage.setItem('invoiceFilters', JSON.stringify(payload));
+    } catch {}
+  }, [filters]);
+
+  const openPaymentModal = (record: any) => {
+    setPaymentInvoice(record);
+    setPaymentRows([
+      {
+        method: 'Cash',
+        paid: '',
+        payDate: dayjs().format('YYYY-MM-DD'),
+        reference: '',
+        chequeNo: '',
+        bankName: '',
+        chequeDate: '',
+        notes: '',
+      },
+    ]);
+    setPaymentModalOpen(true);
+  };
+
+  const openRefundModal = (record: any) => {
+    setRefundInvoice(record);
+    setRefundType('invoice');
+    setRefundForm({
+      method: 'Cash',
+      paid: '',
+      payDate: dayjs().format('YYYY-MM-DD'),
+      reference: '',
+      notes: '',
+      procedureId: '',
+    });
+    setRefundModalOpen(true);
+  };
+
+  const submitInvoiceRefund = async () => {
+    if (!refundInvoice?._id) {
+      message.error('Invoice not selected');
+      return;
+    }
+    const amount = Number(refundForm.paid) || 0;
+    if (amount <= 0) {
+      message.error('Enter refund amount');
+      return;
+    }
+    setSavingRefund(true);
+    try {
+      let res;
+      if (refundType === 'procedure' && refundForm.procedureId) {
+        const payload = {
+          procedureId: refundForm.procedureId,
+          method: refundForm.method,
+          paid: amount,
+          payDate: (() => {
+            const v = refundForm.payDate;
+            if (!v) return v;
+            if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) {
+              const [y, m, d] = v.split('-').map((x) => Number(x));
+              const now = new Date();
+              return new Date(y, m - 1, d, now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds()).toISOString();
+            }
+            return v;
+          })(),
+          reference: refundForm.reference,
+          notes: refundForm.notes || '',
+        };
+        res = await axios.post(`${Base_url}/apis/invoice/procedure-refund/${refundInvoice._id}`, payload);
+      } else {
+        const payload = {
+          refunds: [
+            {
+              method: refundForm.method,
+              paid: amount,
+              payDate: (() => {
+                const v = refundForm.payDate;
+                if (!v) return v;
+                if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v)) {
+                  const [y, m, d] = v.split('-').map((x) => Number(x));
+                  const now = new Date();
+                  return new Date(y, m - 1, d, now.getHours(), now.getMinutes(), now.getSeconds(), now.getMilliseconds()).toISOString();
+                }
+                return v;
+              })(),
+              reference: refundForm.reference,
+              notes: refundForm.notes || '',
+            },
+          ],
+        };
+        res = await axios.post(`${Base_url}/apis/invoice/add-refund/${refundInvoice._id}`, payload);
+      }
+      if (res.data?.status === 'ok') {
+        message.success('Refund recorded');
+        setRefundModalOpen(false);
+        fetchInvoices(pagination.current, pagination.pageSize);
+      } else {
+        message.error(res.data?.message || 'Failed to record refund');
+      }
+    } catch (err: any) {
+      console.error(err);
+      message.error(err?.response?.data?.message || err?.response?.data?.error || 'Failed to record refund');
+    } finally {
+      setSavingRefund(false);
+    }
+  };
+
+  const parsePayDateToTs = (payDate: any) => {
+    if (!payDate) return null;
+    if (typeof payDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(payDate)) {
+      const [y, m, d] = payDate.split('-').map((v) => Number(v));
+      if (!y || !m || !d) return null;
+      const local = new Date(y, m - 1, d);
+      return Number.isFinite(local.getTime()) ? local.getTime() : null;
+    }
+    const d = dayjs(payDate);
+    return d.isValid() ? d.valueOf() : null;
+  };
+
+  const parsePayDateToTsWithFallback = (payDate: any, fallbackDateTime: any) => {
+    if (!payDate) return null;
+    if (
+      typeof payDate === 'string' &&
+      /^\d{4}-\d{2}-\d{2}T00:00:00(\.000)?Z$/.test(payDate)
+    ) {
+      return parsePayDateToTsWithFallback(payDate.slice(0, 10), fallbackDateTime);
+    }
+    if (typeof payDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(payDate)) {
+      const baseTs = parsePayDateToTs(payDate);
+      if (!baseTs) return baseTs;
+      const fb = dayjs(fallbackDateTime);
+      if (!fb.isValid()) return baseTs;
+      const base = dayjs(baseTs);
+      return base
+        .hour(fb.hour())
+        .minute(fb.minute())
+        .second(fb.second())
+        .millisecond(fb.millisecond())
+        .valueOf();
+    }
+    return parsePayDateToTs(payDate);
+  };
+
+  const formatPayDate = (payDate: any) => {
+    if (!payDate) return 'N/A';
+    if (typeof payDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(payDate)) {
+      const [y, m, d] = payDate.split('-').map((v) => Number(v));
+      if (!y || !m || !d) return 'N/A';
+      return dayjs(new Date(y, m - 1, d)).format('DD/MM/YYYY - hh:mm A');
+    }
+    const d = dayjs(payDate);
+    return d.isValid() ? d.format('DD/MM/YYYY - hh:mm A') : 'N/A';
+  };
+
+  const loadDoctorOptions: LoadOptions<DoctorOption, any, { page: number }> = async (
+    searchQuery,
+    _loadedOptions,
+    additional,
+  ) => {
+    const page = additional?.page ?? 1;
+    const limit = 20;
+
+    const res = await axios.get(`${Base_url}/apis/user/get`, {
+      params: {
+        role: 'doctor',
+        page,
+        limit,
+        ...(searchQuery ? { search: searchQuery } : {}),
+      },
+    });
+
+    const list = res?.data?.data || [];
+    const options: DoctorOption[] = (list || []).map((d: any) => ({
+      label: d?.name || 'Doctor',
+      value: d?._id,
+      doctorData: d,
+    }));
+
+    const totalPages = Number(res?.data?.totalPages) || 0;
+    const hasMore = totalPages ? page < totalPages : options.length === limit;
+
+    return {
+      options,
+      hasMore,
+      additional: { page: page + 1 },
+    };
+  };
+
+  const loadDepartmentOptions: LoadOptions<DepartmentOption, any, { page: number }> = async (
+    searchQuery,
+    _loadedOptions,
+    additional,
+  ) => {
+    const page = additional?.page ?? 1;
+    const limit = 20;
+
+    const res = await axios.get(`${Base_url}/apis/department/get`, {
+      params: {
+        page,
+        limit,
+        ...(searchQuery ? { search: searchQuery } : {}),
+      },
+    });
+
+    const responseData = res?.data;
+    const list = responseData?.data || responseData || [];
+    const options: DepartmentOption[] = (list || []).map((d: any) => ({
+      label: d?.name || 'Department',
+      value: d?._id,
+      departmentData: d,
+    }));
+
+    const totalPages = Number(responseData?.totalPages) || 0;
+    const currentPage = Number(responseData?.currentPage || responseData?.page) || page;
+    const hasMore = totalPages ? currentPage < totalPages : options.length === limit;
+
+    return {
+      options,
+      hasMore,
+      additional: { page: page + 1 },
+    };
+  };
+
+  const loadProcedureOptions: LoadOptions<ProcedureOption, any, { page: number }> = async (
+    searchQuery,
+    _loadedOptions,
+    additional,
+  ) => {
+    const page = additional?.page ?? 1;
+    const limit = 20;
+
+    const res = await axios.get(`${Base_url}/apis/procedure/get`, {
+      params: {
+        page,
+        limit,
+        ...(searchQuery ? { search: searchQuery } : {}),
+      },
+    });
+
+    const responseData = res?.data;
+    const list = responseData?.data || responseData || [];
+    const options: ProcedureOption[] = (list || []).map((p: any) => ({
+      label: p?.name || 'Procedure',
+      value: p?._id,
+      procedureData: p,
+    }));
+
+    const totalPages = Number(responseData?.totalPages) || 0;
+    const currentPage = Number(responseData?.currentPage || responseData?.page) || page;
+    const hasMore = totalPages ? currentPage < totalPages : options.length === limit;
+
+    return {
+      options,
+      hasMore,
+      additional: { page: page + 1 },
+    };
+  };
+
+  const loadPatientOptions: LoadOptions<PatientOption, any, { page: number }> = async (
+    searchQuery,
+    _loadedOptions,
+    additional,
+  ) => {
+    const page = additional?.page ?? 1;
+    const limit = 20;
+
+    const res = await axios.get(`${Base_url}/apis/patient/get`, {
+      params: {
+        page,
+        limit,
+        ...(searchQuery ? { search: searchQuery } : {}),
+      },
+    });
+
+    const responseData = res?.data;
+    const list = responseData?.data || responseData || [];
+
+    const options: PatientOption[] = (list || []).map((p: any) => ({
+      value: p?._id,
+      label: p?.name || 'Patient',
+      patientData: p,
+    }));
+
+    const totalPages = Number(responseData?.totalPages) || 0;
+    const currentPage = Number(responseData?.currentPage || responseData?.page) || page;
+    const hasMore = totalPages ? currentPage < totalPages : options.length === limit;
+
+    return {
+      options,
+      hasMore,
+      additional: { page: currentPage + 1 },
+    };
+  };
+
+  const submitInvoicePayments = async () => {
+    if (!paymentInvoice?._id) {
+      message.error('Invoice not selected');
+      return;
+    }
+
+    const payments = paymentRows
+      .map((p) => ({
+        method: p.method,
+        paid: Number(p.paid) || 0,
+        payDate: (() => {
+          if (!p.payDate) return p.payDate;
+          if (typeof p.payDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(p.payDate)) {
+            const [y, m, d] = p.payDate.split('-').map((v) => Number(v));
+            if (!y || !m || !d) return p.payDate;
+            const now = new Date();
+            return new Date(
+              y,
+              m - 1,
+              d,
+              now.getHours(),
+              now.getMinutes(),
+              now.getSeconds(),
+              now.getMilliseconds(),
+            ).toISOString();
+          }
+          return p.payDate;
+        })(),
+        reference: p.reference,
+        chequeNo: p.chequeNo,
+        bankName: p.bankName,
+        chequeDate: p.chequeDate || undefined,
+        notes: p.notes,
+      }))
+      .filter((p) => p.paid > 0);
+
+    if (payments.length === 0) {
+      message.error('Enter at least one payment amount');
+      return;
+    }
+
+    setSavingPayment(true);
+    try {
+      const res = await axios.post(`${Base_url}/apis/invoice/add-payments/${paymentInvoice._id}`, { payments });
+      if (res.data?.status === 'ok') {
+        message.success('Payment added');
+        setPaymentModalOpen(false);
+        fetchInvoices(pagination.current, pagination.pageSize);
+      } else {
+        message.error(res.data?.message || 'Failed to add payment');
+      }
+    } catch (err: any) {
+      console.error(err);
+      message.error(err?.response?.data?.message || err?.response?.data?.error || 'Failed to add payment');
+    } finally {
+      setSavingPayment(false);
+    }
+  };
+
 
   const onSelectChange = (newSelectedRowKeys) => {
     setSelectedRowKeys(newSelectedRowKeys);
@@ -330,36 +882,6 @@ const Invoice = () => {
         },
       },
     ],
-  };
-
-  // Fetch departments
-  const fetchDepartments = async () => {
-    try {
-      const response = await axios.get(`${Base_url}/apis/department/get`);
-      setDepartments(response.data.data || []);
-    } catch (error) {
-      message.error('Failed to fetch departments');
-    }
-  };
-
-  // Fetch doctors
-  const fetchDoctors = async () => {
-    try {
-      const response = await axios.get(`${Base_url}/apis/user/get?role=doctor`);
-      setDoctors(response.data.data || []);
-    } catch (error) {
-      message.error('Failed to fetch doctors');
-    }
-  };
-
-  // Fetch procedures
-  const fetchProcedures = async () => {
-    try {
-      const response = await axios.get(`${Base_url}/apis/procedure/get`);
-      setProcedures(response.data.data || []);
-    } catch (error) {
-      message.error('Failed to fetch procedures');
-    }
   };
 
   const fetchInvoices = async (page = 1, pageSize = 20) => {
@@ -407,9 +929,33 @@ const Invoice = () => {
     if (filters.patientName) queryParams.append('patientName', filters.patientName);
     if (filters.patientPhone) queryParams.append('patientPhone', filters.patientPhone);
     if (filters.invoiceNumber) queryParams.append('invoiceNo', filters.invoiceNumber);
-     if (filters.minAmount) queryParams.append('minTotalBill', filters.minAmount);
-    if (filters.maxAmount) queryParams.append('maxTotalBill', filters.maxAmount);
+    if (filters.paymentDateStart) queryParams.append('paymentDateStart', filters.paymentDateStart);
+    if (filters.paymentDateEnd) queryParams.append('paymentDateEnd', filters.paymentDateEnd);
+    // Doctor / procedure filter we do both backend + frontend now
     if (filters.procedure) queryParams.append('procedureId', filters.procedure);
+    // Amount range: decide which field to filter (default = Paid)
+    // Note: we only need amountField here once; frontend also uses it below
+    const amountField = filters.amountField || 'paid';
+    if (filters.minAmount) {
+      const min = Number(filters.minAmount);
+      if (Number.isFinite(min)) {
+        if (amountField === 'total') queryParams.append('minTotalBill', String(min));
+        else if (amountField === 'discount') queryParams.append('minDiscountBill', String(min));
+        else if (amountField === 'due') queryParams.append('minDue', String(min));
+        else if (amountField === 'advance') queryParams.append('minAdvance', String(min));
+        else queryParams.append('minPaid', String(min)); // default = paid
+      }
+    }
+    if (filters.maxAmount) {
+      const max = Number(filters.maxAmount);
+      if (Number.isFinite(max)) {
+        if (amountField === 'total') queryParams.append('maxTotalBill', String(max));
+        else if (amountField === 'discount') queryParams.append('maxDiscountBill', String(max));
+        else if (amountField === 'due') queryParams.append('maxDue', String(max));
+        else if (amountField === 'advance') queryParams.append('maxAdvance', String(max));
+        else queryParams.append('maxPaid', String(max)); // default = paid
+      }
+    }
     if (filters.paymentMode) queryParams.append('paymentMode', filters.paymentMode);
     
     // Add pagination parameters
@@ -425,9 +971,20 @@ const Invoice = () => {
       
       // Debug: Log the filter dates and data received
       console.log('Filter dates:', {
-        startDate: filters.startDate?.format('YYYY-MM-DD'),
-        endDate: filters.endDate?.format('YYYY-MM-DD'),
-        isSameDay: filters.startDate?.isSame(filters.endDate, 'day')
+        startDate:
+          (filters.startDate && typeof (filters.startDate as any).format === 'function')
+            ? (filters.startDate as any).format('YYYY-MM-DD')
+            : undefined,
+        endDate:
+          (filters.endDate && typeof (filters.endDate as any).format === 'function')
+            ? (filters.endDate as any).format('YYYY-MM-DD')
+            : undefined,
+        isSameDay:
+          (filters.startDate &&
+           filters.endDate &&
+           typeof (filters.startDate as any).isSame === 'function')
+            ? (filters.startDate as any).isSame(filters.endDate, 'day')
+            : false
       });
       console.log('Raw data from API:', data.map(item => ({
         invoiceNo: item.invoiceNo,
@@ -486,20 +1043,42 @@ const Invoice = () => {
       // Apply payment date filter if provided
       if (filters.paymentDateStart || filters.paymentDateEnd) {
         filteredData = filteredData.filter((invoice) => {
-          const paymentDates = invoice.payment?.filter(p => p.payDate).map(p => new Date(p.payDate)) || [];
-          if (paymentDates.length === 0) return false; // Exclude invoices with no payment date
-          
-          const latestPaymentDate = new Date(Math.max(...paymentDates.map(d => d.getTime())));
-          const paymentDateStr = moment(latestPaymentDate).format('YYYY-MM-DD');
-          
-          if (filters.paymentDateStart && filters.paymentDateEnd) {
-            return paymentDateStr >= filters.paymentDateStart && paymentDateStr <= filters.paymentDateEnd;
-          } else if (filters.paymentDateStart) {
-            return paymentDateStr >= filters.paymentDateStart;
-          } else if (filters.paymentDateEnd) {
-            return paymentDateStr <= filters.paymentDateEnd;
+          const paymentTimestamps =
+            invoice.payment?.map((p) => parsePayDateToTs(p?.payDate)).filter((v) => typeof v === 'number') || [];
+          if (paymentTimestamps.length === 0) return false;
+
+          const paymentDateStrs = paymentTimestamps.map((ts) => dayjs(ts).format('YYYY-MM-DD'));
+          const start = filters.paymentDateStart || null;
+          const end = filters.paymentDateEnd || null;
+
+          if (start && end) {
+            return paymentDateStrs.some((d) => d >= start && d <= end);
+          } else if (start) {
+            return paymentDateStrs.some((d) => d >= start);
+          } else if (end) {
+            return paymentDateStrs.some((d) => d <= end);
           }
           return true;
+        });
+      }
+      
+      if (filters.discountPercent) {
+        const threshold = Number(filters.discountPercent);
+        if (Number.isFinite(threshold)) {
+          filteredData = filteredData.filter((invoice) => {
+            const total = Number(invoice.totalBill) || Number(invoice.total) || 0;
+            const discount = Number(invoice.discountBill) || Number(invoice.discount) || 0;
+            const pct = total > 0 ? (discount / total) * 100 : 0;
+            return pct >= threshold;
+          });
+        }
+      }
+
+      const mrQuery = String(filters.patientMR || '').trim();
+      if (mrQuery) {
+        filteredData = filteredData.filter((invoice) => {
+          const mr = String(invoice?.patientId?.mr || invoice?.patientData?.mr || '').trim();
+          return mr === mrQuery;
         });
       }
       
@@ -514,8 +1093,56 @@ const Invoice = () => {
         );
 
         // Get payment date (latest payment date from payment array)
-        const paymentDates = invoice.payment?.filter(p => p.payDate).map(p => new Date(p.payDate)) || [];
-        const latestPaymentDate = paymentDates.length > 0 ? new Date(Math.max(...paymentDates.map(d => d.getTime()))) : null;
+        const paymentEntries = Array.isArray(invoice.payment) ? invoice.payment : [];
+        const paymentEntriesWithTs = paymentEntries
+          .map((p) => ({
+            payDate: p?.payDate,
+            ts: parsePayDateToTsWithFallback(
+              p?.payDate,
+              p?.createdAt || p?.updatedAt || invoice.updatedAt || invoice.createdAt,
+            ),
+          }))
+          .filter((p) => typeof p.ts === 'number');
+
+        const latestPayment = paymentEntriesWithTs.length
+          ? paymentEntriesWithTs.reduce((acc, cur) => (cur.ts > acc.ts ? cur : acc))
+          : null;
+
+        // If user selected a payment date range, pick the payment that falls within the range
+        let selectedPayment = latestPayment;
+        const start = filters.paymentDateStart || null;
+        const end = filters.paymentDateEnd || null;
+        if (start || end) {
+          const inRange = (ts: number) => {
+            const d = dayjs(ts).format('YYYY-MM-DD');
+            if (start && end) return d >= start && d <= end;
+            if (start) return d >= start;
+            if (end) return d <= end;
+            return true;
+          };
+          const matched = paymentEntriesWithTs.filter((p) => inRange(p.ts));
+          if (matched.length > 0) {
+            // Choose the latest payment within the selected range
+            selectedPayment = matched.reduce((acc, cur) => (cur.ts > acc.ts ? cur : acc));
+          }
+        }
+
+        const rawDue = Number(invoice.duePay) || 0;
+        const advance = Number(invoice.advancePay) > 0 ? Number(invoice.advancePay) : rawDue < 0 ? Math.abs(rawDue) : 0;
+        const due = rawDue > 0 ? rawDue : 0;
+
+        const createdByName =
+          invoice.createdByData?.name ||
+          invoice.createdById?.name ||
+          invoice.createdBy?.name ||
+          invoice.createdBy?.user?.name ||
+          'N/A';
+        const updatedByName =
+          invoice.updatedByData?.name ||
+          invoice.updatedById?.name ||
+          invoice.updatedBy?.name ||
+          invoice.updatedBy?.user?.name ||
+          'N/A';
 
         return {
           key: invoice._id,
@@ -523,38 +1150,145 @@ const Invoice = () => {
           _id: invoice._id,
           invoiceNo: invoice.invoiceNo,
           date: invoice.createdAt,
+          createdAt: invoice.createdAt,
+          updatedAt: invoice.updatedAt,
           patientId: invoice.patientId,
+          branchId: invoice.branchId,
           patientMR: invoice.patientId?.mr || invoice.patientData?.mr || 'N/A',
           patientName: invoice.patientId?.name || invoice.patientData?.name || 'N/A',
           patientPhone: invoice.patientId?.phone || invoice.patientData?.phone || 'N/A',
+          // Store doctor and department IDs separately for reliable client-side filtering
+          doctorId:
+            invoice.doctorId?._id ||
+            invoice.doctorData?._id ||
+            invoice.doctorId ||
+            null,
+          departmentId:
+            (invoice.doctorId?.departmentId &&
+              (invoice.doctorId.departmentId._id || invoice.doctorId.departmentId)) ||
+            invoice.departmentData?._id ||
+            invoice.departmentId?._id ||
+            invoice.departmentId ||
+            null,
           doctor: invoice.doctorId?.name || invoice.doctorData?.name || 'N/A',
           department: invoice.doctorId?.departmentId?.name || invoice.departmentData?.name || 'N/A',
           items: invoice.item.map(i => i.description).join(', '),
           item: invoice.item,
+          invoiceExpenses: invoice.invoiceExpenses || [],
+          // Keep a list of procedure IDs for client-side filtering
+          procedureIds: (invoice.item || [])
+            .map(i => (i.procedureId && (i.procedureId._id || i.procedureId)) || null)
+            .filter(Boolean),
           subTotal: invoice.subTotalBill || 0,
           discount: invoice.discountBill || 0,
           tax: invoice.taxBill || 0,
           total: invoice.totalBill || 0,
           paid: invoice.totalPay || 0,
-          due: invoice.duePay || 0,
+          due,
+          advance,
           doctorShare,
           hospitalShare,
           paymentMode: invoice.payment?.[0]?.method || 'N/A',
-          status: (invoice.duePay || 0) < 0 ? 'Credit' : (invoice.duePay || 0) === 0 ? 'Paid' : 'Pending',
-          createdBy: invoice.createdByData?.name || invoice.createdById?.name || 'N/A',
-          updatedBy: invoice.updatedByData?.name || invoice.updatedById?.name || 'N/A',
-          paymentDate: latestPaymentDate,
+          status: advance > 0 ? 'Advance' : due === 0 ? 'Paid' : 'Pending',
+          createdBy: createdByName,
+          updatedBy: updatedByName,
+          paymentDate: selectedPayment?.payDate || latestPayment?.payDate || null,
+          paymentDateTs: selectedPayment?.ts || latestPayment?.ts || null,
         };
       });
 
-      setInvoices(transformedData);
-      setFilteredInvoices(transformedData);
+      // Extra safety: apply client-side filters for doctor, department, procedure and amount
+      // so that filters always work even if backend casting/lookup behaves unexpectedly.
+      let finalData = transformedData;
+
+      if (filters.doctor) {
+        finalData = finalData.filter((inv) => {
+          const idMatch = inv.doctorId && String(inv.doctorId) === String(filters.doctor);
+          const nameMatch =
+            inv.doctor &&
+            selectedDoctor?.label &&
+            inv.doctor.toLowerCase() === selectedDoctor.label.toLowerCase();
+          return idMatch || nameMatch;
+        });
+      }
+
+      if (filters.department) {
+        finalData = finalData.filter((inv) => String(inv.departmentId) === String(filters.department));
+      }
+
+      if (filters.procedure) {
+        finalData = finalData.filter(
+          (inv) =>
+            Array.isArray(inv.procedureIds) &&
+            inv.procedureIds.some((id) => String(id) === String(filters.procedure)),
+        );
+      }
+
+      if (filters.minAmount) {
+        const min = Number(filters.minAmount);
+        if (Number.isFinite(min)) {
+          finalData = finalData.filter((inv) => {
+            const value =
+              amountField === 'total'
+                ? inv.total
+                : amountField === 'discount'
+                ? inv.discount
+                : amountField === 'due'
+                ? inv.due
+                : amountField === 'advance'
+                ? inv.advance
+                : inv.paid; // default = paid
+            return Number(value) >= min;
+          });
+        }
+      }
+
+      if (filters.maxAmount) {
+        const max = Number(filters.maxAmount);
+        if (Number.isFinite(max)) {
+          finalData = finalData.filter((inv) => {
+            const value =
+              amountField === 'total'
+                ? inv.total
+                : amountField === 'discount'
+                ? inv.discount
+                : amountField === 'due'
+                ? inv.due
+                : amountField === 'advance'
+                ? inv.advance
+                : inv.paid; // default = paid
+            return Number(value) <= max;
+          });
+        }
+      }
+
+      // Sort results ascending by the selected amount field
+      if (filters.minAmount || filters.maxAmount) {
+        finalData = [...finalData].sort((a, b) => {
+          const getValue = (inv: any) =>
+            amountField === 'total'
+              ? inv.total
+              : amountField === 'discount'
+              ? inv.discount
+              : amountField === 'due'
+              ? inv.due
+              : amountField === 'advance'
+              ? inv.advance
+              : inv.paid; // default = paid
+
+          return Number(getValue(a)) - Number(getValue(b));
+        });
+      }
+
+      setInvoices(finalData);
+      setFilteredInvoices(finalData);
       
       // Update pagination state
       setPagination({
         current: paginationData.currentPage || 1,
         pageSize: paginationData.limit || 20,
-        total: shouldShowNoDataMessage ? 0 : (paginationData.count || 0), // Set total to 0 if no exact date match
+        // Use filtered length when we forcibly clear data for an exact-date mismatch
+        total: shouldShowNoDataMessage ? 0 : (paginationData.count || finalData.length || 0),
         totalPages: shouldShowNoDataMessage ? 0 : (paginationData.totalPages || 0)
       });
     } catch (err) {
@@ -566,33 +1300,36 @@ const Invoice = () => {
   };
 
   const handleDelete = (id) => {
-    axios.delete(`${Base_url}/apis/invoice/delete/${id}`)
-      .then((res) => {
-        message.success('Invoice deleted successfully');
-        fetchInvoices(pagination.current, pagination.pageSize);
-      })
-      .catch(err => {
-        message.error('Failed to delete invoice');
-      });
-  };
-
-   const handleDateChange = (date, index) => {
-    const newDateRange = [...filters.dateRange];
-    newDateRange[index] = moment(date);
-    setFilters(prev => ({
-      ...prev,
-      dateRange: newDateRange,
-      startDate: newDateRange[0],
-      endDate: newDateRange[1]
-    }));
+    Modal.confirm({
+      title: 'Delete Invoice?',
+      content: 'Are you sure you want to delete this invoice? This action cannot be undone.',
+      okText: 'Delete',
+      okType: 'danger',
+      cancelText: 'Cancel',
+      onOk: async () => {
+        try {
+          await axios.delete(`${Base_url}/apis/invoice/delete/${id}`);
+          message.success('Invoice deleted successfully');
+          fetchInvoices(pagination.current, pagination.pageSize);
+        } catch (err) {
+          const anyErr = err as { response?: { data?: { message?: string; error?: string } } };
+          const detail =
+            anyErr?.response?.data?.message ||
+            anyErr?.response?.data?.error ||
+            (err instanceof Error ? err.message : null);
+          message.error(detail ? `Failed to delete invoice: ${detail}` : 'Failed to delete invoice');
+        }
+      },
+    });
   };
 
    const generatePdf = async (invoice) => {
     console.log(invoice);
     
         try {
+          const inv = await enrichInvoiceForPdf(invoice);
           // Create the PDF blob
-          const blob = await pdf(<InvoicePdf invoice={invoice} patient={invoice?.patientId} />).toBlob();
+          const blob = await pdf(<InvoicePdf invoice={inv} patient={inv?.patientId} />).toBlob();
           
           // Create object URL
           const pdfUrl = URL.createObjectURL(blob);
@@ -626,28 +1363,22 @@ const Invoice = () => {
 
   const summary = calculateSummary();
 
-  // Handle pagination change
-  const handleTableChange = (paginationInfo) => {
-    const { current, pageSize } = paginationInfo;
+  // Handle pagination change (Ant Design Table passes pagination as first arg)
+  const handleTableChange = (paginationInfo, _filters, _sorter) => {
+    const { current = 1, pageSize = 20 } = paginationInfo || {};
+    // When page size changes, reset to first page
+    const newCurrent = (pageSize !== pagination.pageSize) ? 1 : (current || 1);
     setPagination(prev => ({
       ...prev,
-      current,
-      pageSize
+      current: newCurrent,
+      pageSize: pageSize || prev.pageSize
     }));
-    fetchInvoices(current, pageSize);
+    fetchInvoices(newCurrent, pageSize || pagination.pageSize);
   };
 
   useEffect(() => {
-    fetchDepartments();
-    fetchDoctors();
-    fetchProcedures();
-  }, []);
-
-  useEffect(() => {
-    if (departments.length > 0 && doctors.length > 0 && procedures.length > 0) {
-      fetchInvoices(1, pagination.pageSize);
-    }
-  }, [filters, departments, doctors, procedures]);
+    fetchInvoices(1, pagination.pageSize);
+  }, [filters]);
 
   // Reset to first page when filters change
   useEffect(() => {
@@ -663,19 +1394,16 @@ const Invoice = () => {
       key: 'invoiceNo',
       width: 120,
       fixed: 'left',
-    },
-    {
-      title: 'DATE',
-      dataIndex: 'date',
-      key: 'date',
-      render: (date) => moment(date).format('DD/MM/YYYY HH:mm'),
-      width: 150,
+      sorter: (a, b) => String(a.invoiceNo || '').localeCompare(String(b.invoiceNo || '')),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'MR#',
       dataIndex: 'patientMR',
       key: 'patientMR',
       width: 100,
+      sorter: (a, b) => String(a.patientMR || '').localeCompare(String(b.patientMR || '')),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'PATIENT NAME',
@@ -689,24 +1417,32 @@ const Invoice = () => {
           </Link>
         );
       },
+      sorter: (a, b) => String(a.patientName || '').localeCompare(String(b.patientName || '')),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'PHONE',
       dataIndex: 'patientPhone',
       key: 'patientPhone',
       width: 120,
+      sorter: (a, b) => String(a.patientPhone || '').localeCompare(String(b.patientPhone || '')),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'DOCTOR',
       dataIndex: 'doctor',
       key: 'doctor',
       width: 150,
+      sorter: (a, b) => String(a.doctor || '').localeCompare(String(b.doctor || '')),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'DEPARTMENT',
       dataIndex: 'department',
       key: 'department',
       width: 150,
+      sorter: (a, b) => String(a.department || '').localeCompare(String(b.department || '')),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'PROCEDURE NAME',
@@ -714,6 +1450,8 @@ const Invoice = () => {
       key: 'items',
       ellipsis: true,
       width: 200,
+      sorter: (a, b) => String(a.items || '').localeCompare(String(b.items || '')),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'SUBTOTAL',
@@ -721,6 +1459,8 @@ const Invoice = () => {
       key: 'subTotal',
       width: 100,
       render: (value) => value.toLocaleString(),
+      sorter: (a, b) => Number(a.subTotal) - Number(b.subTotal),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'DISCOUNT',
@@ -728,6 +1468,8 @@ const Invoice = () => {
       key: 'discount',
       width: 100,
       render: (value) => value.toLocaleString(),
+      sorter: (a, b) => Number(a.discount) - Number(b.discount),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'TAX',
@@ -735,6 +1477,8 @@ const Invoice = () => {
       key: 'tax',
       width: 100,
       render: (value) => value.toLocaleString(),
+      sorter: (a, b) => Number(a.tax) - Number(b.tax),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'TOTAL',
@@ -742,6 +1486,8 @@ const Invoice = () => {
       key: 'total',
       width: 100,
       render: (value) => value.toLocaleString(),
+      sorter: (a, b) => Number(a.total) - Number(b.total),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'PAID',
@@ -749,6 +1495,8 @@ const Invoice = () => {
       key: 'paid',
       width: 100,
       render: (value) => value.toLocaleString(),
+      sorter: (a, b) => Number(a.paid) - Number(b.paid),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'DUE',
@@ -756,12 +1504,25 @@ const Invoice = () => {
       key: 'due',
       width: 100,
       render: (value) => value.toLocaleString(),
+      sorter: (a, b) => Number(a.due) - Number(b.due),
+      sortDirections: ['ascend', 'descend'],
+    },
+    {
+      title: 'ADVANCE',
+      dataIndex: 'advance',
+      key: 'advance',
+      width: 110,
+      render: (value) => (Number(value) > 0 ? Number(value).toLocaleString() : '-'),
+      sorter: (a, b) => Number(a.advance) - Number(b.advance),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'PAYMENT MODE',
       dataIndex: 'paymentMode',
       key: 'paymentMode',
       width: 120,
+      sorter: (a, b) => String(a.paymentMode || '').localeCompare(String(b.paymentMode || '')),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'Status',
@@ -786,35 +1547,41 @@ const Invoice = () => {
         );
       },
       width: 120,
+      sorter: (a, b) => String(a.status || '').localeCompare(String(b.status || '')),
+      sortDirections: ['ascend', 'descend'],
     },
     {
-      title: 'CREATED BY',
-      dataIndex: 'createdBy',
-      key: 'createdBy',
-      width: 150,
-      render: (text) => text || 'N/A',
+      title: 'CREATED AT',
+      dataIndex: 'createdAt',
+      key: 'createdAt',
+      width: 170,
+      render: (value) => (value ? moment(value).format('DD/MM/YYYY HH:mm') : 'N/A'),
+      sorter: (a, b) => dayjs(a.createdAt).valueOf() - dayjs(b.createdAt).valueOf(),
+      sortDirections: ['ascend', 'descend'],
     },
     {
-      title: 'UPDATED BY',
-      dataIndex: 'updatedBy',
-      key: 'updatedBy',
-      width: 150,
-      render: (text) => text || 'N/A',
+      title: 'UPDATED AT',
+      dataIndex: 'updatedAt',
+      key: 'updatedAt',
+      width: 170,
+      render: (value) => (value ? moment(value).format('DD/MM/YYYY HH:mm') : 'N/A'),
+      sorter: (a, b) => dayjs(a.updatedAt).valueOf() - dayjs(b.updatedAt).valueOf(),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'PAYMENT DATE',
-      dataIndex: 'paymentDate',
+      dataIndex: 'paymentDateTs',
       key: 'paymentDate',
       width: 180,
       sorter: (a, b) => {
-        if (!a.paymentDate && !b.paymentDate) return 0;
-        if (!a.paymentDate) return 1;
-        if (!b.paymentDate) return -1;
-        return new Date(a.paymentDate) - new Date(b.paymentDate);
+        if (!a.paymentDateTs && !b.paymentDateTs) return 0;
+        if (!a.paymentDateTs) return 1;
+        if (!b.paymentDateTs) return -1;
+        return a.paymentDateTs - b.paymentDateTs;
       },
-      render: (date) => {
-        if (!date) return 'N/A';
-        return moment(date).format('DD/MM/YYYY - hh:mm A');
+      render: (ts) => {
+        if (!ts) return 'N/A';
+        return dayjs(ts).format('DD/MM/YYYY - hh:mm A');
       },
     },
     {
@@ -822,11 +1589,18 @@ const Invoice = () => {
       key: 'action',
       fixed: 'right',
       render: (_, record) => (
-        <div className='flex items-center gap-2'>
+        <div className='flex items-center gap-2' style={{ whiteSpace: 'nowrap' }}>
           <RiFile2Line 
             className="text-red-500 text-xl cursor-pointer" 
             onClick={() => generatePdf(record)} 
           />
+          <RiPenNibFill
+            className="text-green-600 text-xl cursor-pointer"
+            onClick={() => openPaymentModal(record)}
+          />
+          <Button size="small" onClick={() => openRefundModal(record)}>
+            Refund
+          </Button>
           <Link to={`/invoice/edit/${record._id}/${record.patientId?._id}`}>
             <RiEdit2Fill 
               className='text-primary' 
@@ -842,7 +1616,7 @@ const Invoice = () => {
           />
         </div>
       ),
-      width: 120,
+      width: 240,
     },
   ];
 
@@ -882,64 +1656,79 @@ const Invoice = () => {
          </div>
           <Row gutter={[16, 16]} style={{ marginBottom: '20px' }}>
             <Col xs={24} sm={12} md={8} lg={6}>
-              <Select
-                style={{ width: '100%' }}
-                value={filters.department}
-                onChange={(value) => setFilters({ ...filters, department: value })}
-                allowClear
-                placeholder="Select Department"
-              >
-                 <Option value="" disabled>
-                        Select Departments
-                      </Option>
-                {departments.map((dept) => (
-                  <Option key={dept._id} value={dept._id}>
-                    {dept.name}
-                  </Option>
-                ))}
-              </Select>
+              <AsyncPaginate
+                value={selectedDepartment}
+                loadOptions={loadDepartmentOptions}
+                onChange={(opt) => {
+                  const option = (opt as DepartmentOption | null) || null;
+                  setSelectedDepartment(option);
+                  setFilters((prev) => ({ ...prev, department: option?.value || '' }));
+                }}
+                additional={{ page: 1 }}
+                placeholder="Select Departments"
+                classNamePrefix="react-select"
+                className="w-full"
+                debounceTimeout={400}
+                menuPortalTarget={document.body}
+                menuPosition="fixed"
+                styles={{
+                  menuPortal: (base) => ({ ...base, zIndex: 9999 }),
+                  control: (base) => ({ ...base, minHeight: '40px' }),
+                }}
+                isClearable
+              />
             </Col>
 
             <Col xs={24} sm={12} md={8} lg={6}>
-              <Select
+              <AsyncPaginate
+                value={selectedDoctor}
+                loadOptions={loadDoctorOptions}
+                onChange={(opt) => {
+                  const option = (opt as DoctorOption | null) || null;
+                  setSelectedDoctor(option);
+                  // Use functional update to avoid stale filters
+                  setFilters((prev) => ({
+                    ...prev,
+                    doctor: option?.value || '',
+                  }));
+                }}
+                additional={{ page: 1 }}
                 placeholder="Select Doctor"
-                style={{ width: '100%' }}
-                value={filters.doctor}
-                onChange={(value) => setFilters({ ...filters, doctor: value })}
-                allowClear
-                showSearch
-                optionFilterProp="children"
-              >
-                 <Option value="" disabled>
-                        Select Doctor
-                      </Option>
-                {doctors.map((doctor) => (
-                  <Option key={doctor._id} value={doctor._id}>
-                    {doctor.name}
-                  </Option>
-                ))}
-              </Select>
+                classNamePrefix="react-select"
+                className="w-full"
+                debounceTimeout={400}
+                menuPortalTarget={document.body}
+                menuPosition="fixed"
+                styles={{
+                  menuPortal: (base) => ({ ...base, zIndex: 9999 }),
+                  control: (base) => ({ ...base, minHeight: '40px' }),
+                }}
+                isClearable
+              />
             </Col>
 
             <Col xs={24} sm={12} md={8} lg={6}>
-              <Select
+              <AsyncPaginate
+                value={selectedProcedure}
+                loadOptions={loadProcedureOptions}
+                onChange={(opt) => {
+                  const option = (opt as ProcedureOption | null) || null;
+                  setSelectedProcedure(option);
+                  setFilters((prev) => ({ ...prev, procedure: option?.value || '' }));
+                }}
+                additional={{ page: 1 }}
                 placeholder="Select Procedure"
-                style={{ width: '100%' }}
-                value={filters.procedure}
-                onChange={(value) => setFilters({ ...filters, procedure: value })}
-                allowClear
-                showSearch
-                optionFilterProp="children"
-              >
-                 <Option value="" disabled>
-                        Select Procedure
-                      </Option>
-                {procedures.map((proc) => (
-                  <Option key={proc._id} value={proc._id}>
-                    {proc.name}
-                  </Option>
-                ))}
-              </Select>
+                classNamePrefix="react-select"
+                className="w-full"
+                debounceTimeout={400}
+                menuPortalTarget={document.body}
+                menuPosition="fixed"
+                styles={{
+                  menuPortal: (base) => ({ ...base, zIndex: 9999 }),
+                  control: (base) => ({ ...base, minHeight: '40px' }),
+                }}
+                isClearable
+              />
             </Col>
 
             <Col xs={24} sm={12} md={8} lg={6}>
@@ -947,7 +1736,7 @@ const Invoice = () => {
                 placeholder="Select Payment Mode"
                 style={{ width: '100%' }}
                 value={filters.paymentMode}
-                onChange={(value) => setFilters({ ...filters, paymentMode: value })}
+                onChange={(value) => setFilters((prev) => ({ ...prev, paymentMode: value }))}
                 allowClear
               >
                   <Option value="" disabled>
@@ -966,7 +1755,7 @@ const Invoice = () => {
                 placeholder="Select Status"
                 style={{ width: '100%' }}
                 value={filters.status}
-                onChange={(value) => setFilters({ ...filters, status: value })}
+                onChange={(value) => setFilters((prev) => ({ ...prev, status: value }))}
                 allowClear
               >
                 <Option value="" disabled>
@@ -974,53 +1763,87 @@ const Invoice = () => {
                       </Option>
                 <Option value="Paid">Paid</Option>
                 <Option value="Pending">Pending</Option>
-                <Option value="Credit">Credit</Option>
+                <Option value="Advance">Advance</Option>
               </Select>
             </Col>
 
-             <Col xs={24} sm={12} md={8} lg={12}>
-                              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                 <Input
-                   type="date"
-                   value={filters.dateRange[0]?.format('YYYY-MM-DD') || ''}
-                   onChange={(e) => handleDateChange(e.target.value, 0)}
-                   style={{ flex: 1 }}
-                   max={moment().format('YYYY-MM-DD')}
-                 />
-                 <span>to</span>
-                 <Input
-                   type="date"
-                   value={filters.dateRange[1]?.format('YYYY-MM-DD') || ''}
-                   onChange={(e) => handleDateChange(e.target.value, 1)}
-                   style={{ flex: 1 }}
-                   min={filters.dateRange[0]?.format('YYYY-MM-DD')}
-                   max={moment().format('YYYY-MM-DD')}
-                 />
-               </div>
-               
-                             </Col>
-
             <Col xs={24} sm={12} md={8} lg={12}>
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <RangePicker
+                  style={{ flex: 1 }}
+                  value={
+                    filters.startDate && filters.endDate
+                      ? [dayjs(filters.startDate.toDate()), dayjs(filters.endDate.toDate())]
+                      : null
+                  }
+                  presets={dateRangePresets}
+                  disabledDate={disabledDate}
+                  format="DD/MM/YYYY"
+                  allowClear
+                  onChange={(dates: [Dayjs, Dayjs] | null) => {
+                    if (!dates) {
+                      setFilters((prev) => ({
+                        ...prev,
+                        dateRange: [],
+                        startDate: '' as any,
+                        endDate: '' as any,
+                      }));
+                      return;
+                    }
+                    const start = moment(dates[0].toDate()).startOf('day');
+                    const end = moment(dates[1].toDate()).endOf('day');
+                    setFilters((prev) => ({
+                      ...prev,
+                      dateRange: [start, end],
+                      startDate: start,
+                      endDate: end,
+                      paymentDateStart: '',
+                      paymentDateEnd: '',
+                    }));
+                  }}
+                />
+                
+              </div>
+            </Col>
+
+            <Col xs={24} sm={12} md={8} lg={10}>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
                 <span style={{ whiteSpace: 'nowrap' }}>Payment Date:</span>
-                <Input
-                  type="date"
-                  value={filters.paymentDateStart || ''}
-                  onChange={(e) => setFilters({ ...filters, paymentDateStart: e.target.value })}
+                <RangePicker
                   style={{ flex: 1 }}
-                  max={moment().format('YYYY-MM-DD')}
-                  placeholder="From"
+                  value={
+                    filters.paymentDateStart && filters.paymentDateEnd
+                      ? [
+                          dayjs(filters.paymentDateStart),
+                          dayjs(filters.paymentDateEnd),
+                        ]
+                      : null
+                  }
+                  presets={dateRangePresets}
+                  disabledDate={disabledDate}
+                  format="DD/MM/YYYY"
+                  allowClear
+                  onChange={(dates: [Dayjs, Dayjs] | null) => {
+                    if (!dates) {
+                      setFilters((prev) => ({
+                        ...prev,
+                        paymentDateStart: '',
+                        paymentDateEnd: '',
+                      }));
+                      return;
+                    }
+
+                    setFilters((prev) => ({
+                      ...prev,
+                      paymentDateStart: dates[0].format('YYYY-MM-DD'),
+                      paymentDateEnd: dates[1].format('YYYY-MM-DD'),
+                      startDate: '' as any,
+                      endDate: '' as any,
+                      dateRange: [],
+                    }));
+                  }}
                 />
-                <span>to</span>
-                <Input
-                  type="date"
-                  value={filters.paymentDateEnd || ''}
-                  onChange={(e) => setFilters({ ...filters, paymentDateEnd: e.target.value })}
-                  style={{ flex: 1 }}
-                  min={filters.paymentDateStart || ''}
-                  max={moment().format('YYYY-MM-DD')}
-                  placeholder="To"
-                />
+                
               </div>
             </Col>
 
@@ -1028,19 +1851,42 @@ const Invoice = () => {
               <Input
                  placeholder="Search by Patient Name"
                  value={filters.patientName}
-                 onChange={(e) => setFilters({ ...filters, patientName: e.target.value })}
+                 onChange={(e) => setFilters((prev) => ({ ...prev, patientName: e.target.value }))}
                  allowClear
                  style={{ color: '#000' }}
               />
             </Col>
 
-            <Col xs={24} sm={12} md={8} lg={6}>
-              <Input
-                 placeholder="Search by MR Number"
-                 value={filters.patientMR}
-                 onChange={(e) => setFilters({ ...filters, patientMR: e.target.value })}
-                 allowClear
-                 style={{ color: '#000' }}
+            <Col xs={24} sm={12} md={8} lg={7}>
+              <AsyncPaginate
+                value={selectedPatient}
+                loadOptions={loadPatientOptions}
+                onChange={(opt) => {
+                  const option = (opt as PatientOption | null) || null;
+                  setSelectedPatient(option);
+                  const mr = option?.patientData?.mr || '';
+                  setFilters((prev) => ({
+                    ...prev,
+                    patientMR: mr,
+                  }));
+                }}
+                additional={{ page: 1 }}
+                placeholder="Search by MR Number / Name / Phone"
+                classNamePrefix="react-select"
+                className="w-full"
+                debounceTimeout={400}
+                menuPortalTarget={document.body}
+                menuPosition="fixed"
+                styles={{
+                  menuPortal: (base) => ({ ...base, zIndex: 9999 }),
+                  control: (base) => ({ ...base, minHeight: '40px' }),
+                }}
+                isClearable
+                getOptionLabel={(option) => {
+                  const p = (option as PatientOption).patientData;
+                  if (!p) return option.label;
+                  return `${p.name} (MR# ${p.mr || ''})${p.phone ? ` - ${p.phone}` : ''}`;
+                }}
               />
             </Col>
 
@@ -1048,7 +1894,7 @@ const Invoice = () => {
               <Input
                  placeholder="Search by Phone Number"
                  value={filters.patientPhone}
-                 onChange={(e) => setFilters({ ...filters, patientPhone: e.target.value })}
+                 onChange={(e) => setFilters((prev) => ({ ...prev, patientPhone: e.target.value }))}
                  allowClear
                  style={{ color: '#000' }}
               />
@@ -1058,17 +1904,37 @@ const Invoice = () => {
               <Input
                  placeholder="Search by Invoice Number"
                  value={filters.invoiceNumber}
-                 onChange={(e) => setFilters({ ...filters, invoiceNumber: e.target.value })}
+                 onChange={(e) => setFilters((prev) => ({ ...prev, invoiceNumber: e.target.value }))}
                  allowClear
                  style={{ color: '#000' }}
               />
             </Col>
 
             <Col xs={24} sm={12} md={8} lg={6}>
+              <Select
+                placeholder="Amount Type"
+                style={{ width: '100%' }}
+                value={filters.amountField}
+                onChange={(value) =>
+                  setFilters((prev) => ({
+                    ...prev,
+                    amountField: value || 'paid',
+                  }))
+                }
+              >
+                <Option value="paid">Paid Amount</Option>
+                <Option value="total">Total Amount</Option>
+                <Option value="discount">Discount Amount</Option>
+                <Option value="due">Due Amount</Option>
+                <Option value="advance">Advance Amount</Option>
+              </Select>
+            </Col>
+
+            <Col xs={24} sm={12} md={8} lg={6}>
               <Input
                 placeholder="Min Amount"
                 value={filters.minAmount}
-                onChange={(e) => setFilters({ ...filters, minAmount: e.target.value })}
+                onChange={(e) => setFilters((prev) => ({ ...prev, minAmount: e.target.value }))}
                 type="number"
               />
             </Col>
@@ -1077,8 +1943,24 @@ const Invoice = () => {
               <Input
                 placeholder="Max Amount"
                 value={filters.maxAmount}
-                onChange={(e) => setFilters({ ...filters, maxAmount: e.target.value })}
+                onChange={(e) => setFilters((prev) => ({ ...prev, maxAmount: e.target.value }))}
                 type="number"
+              />
+            </Col>
+            
+            <Col xs={24} sm={12} md={8} lg={6}>
+              <Input
+                placeholder="Discount %"
+                value={filters.discountPercent}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  if (val === '' || Number(val) <= 100) {
+                    setFilters((prev) => ({ ...prev, discountPercent: val }));
+                  }
+                }}
+                type="number"
+                min={0}
+                max={100}
               />
             </Col>
 
@@ -1103,6 +1985,7 @@ const Invoice = () => {
                           paymentMode: '',
                           doctor: '',
                           procedure: '',
+                          amountField: 'paid',
                           patientName: '',
                           patientMR: '',
                           patientPhone: '',
@@ -1112,7 +1995,11 @@ const Invoice = () => {
                           maxAmount: '',
                           paymentDateStart: '',
                           paymentDateEnd: '',
+                          discountPercent: '',
                         });
+                        setSelectedDoctor(null);
+                        setSelectedDepartment(null);
+                        setSelectedProcedure(null);
                         setPagination({
                           current: 1,
                           pageSize: 20,
@@ -1151,6 +2038,309 @@ const Invoice = () => {
           </div>
         </div>
       </div>
+
+      <Modal
+        open={paymentModalOpen}
+        onCancel={() => setPaymentModalOpen(false)}
+        onOk={submitInvoicePayments}
+        okText={savingPayment ? 'Saving...' : 'Save Payment'}
+        okButtonProps={{ disabled: savingPayment, className: 'bg-primary text-white hover:bg-opacity-90' }}
+        title={`Add Payment${paymentInvoice?.invoiceNo ? ` - ${paymentInvoice.invoiceNo}` : ''}`}
+        width={800}
+      >
+        <div className="space-y-3">
+          {paymentRows.map((row, index) => (
+            <div key={index} className="rounded-lg border border-stroke p-4">
+              <div className="grid gap-3 md:grid-cols-3">
+                <div>
+                  <div className="mb-1 text-xs font-medium text-bodydark">Method</div>
+                  <select
+                    value={row.method}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setPaymentRows((prev) => prev.map((p, i) => (i === index ? { ...p, method: v } : p)));
+                    }}
+                    className="w-full rounded-lg border border-stroke bg-transparent py-2 px-3 text-sm outline-none focus:border-primary"
+                  >
+                    <option value="Cash">Cash</option>
+                    <option value="Advance">Advance</option>
+                    <option value="Card">Card</option>
+                    <option value="Bank Transfer">Bank Transfer</option>
+                    <option value="Cheque">Cheque</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+
+                <div>
+                  <div className="mb-1 text-xs font-medium text-bodydark">Amount</div>
+                  <input
+                    type="number"
+                    value={row.paid}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setPaymentRows((prev) => prev.map((p, i) => (i === index ? { ...p, paid: v } : p)));
+                    }}
+                    className="w-full rounded-lg border border-stroke bg-transparent py-2 px-3 text-sm outline-none focus:border-primary"
+                    placeholder="0"
+                    min={0}
+                  />
+                </div>
+
+                <div>
+                  <div className="mb-1 text-xs font-medium text-bodydark">Pay Date</div>
+                  <input
+                    type="date"
+                    value={row.payDate}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setPaymentRows((prev) => prev.map((p, i) => (i === index ? { ...p, payDate: v } : p)));
+                    }}
+                    className="w-full rounded-lg border border-stroke bg-transparent py-2 px-3 text-sm outline-none focus:border-primary"
+                  />
+                </div>
+              </div>
+
+              <div className="mt-3 grid gap-3 md:grid-cols-3">
+                <div className="md:col-span-2">
+                  <div className="mb-1 text-xs font-medium text-bodydark">Reference</div>
+                  <input
+                    type="text"
+                    value={row.reference}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setPaymentRows((prev) => prev.map((p, i) => (i === index ? { ...p, reference: v } : p)));
+                    }}
+                    className="w-full rounded-lg border border-stroke bg-transparent py-2 px-3 text-sm outline-none focus:border-primary"
+                    placeholder="Optional"
+                  />
+                </div>
+                <div>
+                  <div className="mb-1 text-xs font-medium text-bodydark">Notes</div>
+                  <input
+                    type="text"
+                    value={row.notes}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setPaymentRows((prev) => prev.map((p, i) => (i === index ? { ...p, notes: v } : p)));
+                    }}
+                    className="w-full rounded-lg border border-stroke bg-transparent py-2 px-3 text-sm outline-none focus:border-primary"
+                    placeholder="Optional"
+                  />
+                </div>
+              </div>
+
+              {row.method === 'Cheque' && (
+                <div className="mt-3 grid gap-3 md:grid-cols-3">
+                  <div>
+                    <div className="mb-1 text-xs font-medium text-bodydark">Cheque No</div>
+                    <input
+                      type="text"
+                      value={row.chequeNo}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setPaymentRows((prev) => prev.map((p, i) => (i === index ? { ...p, chequeNo: v } : p)));
+                      }}
+                      className="w-full rounded-lg border border-stroke bg-transparent py-2 px-3 text-sm outline-none focus:border-primary"
+                    />
+                  </div>
+                  <div>
+                    <div className="mb-1 text-xs font-medium text-bodydark">Bank</div>
+                    <input
+                      type="text"
+                      value={row.bankName}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setPaymentRows((prev) => prev.map((p, i) => (i === index ? { ...p, bankName: v } : p)));
+                      }}
+                      className="w-full rounded-lg border border-stroke bg-transparent py-2 px-3 text-sm outline-none focus:border-primary"
+                    />
+                  </div>
+                  <div>
+                    <div className="mb-1 text-xs font-medium text-bodydark">Cheque Date</div>
+                    <input
+                      type="date"
+                      value={row.chequeDate}
+                      onChange={(e) => {
+                        const v = e.target.value;
+                        setPaymentRows((prev) => prev.map((p, i) => (i === index ? { ...p, chequeDate: v } : p)));
+                      }}
+                      className="w-full rounded-lg border border-stroke bg-transparent py-2 px-3 text-sm outline-none focus:border-primary"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div className="mt-3 flex justify-end gap-2">
+                <Button onClick={() => setPaymentRows((prev) => prev.filter((_, i) => i !== index))} disabled={paymentRows.length === 1}>
+                  Remove
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-3">
+          <Button
+            onClick={() =>
+              setPaymentRows((prev) => [
+                ...prev,
+                {
+                  method: 'Cash',
+                  paid: '',
+                  payDate: new Date().toISOString().slice(0, 10),
+                  reference: '',
+                  chequeNo: '',
+                  bankName: '',
+                  chequeDate: '',
+                  notes: '',
+                },
+              ])
+            }
+          >
+            + Add More
+          </Button>
+        </div>
+      </Modal>
+
+      <Modal
+        open={refundModalOpen}
+        onCancel={() => setRefundModalOpen(false)}
+        onOk={submitInvoiceRefund}
+        okText={savingRefund ? 'Saving...' : 'Record Refund'}
+        okButtonProps={{ disabled: savingRefund, className: 'bg-primary text-white hover:bg-opacity-90' }}
+        title={`Refund${refundInvoice?.invoiceNo ? ` - ${refundInvoice.invoiceNo}` : ''}`}
+        width={700}
+      >
+        <div className="space-y-3">
+          <div className="grid gap-3 md:grid-cols-2">
+            <div>
+              <div className="mb-1 text-xs font-medium text-bodydark">Refund Type</div>
+              <select
+                value={refundType}
+                onChange={(e) => {
+                  const newType = e.target.value as 'invoice' | 'procedure';
+                  setRefundType(newType);
+                  
+                  // Clear procedure-specific fields when switching types
+                  if (newType === 'invoice') {
+                    setRefundForm((prev) => ({ 
+                      ...prev, 
+                      procedureId: '',
+                      paid: ''
+                    }));
+                  } else {
+                    // Clear amount when switching to procedure refund until a procedure is selected
+                    setRefundForm((prev) => ({ 
+                      ...prev, 
+                      procedureId: '',
+                      paid: ''
+                    }));
+                  }
+                }}
+                className="w-full rounded-lg border border-stroke bg-transparent py-2 px-3 text-sm outline-none focus:border-primary"
+              >
+                <option value="invoice">Invoice Refund</option>
+                <option value="procedure">Procedure Refund</option>
+              </select>
+            </div>
+            <div>
+              <div className="mb-1 text-xs font-medium text-bodydark">Method</div>
+              <select
+                value={refundForm.method}
+                onChange={(e) => setRefundForm((prev) => ({ ...prev, method: e.target.value }))}
+                className="w-full rounded-lg border border-stroke bg-transparent py-2 px-3 text-sm outline-none focus:border-primary"
+              >
+                <option value="Cash">Cash</option>
+                <option value="Bank Transfer">Bank Transfer</option>
+                <option value="Credit Note">Credit Note</option>
+                <option value="Card Refund">Card Refund</option>
+              </select>
+            </div>
+          </div>
+
+          {refundType === 'procedure' && (
+            <div>
+              <div className="mb-1 text-xs font-medium text-bodydark">Procedure</div>
+              <select
+                value={refundForm.procedureId}
+                onChange={(e) => {
+                  const selectedProcedureId = e.target.value;
+                  setRefundForm((prev) => ({ ...prev, procedureId: selectedProcedureId }));
+                  
+                  // Auto-fill amount when procedure is selected
+                  if (selectedProcedureId) {
+                    const selectedItem = (refundInvoice?.item || []).find((it: any) => 
+                      String(it?.procedureId?._id || it?.procedureId) === selectedProcedureId
+                    );
+                    if (selectedItem) {
+                      setRefundForm((prev) => ({ 
+                        ...prev, 
+                        procedureId: selectedProcedureId,
+                        paid: String(selectedItem.amount || 0)
+                      }));
+                    }
+                  } else {
+                    // Clear amount if no procedure selected
+                    setRefundForm((prev) => ({ ...prev, paid: '' }));
+                  }
+                }}
+                className="w-full rounded-lg border border-stroke bg-transparent py-2 px-3 text-sm outline-none focus:border-primary"
+              >
+                <option value="">Select</option>
+                {(refundInvoice?.item || []).map((it: any, idx: number) => (
+                  <option key={idx} value={String(it?.procedureId?._id || it?.procedureId || idx)}>
+                    {it?.description || it?.procedureId?.name || `Item ${idx + 1}`}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+
+          <div className="grid gap-3 md:grid-cols-3">
+            <div>
+              <div className="mb-1 text-xs font-medium text-bodydark">Amount</div>
+              <input
+                type="number"
+                value={refundForm.paid}
+                onChange={(e) => setRefundForm((prev) => ({ ...prev, paid: e.target.value }))}
+                className="w-full rounded-lg border border-stroke bg-transparent py-2 px-3 text-sm outline-none focus:border-primary"
+                placeholder="0"
+                min={0}
+              />
+            </div>
+            <div>
+              <div className="mb-1 text-xs font-medium text-bodydark">Date</div>
+              <input
+                type="date"
+                value={refundForm.payDate}
+                onChange={(e) => setRefundForm((prev) => ({ ...prev, payDate: e.target.value }))}
+                className="w-full rounded-lg border border-stroke bg-transparent py-2 px-3 text-sm outline-none focus:border-primary"
+              />
+            </div>
+            <div>
+              <div className="mb-1 text-xs font-medium text-bodydark">Reference</div>
+              <input
+                type="text"
+                value={refundForm.reference}
+                onChange={(e) => setRefundForm((prev) => ({ ...prev, reference: e.target.value }))}
+                className="w-full rounded-lg border border-stroke bg-transparent py-2 px-3 text-sm outline-none focus:border-primary"
+                placeholder="Optional"
+              />
+            </div>
+          </div>
+
+          <div>
+            <div className="mb-1 text-xs font-medium text-bodydark">Notes</div>
+            <input
+              type="text"
+              value={refundForm.notes}
+              onChange={(e) => setRefundForm((prev) => ({ ...prev, notes: e.target.value }))}
+              className="w-full rounded-lg border border-stroke bg-transparent py-2 px-3 text-sm outline-none focus:border-primary"
+              placeholder="Reason / comments"
+            />
+          </div>
+        </div>
+      </Modal>
 
       {/* Add custom CSS for table scrolling and placeholder colors */}
       <style jsx global>{`

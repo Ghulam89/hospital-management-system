@@ -1,6 +1,12 @@
 const { Types } = require("mongoose");
 const Invoice = require("../models/invoiceModel");
 const moment = require("moment");
+const {
+  getScopedPatientIds,
+  assignBranchIdForCreate,
+  mergeBranchScopedQuery,
+  branchDocumentVisible,
+} = require("../utils/branchScope");
 
 // 1. Create invoice
 const addinvoice = async (req, res) => {
@@ -8,7 +14,8 @@ const addinvoice = async (req, res) => {
 
 
 
-    const data = await Invoice.create({ ...req.body, });
+    const body = assignBranchIdForCreate(req, { ...req.body });
+    const data = await Invoice.create(body);
     return res.status(200).json({ status: "ok", data: data });
 
   } catch (err) {
@@ -40,15 +47,34 @@ const getinvoices = async (req, res) => {
       page = 1,
       minTotalBill,
       maxTotalBill,
+      minDiscountBill,
+      maxDiscountBill,
+      minPaid,
+      maxPaid,
+      minDue,
+      maxDue,
+      minAdvance,
+      maxAdvance,
     } = req.query;
 
-    const limit = 20;
+    const requestedLimit = parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? requestedLimit : 20;
     const query = {};
+
+    const scopedPatientIds = await getScopedPatientIds(req);
+    if (scopedPatientIds !== null) {
+      query.patientId = scopedPatientIds.length === 0 ? { $in: [] } : { $in: scopedPatientIds };
+    } else {
+      const branchInv = await mergeBranchScopedQuery(req);
+      if (branchInv) Object.assign(query, branchInv);
+    }
 
     // Basic filters
     if (doctorId && doctorId.trim() !== '') {
-      query['doctorId'] = doctorId;
-      console.log('Doctor filter applied:', doctorId);
+      // In aggregation pipeline, $match does NOT auto-cast strings to ObjectId.
+      // If we keep a string here, it will return zero results even when invoices exist.
+      query['doctorId'] = Types.ObjectId.isValid(doctorId) ? new Types.ObjectId(doctorId) : doctorId;
+      console.log('Doctor filter applied:', query['doctorId']);
     }
     if (departmentId && departmentId.trim() !== '') {
       // Note: departmentId filter will be handled in aggregation pipeline
@@ -73,10 +99,11 @@ const getinvoices = async (req, res) => {
 
     // Procedure filter - corrected approach
     if (procedureId && procedureId.trim() !== '') {
+      const procVal = Types.ObjectId.isValid(procedureId) ? new Types.ObjectId(procedureId) : procedureId;
       query['item'] = {
         $elemMatch: {
-          procedureId: procedureId
-        }
+          procedureId: procVal,
+        },
       };
     }
 
@@ -93,14 +120,66 @@ const getinvoices = async (req, res) => {
 
     // Total bill range
     if (minTotalBill || maxTotalBill) {
-      query['totalBill'] = {};
+      query['totalBill'] = query['totalBill'] || {};
       if (minTotalBill && minTotalBill.trim() !== '') {
         query['totalBill'].$gte = parseFloat(minTotalBill);
-        console.log('Min amount filter applied:', parseFloat(minTotalBill));
+        console.log('Min total amount filter applied:', parseFloat(minTotalBill));
       }
       if (maxTotalBill && maxTotalBill.trim() !== '') {
         query['totalBill'].$lte = parseFloat(maxTotalBill);
-        console.log('Max amount filter applied:', parseFloat(maxTotalBill));
+        console.log('Max total amount filter applied:', parseFloat(maxTotalBill));
+      }
+    }
+
+    // Discount range
+    if (minDiscountBill || maxDiscountBill) {
+      query['discountBill'] = query['discountBill'] || {};
+      if (minDiscountBill && minDiscountBill.trim() !== '') {
+        query['discountBill'].$gte = parseFloat(minDiscountBill);
+        console.log('Min discount filter applied:', parseFloat(minDiscountBill));
+      }
+      if (maxDiscountBill && maxDiscountBill.trim() !== '') {
+        query['discountBill'].$lte = parseFloat(maxDiscountBill);
+        console.log('Max discount filter applied:', parseFloat(maxDiscountBill));
+      }
+    }
+
+    // Paid range
+    if (minPaid || maxPaid) {
+      query['totalPay'] = query['totalPay'] || {};
+      if (minPaid && minPaid.trim() !== '') {
+        query['totalPay'].$gte = parseFloat(minPaid);
+        console.log('Min paid filter applied:', parseFloat(minPaid));
+      }
+      if (maxPaid && maxPaid.trim() !== '') {
+        query['totalPay'].$lte = parseFloat(maxPaid);
+        console.log('Max paid filter applied:', parseFloat(maxPaid));
+      }
+    }
+
+    // Due range
+    if (minDue || maxDue) {
+      query['duePay'] = query['duePay'] || {};
+      if (minDue && minDue.trim() !== '') {
+        query['duePay'].$gte = parseFloat(minDue);
+        console.log('Min due filter applied:', parseFloat(minDue));
+      }
+      if (maxDue && maxDue.trim() !== '') {
+        query['duePay'].$lte = parseFloat(maxDue);
+        console.log('Max due filter applied:', parseFloat(maxDue));
+      }
+    }
+
+    // Advance range
+    if (minAdvance || maxAdvance) {
+      query['advancePay'] = query['advancePay'] || {};
+      if (minAdvance && minAdvance.trim() !== '') {
+        query['advancePay'].$gte = parseFloat(minAdvance);
+        console.log('Min advance filter applied:', parseFloat(minAdvance));
+      }
+      if (maxAdvance && maxAdvance.trim() !== '') {
+        query['advancePay'].$lte = parseFloat(maxAdvance);
+        console.log('Max advance filter applied:', parseFloat(maxAdvance));
       }
     }
 
@@ -154,6 +233,15 @@ const getinvoices = async (req, res) => {
     if (useAggregation) {
       const pipeline = [
         { $match: query },
+        {
+          $lookup: {
+            from: 'branches',
+            localField: 'branchId',
+            foreignField: '_id',
+            as: 'branchData'
+          }
+        },
+        { $unwind: { path: '$branchData', preserveNullAndEmptyArrays: true } },
         {
           $lookup: {
             from: 'patients',
@@ -353,6 +441,7 @@ const getinvoices = async (req, res) => {
         ...invoice,
         patientId: invoice.patientData,
         doctorId: invoice.doctorData,
+        branchId: invoice.branchData || invoice.branchId,
         item: invoice.item.map(item => ({
           ...item,
           procedureId: invoice.procedureData.find(proc => proc._id.toString() === item.procedureId?.toString())
@@ -363,6 +452,7 @@ const getinvoices = async (req, res) => {
       // Use simple find query for other filters
       invoices = await Invoice.find(query)
         .sort({ createdAt: -1 })
+        .populate({ path: 'branchId', select: 'name address location phone email' })
         .populate({
           path: 'doctorId',
           populate: {
@@ -471,7 +561,15 @@ invoices.forEach(invoice => {
 const getinvoiceById = async (req, res) => {
   try {
     const id = req.params.id;
-    const data = await Invoice.findById(id);
+    const data = await Invoice.findById(id)
+      .populate({ path: 'branchId', select: 'name address location phone email' })
+      .populate('patientId')
+      .populate({ path: 'doctorId', populate: { path: 'departmentId' } })
+      .populate('departmentId')
+      .populate({ path: 'item.procedureId', model: 'Procedure' });
+    if (!data || !(await branchDocumentVisible(req, data.branchId))) {
+      return res.status(404).json({ status: "fail", message: "Invoice not found" });
+    }
     return res.status(200).json({ status: "ok", data: data });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -483,6 +581,9 @@ const updateinvoice = async (req, res) => {
   try {
     let id = req.params.id;
     let getImage = await Invoice.findById(id);
+    if (!getImage || !(await branchDocumentVisible(req, getImage.branchId))) {
+      return res.status(404).json({ status: "fail", message: "Invoice not found" });
+    }
 
     const data = await Invoice.findByIdAndUpdate(
       id,
@@ -495,10 +596,226 @@ const updateinvoice = async (req, res) => {
   }
 };
 
+const addInvoicePayments = async (req, res) => {
+  try {
+    const id = req.params.id;
+    const invoice = await Invoice.findById(id);
+    if (!invoice || !(await branchDocumentVisible(req, invoice.branchId))) {
+      return res.status(404).json({ status: "error", message: "Invoice not found" });
+    }
+
+    const incoming = Array.isArray(req.body?.payments) ? req.body.payments : [];
+    const cleanedPayments = incoming
+      .map((p) => ({
+        method: p?.method || '',
+        payDate: p?.payDate ? new Date(p.payDate) : new Date(),
+        paid: Number(p?.paid) || 0,
+        reference: p?.reference || '',
+        chequeNo: p?.chequeNo || '',
+        bankName: p?.bankName || '',
+        chequeDate: p?.chequeDate ? new Date(p.chequeDate) : undefined,
+        notes: p?.notes || '',
+      }))
+      .filter((p) => p.paid > 0);
+
+    if (cleanedPayments.length === 0) {
+      return res.status(400).json({ status: "error", message: "No valid payments provided" });
+    }
+
+    invoice.payment = Array.isArray(invoice.payment) ? invoice.payment : [];
+    invoice.payment.push(...cleanedPayments);
+
+    const totalPaid = (invoice.payment || []).reduce((sum, p) => sum + (Number(p?.paid) || 0), 0);
+    const totalBill = Number(invoice.totalBill) || 0;
+    invoice.totalPay = totalPaid;
+    invoice.duePay = totalBill - totalPaid;
+
+    const updated = await invoice.save();
+    return res.status(200).json({ status: "ok", data: updated });
+  } catch (err) {
+    console.error("Add invoice payment error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// Add invoice refund (records as negative payment)
+const addInvoiceRefund = async (req, res) => {
+  try {
+    const id = req.params.id;
+    const invoice = await Invoice.findById(id);
+    if (!invoice) {
+      return res.status(404).json({ status: "error", message: "Invoice not found" });
+    }
+
+    const incoming = Array.isArray(req.body?.refunds) ? req.body.refunds : [];
+    const cleanedRefunds = incoming
+      .map((p) => ({
+        method: p?.method || 'Refund',
+        payDate: p?.payDate ? new Date(p.payDate) : new Date(),
+        paid: -Math.abs(Number(p?.paid) || 0),
+        reference: p?.reference || '',
+        chequeNo: p?.chequeNo || '',
+        bankName: p?.bankName || '',
+        chequeDate: p?.chequeDate ? new Date(p.chequeDate) : undefined,
+        notes: p?.notes || '',
+      }))
+      .filter((p) => Number.isFinite(p.paid) && p.paid < 0);
+
+    if (cleanedRefunds.length === 0) {
+      return res.status(400).json({ status: "error", message: "No valid refunds provided" });
+    }
+
+    invoice.payment = Array.isArray(invoice.payment) ? invoice.payment : [];
+    invoice.payment.push(...cleanedRefunds);
+
+    const totalPaid = (invoice.payment || []).reduce((sum, p) => sum + (Number(p?.paid) || 0), 0);
+    const totalBill = Number(invoice.totalBill) || 0;
+    invoice.totalPay = totalPaid;
+    invoice.duePay = totalBill - totalPaid;
+
+    const updated = await invoice.save();
+    return res.status(200).json({ status: "ok", data: updated });
+  } catch (err) {
+    console.error("Add invoice refund error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// Add procedure-level refund: adjusts item amounts and totals, and records negative payment
+const addProcedureRefund = async (req, res) => {
+  try {
+    const id = req.params.id;
+    const { procedureId, method, paid, payDate, reference, notes } = req.body || {};
+    const refundAmount = Math.abs(Number(paid) || 0);
+    if (!procedureId) {
+      return res.status(400).json({ status: "error", message: "procedureId is required" });
+    }
+    if (!refundAmount || !Number.isFinite(refundAmount)) {
+      return res.status(400).json({ status: "error", message: "Valid refund amount is required" });
+    }
+
+    const invoice = await Invoice.findById(id);
+    if (!invoice || !(await branchDocumentVisible(req, invoice.branchId))) {
+      return res.status(404).json({ status: "error", message: "Invoice not found" });
+    }
+
+    const items = Array.isArray(invoice.item) ? invoice.item : [];
+    const normalizeId = (v) => {
+      if (!v) return null;
+      try {
+        return String(v);
+      } catch {
+        return null;
+      }
+    };
+    const targetId = normalizeId(procedureId);
+    let itemIndex = -1;
+    for (let i = 0; i < items.length; i++) {
+      const pid = normalizeId(items[i]?.procedureId?._id || items[i]?.procedureId);
+      if (pid && pid === targetId) {
+        itemIndex = i;
+        break;
+      }
+    }
+    if (itemIndex < 0) {
+      return res.status(404).json({ status: "error", message: "Procedure not found in invoice items" });
+    }
+
+    const item = items[itemIndex];
+    const currentItemAmount = Number(item?.amount) || 0;
+
+    // Already refunded for this procedure (based on prior payment notes)
+    const alreadyRefundedForProcedure = (invoice.payment || [])
+      .filter((p) => typeof p?.notes === "string" && p.notes.includes(`ProcedureRefund:${targetId}`))
+      .reduce((sum, p) => sum + Math.abs(Number(p?.paid) || 0), 0);
+
+    const maxRefundable = Math.max(0, currentItemAmount - alreadyRefundedForProcedure);
+    if (maxRefundable <= 0) {
+      return res.status(400).json({ status: "error", message: "Nothing left to refund for this procedure" });
+    }
+    const applyAmount = Math.min(refundAmount, maxRefundable);
+
+    // Reduce item-level amounts proportionally
+    const rate = Number(item?.rate) || 0;
+    const quantity = Number(item?.quantity) || 0;
+    const itemTotalBefore = Number(item?.total ?? currentItemAmount) || currentItemAmount;
+    const proportion = itemTotalBefore > 0 ? applyAmount / itemTotalBefore : 0;
+
+    item.amount = Math.max(0, currentItemAmount - applyAmount);
+    if (Number.isFinite(item.doctorAmount)) {
+      item.doctorAmount = Math.max(0, Number(item.doctorAmount) - Number(item.doctorAmount) * proportion);
+    }
+    if (Number.isFinite(item.hospitalAmount)) {
+      item.hospitalAmount = Math.max(0, Number(item.hospitalAmount) - Number(item.hospitalAmount) * proportion);
+    }
+    if (Number.isFinite(item.discount)) {
+      item.discount = Math.max(0, Number(item.discount) - Number(item.discount) * proportion);
+    }
+    if (Number.isFinite(item.tax)) {
+      item.tax = Math.max(0, Number(item.tax) - Number(item.tax) * proportion);
+    }
+    if (Number.isFinite(item.total)) {
+      item.total = Math.max(0, Number(item.total) - applyAmount);
+    }
+    if (rate > 0 && quantity > 0) {
+      const qtyReduce = Math.min(quantity, Math.floor(applyAmount / rate));
+      if (qtyReduce > 0) {
+        item.quantity = quantity - qtyReduce;
+      }
+    }
+
+    // Recompute invoice totals from items
+    const newSubTotal = items.reduce((sum, it) => sum + (Number(it.amount) || 0), 0);
+    const newDiscount = items.reduce((sum, it) => sum + (Number(it.discount) || 0), 0);
+    const newTax = items.reduce((sum, it) => sum + (Number(it.tax) || 0), 0);
+    const newTotal = newSubTotal - newDiscount + newTax;
+
+    invoice.item[itemIndex] = item;
+    invoice.subTotalBill = newSubTotal;
+    invoice.discountBill = newDiscount;
+    invoice.taxBill = newTax;
+    invoice.totalBill = newTotal;
+
+    // Record refund as negative payment with a clear note
+    const paymentEntry = {
+      method: method || "Refund",
+      payDate: payDate ? new Date(payDate) : new Date(),
+      paid: -Math.abs(applyAmount),
+      reference: reference || "",
+      chequeNo: "",
+      bankName: "",
+      chequeDate: undefined,
+      notes: `ProcedureRefund:${targetId}${notes ? ` | ${notes}` : ""}`,
+    };
+
+    invoice.payment = Array.isArray(invoice.payment) ? invoice.payment : [];
+    invoice.payment.push(paymentEntry);
+
+    // Recompute paid/due
+    const totalPaid = (invoice.payment || []).reduce((sum, p) => sum + (Number(p?.paid) || 0), 0);
+    invoice.totalPay = totalPaid;
+    invoice.duePay = (Number(invoice.totalBill) || 0) - totalPaid;
+
+    const updated = await invoice.save();
+    return res.status(200).json({
+      status: "ok",
+      data: updated,
+      appliedRefund: applyAmount,
+      maxRefundable,
+    });
+  } catch (err) {
+    console.error("Add procedure refund error:", err);
+    res.status(500).json({ error: err.message });
+  }
+};
 // 5. Delete invoice
 const deleteinvoice = async (req, res) => {
   try {
     const id = req.params.id;
+    const row = await Invoice.findById(id);
+    if (!row || !(await branchDocumentVisible(req, row.branchId))) {
+      return res.status(404).json({ status: "fail", message: "Invoice not found" });
+    }
     await Invoice.findByIdAndDelete(id);
     return res
       .status(200)
@@ -527,9 +844,18 @@ const getInvoiceSummary = async (req, res) => {
 
     const matchQuery = {};
 
+    const summaryScopedPatientIds = await getScopedPatientIds(req);
+    if (summaryScopedPatientIds !== null) {
+      matchQuery.patientId =
+        summaryScopedPatientIds.length === 0 ? { $in: [] } : { $in: summaryScopedPatientIds };
+    } else {
+      const branchInv = await mergeBranchScopedQuery(req);
+      if (branchInv) Object.assign(matchQuery, branchInv);
+    }
+
     // Apply same filters as getinvoices
     if (doctorId && doctorId.trim() !== '') {
-      matchQuery['doctorId'] = Types.ObjectId(doctorId);
+      matchQuery['doctorId'] = Types.ObjectId.isValid(doctorId) ? new Types.ObjectId(doctorId) : doctorId;
     }
     if (status && status.trim() !== '') {
       if (status === 'Paid') {
@@ -541,9 +867,12 @@ const getInvoiceSummary = async (req, res) => {
       }
     }
     if (procedureId && procedureId.trim() !== '') {
+      const procVal = Types.ObjectId.isValid(procedureId)
+        ? new Types.ObjectId(procedureId)
+        : procedureId;
       matchQuery['item'] = {
         $elemMatch: {
-          procedureId: procedureId
+          procedureId: procVal
         }
       };
     }
@@ -589,15 +918,15 @@ const getInvoiceSummary = async (req, res) => {
             as: 'doctorData'
           }
         },
+        { $unwind: { path: '$doctorData', preserveNullAndEmptyArrays: true } },
         {
           $match: {
-            'doctorData.departmentId': Types.ObjectId(departmentId)
+            'doctorData.departmentId': new Types.ObjectId(departmentId)
           }
         }
       );
     }
 
-    // If patientMR filter is needed
     if (patientMR && patientMR.trim() !== '') {
       pipeline.push(
         {
@@ -611,6 +940,40 @@ const getInvoiceSummary = async (req, res) => {
         {
           $match: {
             'patientData.mr': new RegExp(patientMR, 'i')
+          }
+        }
+      );
+    }
+    if (req.query.patientName && req.query.patientName.trim() !== '') {
+      pipeline.push(
+        {
+          $lookup: {
+            from: 'patients',
+            localField: 'patientId',
+            foreignField: '_id',
+            as: 'patientData'
+          }
+        },
+        {
+          $match: {
+            'patientData.name': new RegExp(req.query.patientName, 'i')
+          }
+        }
+      );
+    }
+    if (req.query.patientPhone && req.query.patientPhone.trim() !== '') {
+      pipeline.push(
+        {
+          $lookup: {
+            from: 'patients',
+            localField: 'patientId',
+            foreignField: '_id',
+            as: 'patientData'
+          }
+        },
+        {
+          $match: {
+            'patientData.phone': new RegExp(req.query.patientPhone, 'i')
           }
         }
       );
@@ -720,6 +1083,9 @@ module.exports = {
   getinvoices,
   getinvoiceById,
   updateinvoice,
+  addInvoicePayments,
+  addInvoiceRefund,
   deleteinvoice,
   getInvoiceSummary,
+  addProcedureRefund,
 };

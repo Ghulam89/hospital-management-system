@@ -6,6 +6,8 @@ import { toast } from 'react-toastify';
 import { useParams, useNavigate } from 'react-router-dom';
 import { AsyncPaginate, LoadOptions } from 'react-select-async-paginate';
 import { BsFillFileEarmarkPdfFill } from 'react-icons/bs';
+import { RiRefund2Line } from 'react-icons/ri';
+import AddProcedureExpense from './AddProcedureExpense';
 
 type Procedure = {
   _id: string;
@@ -113,6 +115,17 @@ export default function InvoiceUpdate() {
   const [isPaymentComplete, setIsPaymentComplete] = useState(false);
   const [paymentStatus, setPaymentStatus] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  
+  // Refund modal state
+  const [refundModalOpen, setRefundModalOpen] = useState(false);
+  const [refundProcedure, setRefundProcedure] = useState<ProcedureItem | null>(null);
+  const [refundForm, setRefundForm] = useState({
+    method: 'Cash',
+    paid: '',
+    payDate: new Date().toISOString().split('T')[0],
+    reference: '',
+    notes: ''
+  });
 
   const [procedures, setProcedures] = useState<ProcedureItem[]>([
     {
@@ -142,6 +155,12 @@ export default function InvoiceUpdate() {
       reference: ''
     }
   ]);
+  const [paymentsDirty, setPaymentsDirty] = useState(false);
+  const [localExpenses, setLocalExpenses] = useState<any[]>([]);
+  const [isProcedureExpenseModalOpen, setIsProcedureExpenseModalOpen] = useState(false);
+  const [selectedProcedureRowId, setSelectedProcedureRowId] = useState<number | null>(null);
+  const [editingExpense, setEditingExpense] = useState<any | null>(null);
+  const [categories, setCategories] = useState<{ _id: string; name: string }[]>([]);
 
   const [invoiceNotes] = useState([
     'Procedures & Medicines once purchased are non-refundable.',
@@ -206,6 +225,46 @@ export default function InvoiceUpdate() {
             setProcedures(mappedProcedures);
           }
           
+          const seededFromItems = Array.isArray(data.item)
+            ? data.item.map((srcItem: any, index: number) => ({
+                procedureRowId: index + 1,
+                procedureId: srcItem?.procedureId?._id || srcItem?.procedureId || '',
+                expenses: Array.isArray(srcItem?.expenses) ? srcItem.expenses : [],
+                doctorShares: Array.isArray(srcItem?.doctorShares) ? srcItem.doctorShares : [],
+                consumptions: Array.isArray(srcItem?.consumptions) ? srcItem.consumptions : [],
+                _id: `${data._id || 'inv'}-${index + 1}`,
+              }))
+            : [];
+
+          const invoiceLevelBundle = {
+            procedureRowId: null,
+            procedureId: '',
+            expenses: Array.isArray((data as any).invoiceExpenses) ? (data as any).invoiceExpenses : [],
+            doctorShares: [],
+            consumptions: Array.isArray((data as any).invoiceConsumptions) ? (data as any).invoiceConsumptions : [],
+            _id: `${data._id || 'inv'}-invoice`,
+          };
+
+          const legacyBundles = Array.isArray((data as any).expensesBundles)
+            ? (data as any).expensesBundles.map((bundle: any) => ({
+                procedureRowId: typeof bundle.procedureRowId === 'number' ? bundle.procedureRowId : null,
+                procedureId: '',
+                expenses: bundle.expenses || [],
+                doctorShares: bundle.doctorShares || [],
+                consumptions: bundle.consumptions || [],
+                _id: bundle._id || Date.now().toString(),
+              }))
+            : [];
+
+          const combinedSeed = [
+            ...seededFromItems.filter(b => (b.expenses?.length || b.doctorShares?.length || b.consumptions?.length)),
+            ...(invoiceLevelBundle.expenses.length || invoiceLevelBundle.consumptions.length ? [invoiceLevelBundle] : []),
+            ...legacyBundles,
+          ];
+          if (combinedSeed.length > 0) {
+            setLocalExpenses(combinedSeed);
+          }
+          
           // Set payments
           if (data.payment && data.payment.length > 0) {
             const mappedPayments = data.payment.map((payment, index) => ({
@@ -247,6 +306,18 @@ export default function InvoiceUpdate() {
     fetchData();
   }, [id]);
 
+  useEffect(() => {
+    const fetchCategories = async () => {
+      try {
+        const res = await axios.get(`${Base_url}/apis/expenseCategory/get`);
+        const arr = Array.isArray(res?.data?.data) ? res.data.data : [];
+        setCategories(arr);
+      } catch (e) {
+        setCategories([]);
+      }
+    };
+    fetchCategories();
+  }, []);
 
   useEffect(() => {
   const fetchMissingDoctors = async () => {
@@ -480,6 +551,58 @@ export default function InvoiceUpdate() {
     setProcedures(procedures.filter(item => item.id !== id));
   };
 
+  const openProcedureRefundModal = (procedure: ProcedureItem) => {
+    setRefundProcedure(procedure);
+    setRefundForm({
+      method: 'Cash',
+      paid: String(procedure.amount || 0),
+      payDate: new Date().toISOString().split('T')[0],
+      reference: '',
+      notes: ''
+    });
+    setRefundModalOpen(true);
+  };
+
+  const submitProcedureRefund = async () => {
+    if (!refundProcedure || !invoiceData) {
+      toast.error('Procedure or invoice data not available');
+      return;
+    }
+
+    const amount = Number(refundForm.paid) || 0;
+    if (amount <= 0) {
+      toast.error('Refund amount must be greater than 0');
+      return;
+    }
+
+    try {
+      const response = await axios.post(
+        `${Base_url}/apis/invoice/procedure-refund/${invoiceData._id}`,
+        {
+          procedureId: refundProcedure.procedureId,
+          method: refundForm.method,
+          paid: -Math.abs(amount), // Negative for refund
+          payDate: refundForm.payDate,
+          reference: refundForm.reference,
+          notes: refundForm.notes
+        }
+      );
+
+      if (response.data.status === 'success') {
+        toast.success('Procedure refund recorded successfully');
+        setRefundModalOpen(false);
+        setRefundProcedure(null);
+        // Refresh invoice data
+        fetchInvoiceData();
+      } else {
+        toast.error(response.data.message || 'Failed to record refund');
+      }
+    } catch (error: any) {
+      console.error('Procedure refund error:', error);
+      toast.error(error.response?.data?.message || 'Failed to record refund');
+    }
+  };
+
   const updateProcedure = (id: number, field: keyof ProcedureItem, value: any) => {
     const updatedProcedures = procedures.map(item => {
       if (item.id === id) {
@@ -550,6 +673,22 @@ export default function InvoiceUpdate() {
     });
     setProcedures(updatedProcedures);
   };
+  
+  const handleLocalExpenseAdd = (procedureRowId: number | null, bundle: any) => {
+    setLocalExpenses(prev => {
+      const idx = prev.findIndex(e => e.procedureRowId === procedureRowId);
+      const proc = procedureRowId != null ? procedures.find(p => p.id === procedureRowId) : null;
+      const payload = { procedureRowId, procedureId: proc?.procedureId || '', invoiceId: invoiceData?._id || '', ...bundle };
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = payload;
+        return next;
+      }
+      return [...prev, payload];
+    });
+    setIsProcedureExpenseModalOpen(false);
+    setEditingExpense(null);
+  };
 
   const addPaymentInstallment = () => {
     setPaymentInstallments([...paymentInstallments, {
@@ -559,10 +698,12 @@ export default function InvoiceUpdate() {
       amount: 0,
       reference: ''
     }]);
+    setPaymentsDirty(true);
   };
 
   const removePaymentInstallment = (id: number) => {
     setPaymentInstallments(paymentInstallments.filter(item => item.id !== id));
+    setPaymentsDirty(true);
   };
 
   const updatePaymentInstallment = (id: number, field: keyof PaymentInstallment, value: any) => {
@@ -573,6 +714,7 @@ export default function InvoiceUpdate() {
       return item;
     });
     setPaymentInstallments(updatedPayments);
+    setPaymentsDirty(true);
   };
 
   const calculateSubTotal = () => {
@@ -590,7 +732,18 @@ export default function InvoiceUpdate() {
   };
 
   const calculateGrandTotal = () => {
-    return calculateSubTotal() - calculateTotalDiscount();
+    const procedureTotal = calculateSubTotal() - calculateTotalDiscount();
+    const expensesTotal =
+      localExpenses.reduce((sum, expense) => {
+        const e = expense.expenses || [];
+        return (
+          sum +
+          e
+            .filter((row: any) => !row.deductBeforeDoctorShare)
+            .reduce((s: number, row: any) => s + (Number(row.amount) || 0), 0)
+        );
+      }, 0);
+    return procedureTotal + expensesTotal;
   };
 
   const calculateTotalPaid = () => {
@@ -607,6 +760,40 @@ export default function InvoiceUpdate() {
 
   const calculateTotalHospitalShare = () => {
     return procedures.reduce((sum, item) => sum + item.hospitalAmount, 0);
+  };
+  
+  const calculateAdditionalExpensesTotal = () => {
+    return localExpenses.reduce((sum, expense) => {
+      const e = expense.expenses || [];
+      return (
+        sum +
+        e
+          .filter((row: any) => !row.deductBeforeDoctorShare)
+          .reduce((s: number, row: any) => s + (Number(row.amount) || 0), 0)
+      );
+    }, 0);
+  };
+  
+  const calculateDoctorSharesDeduction = () => {
+    const procedureTotal = calculateSubTotal() - calculateTotalDiscount();
+    const preDoctorShareDeductExpenses = localExpenses.reduce((sum, expense) => {
+      const e = expense.expenses || [];
+      const deduct = e
+        .filter((row: any) => row.deductBeforeDoctorShare)
+        .reduce((s: number, row: any) => s + (Number(row.amount) || 0), 0);
+      return sum + deduct;
+    }, 0);
+    const base = Math.max(0, procedureTotal - preDoctorShareDeductExpenses);
+    return localExpenses.reduce((sum, expense) => {
+      const shares = expense.doctorShares || [];
+      const total =
+        shares.reduce((s: number, share: any) => {
+          const val = Number(share.share) || 0;
+          const amt = share.shareType === 'percentage' ? base * (val / 100) : val;
+          return s + amt;
+        }, 0);
+      return sum + total;
+    }, 0);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -641,47 +828,97 @@ export default function InvoiceUpdate() {
       return;
     }
   
-    const invoiceData = {
+    const invoiceDataBase = {
       patientId: patientInfo._id,
       patientMr: patientInfo.mr,
       doctorId: doctorId,
-      item: procedures.map(item => ({
-        procedureId: item.procedureId,
-        description: item.description,
-        rate: item.rate,
-        quantity: item.quantity,
-        amount: item.amount,
-        discount: item.discount,
-        discountType: item.discountType,
-        tax: item.tax === 'value' ? 0 : 0,
-        total: item.amount - (item.discountType === 0 ? item.discount : (item.amount * (item.discount / 100))),
-        performedBy: item.performedBy,
-        doctorAmount: item.doctorAmount,
-        hospitalAmount: item.hospitalAmount
-      })),
+      item: procedures.map((item, index) => {
+        const bundle = localExpenses.find((b) => b.procedureRowId === item.id || b.procedureId === item.procedureId) || {};
+        const shownExpenses = bundle.expenses || [];
+        const shares = (bundle.doctorShares || [])
+          .filter((share: any) => {
+            const id = String(share.doctorId || '');
+            const isHex24 = /^[0-9a-fA-F]{24}$/.test(id);
+            const val = Number(share.share);
+            return isHex24 && Number.isFinite(val) && val > 0;
+          })
+          .map((share: any) => {
+            const base = calculateShares(item).doctorAmount + calculateShares(item).hospitalAmount;
+            const val = Number(share.share) || 0;
+            const amount = share.shareType === 'percentage' ? base * (val / 100) : val;
+            return {
+              doctorId: String(share.doctorId),
+              shareType: share.shareType,
+              shareValue: val,
+              amount,
+            };
+          });
+        return {
+          procedureId: item.procedureId,
+          description: item.description,
+          rate: item.rate,
+          quantity: item.quantity,
+          amount: item.amount,
+          discount: item.discount,
+          discountType: item.discountType,
+          tax: item.tax === 'value' ? 0 : 0,
+          total: item.amount - (item.discountType === 0 ? item.discount : (item.amount * (item.discount / 100))),
+          performedBy: item.performedBy,
+          doctorAmount: item.doctorAmount,
+          hospitalAmount: item.hospitalAmount,
+          expenses: shownExpenses,
+          doctorShares: shares,
+          consumptions: bundle.consumptions || [],
+        };
+      }),
       subTotalBill: calculateSubTotal(),
       discountBill: calculateTotalDiscount(),
       taxBill: 0,
       totalBill: calculateGrandTotal(),
-      duePay: calculateDue() > 0 ? calculateDue() : 0,
-      advancePay: calculateDue() < 0 ? Math.abs(calculateDue()) : 0,
-      totalPay: calculateTotalPaid(),
-      payment: paymentInstallments.map(payment => ({
+      note: remarks,
+    };
+    
+    const invoiceData: any = { ...invoiceDataBase };
+    {
+      const due = calculateDue();
+      invoiceData.duePay = due > 0 ? due : 0;
+      invoiceData.advancePay = due < 0 ? Math.abs(due) : 0;
+      invoiceData.totalPay = calculateTotalPaid();
+      invoiceData.status = due < 0 ? 'credit' : due === 0 ? 'completed' : 'pending';
+    }
+    if (paymentsDirty) {
+      invoiceData.payment = paymentInstallments.map(payment => ({
         method: payment.method,
-        payDate: new Date(payment.date).toISOString(),
+        payDate: (() => {
+          if (!payment.date) return payment.date;
+          if (/^\d{4}-\d{2}-\d{2}$/.test(payment.date)) {
+            const [y, m, d] = payment.date.split('-').map((v) => Number(v));
+            if (!y || !m || !d) return payment.date;
+            const now = new Date();
+            return new Date(
+              y,
+              m - 1,
+              d,
+              now.getHours(),
+              now.getMinutes(),
+              now.getSeconds(),
+              now.getMilliseconds(),
+            ).toISOString();
+          }
+          const parsed = new Date(payment.date);
+          return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : payment.date;
+        })(),
         paid: payment.amount,
         reference: payment.reference
-      })),
-      note: remarks,
-      status: calculateDue() < 0 ? 'credit' : isPaymentComplete ? 'completed' : 'pending'
-    };
+      }));
+    }
   
     try {
       const response = await axios.put(`${Base_url}/apis/invoice/update/${id}`, invoiceData);
       if(response.data.status === "ok") {
         toast.success('Invoice updated successfully!');
         if (isPaymentComplete) {
-          toast.success('Payment completed successfully!');
+          // toast.success('Payment completed successfully!');
         }
         navigate('/invoice');
       } else {
@@ -1031,8 +1268,20 @@ export default function InvoiceUpdate() {
                                           />
                                         </svg>
                                       </button>
-                                      <button className=' text-primary'>
-                                      <BsFillFileEarmarkPdfFill size={20} className=' text-primary' />
+                                      <button
+                                        onClick={() => openProcedureRefundModal(item)}
+                                        className="text-orange-500 hover:text-orange-700"
+                                        title="Refund Procedure"
+                                      >
+                                        <RiRefund2Line size={20} />
+                                      </button>
+                                      <button className={`text-primary ${!item.procedureId ? 'opacity-50 cursor-not-allowed' : ''}`} disabled={!item.procedureId} onClick={() => { 
+                                        const existing = localExpenses.find(e => e.procedureRowId === item.id || e.procedureId === item.procedureId) || null;
+                                        setSelectedProcedureRowId(item.id);
+                                        setEditingExpense(existing);
+                                        setIsProcedureExpenseModalOpen(true); 
+                                      }}>
+                                        <BsFillFileEarmarkPdfFill size={20} className=' text-primary' />
                                       </button>
                 
                                       </div>
@@ -1042,7 +1291,7 @@ export default function InvoiceUpdate() {
               </tbody>
             </table>
           </div>
-          <div className='py-3 flex justify-end'>
+          <div className='py-3 flex justify-end gap-3'>
             <button
               onClick={addProcedure}
               className="bg-primary text-white px-4 py-2 rounded-md flex items-center"
@@ -1052,8 +1301,33 @@ export default function InvoiceUpdate() {
               </svg>
               Add Procedure
             </button>
+            {/* <button
+              type="button"
+              onClick={() => {
+                const existing = localExpenses.find(e => e.procedureRowId == null) || null;
+                setSelectedProcedureRowId(null);
+                setEditingExpense(existing);
+                setIsProcedureExpenseModalOpen(true);
+              }}
+              className="bg-primary text-white px-4 py-2 rounded-md flex items-center"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-1" viewBox="0 0 20 20" fill="currentColor">
+                <path fillRule="evenodd" d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z" clipRule="evenodd" />
+              </svg>
+              Add Invoice Expense
+            </button> */}
           </div>
         </div>
+
+        <AddProcedureExpense
+          key={`proc-exp-${selectedProcedureRowId}-${editingExpense?._id || 'new'}`}
+          isModalOpen={isProcedureExpenseModalOpen}
+          setIsModalOpen={setIsProcedureExpenseModalOpen}
+          selectedExpense={editingExpense}
+          categories={categories}
+          selectedProcedureId={selectedProcedureRowId}
+          onLocalExpenseAdd={handleLocalExpenseAdd}
+        />
 
         {/* Payment Section */}
         <div className="mb-8 bg-white p-4 rounded-lg shadow">
@@ -1171,6 +1445,18 @@ export default function InvoiceUpdate() {
                 <span>Tax:</span>
                 <span className="font-medium">Rs. 0.00</span>
               </div>
+              <div className="flex justify-between">
+                <span>Additional Expenses:</span>
+                <span className="font-medium text-green-600">
+                  + Rs. {calculateAdditionalExpensesTotal().toFixed(2)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>Doctor Shares Deduction:</span>
+                <span className="font-medium text-red-600">
+                  - Rs. {calculateDoctorSharesDeduction().toFixed(2)}
+                </span>
+              </div>
               <div className="border-t pt-2 mt-2 flex justify-between font-bold text-lg">
                 <span>Grand Total:</span>
                 <span>Rs. {calculateGrandTotal().toFixed(2)}</span>
@@ -1222,6 +1508,102 @@ export default function InvoiceUpdate() {
           </button>
         </div>
       </div>
+      {refundModalOpen && (
+        <div className="fixed inset-0 z-[1000]">
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={() => setRefundModalOpen(false)}
+          />
+          <div className="absolute inset-0 flex items-center justify-center p-4">
+            <div className="w-full max-w-xl bg-white rounded-lg shadow-lg">
+              <div className="px-5 py-4 border-b">
+                <div className="flex items-center justify-between">
+                  <div className="font-semibold text-gray-700">
+                    Procedure Refund{refundProcedure?.description ? ` - ${refundProcedure.description}` : ''}
+                  </div>
+                  <button
+                    className="text-gray-500 hover:text-gray-700"
+                    onClick={() => setRefundModalOpen(false)}
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+              <div className="px-5 py-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <div className="mb-1 text-xs font-medium text-bodydark">Method</div>
+                    <select
+                      className="w-full rounded border border-stroke bg-transparent px-3 py-2 text-black outline-none transition focus:border-primary dark:border-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                      value={refundForm.method}
+                      onChange={(e) => setRefundForm({ ...refundForm, method: e.target.value })}
+                    >
+                      <option value="Cash">Cash</option>
+                      <option value="Card">Card</option>
+                      <option value="Bank Transfer">Bank Transfer</option>
+                      <option value="Cheque">Cheque</option>
+                      <option value="Credit">Credit</option>
+                    </select>
+                  </div>
+                  <div>
+                    <div className="mb-1 text-xs font-medium text-bodydark">Refund Amount</div>
+                    <input
+                      type="number"
+                      min={0}
+                      className="w-full rounded border border-stroke bg-transparent px-3 py-2 text-black outline-none transition focus:border-primary dark:border-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                      value={refundForm.paid}
+                      onChange={(e) => setRefundForm({ ...refundForm, paid: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <div className="mb-1 text-xs font-medium text-bodydark">Pay Date</div>
+                    <input
+                      type="date"
+                      className="w-full rounded border border-stroke bg-transparent px-3 py-2 text-black outline-none transition focus:border-primary dark:border-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                      value={refundForm.payDate}
+                      onChange={(e) => setRefundForm({ ...refundForm, payDate: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <div className="mb-1 text-xs font-medium text-bodydark">Reference</div>
+                    <input
+                      type="text"
+                      className="w-full rounded border border-stroke bg-transparent px-3 py-2 text-black outline-none transition focus:border-primary dark:border-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                      value={refundForm.reference}
+                      onChange={(e) => setRefundForm({ ...refundForm, reference: e.target.value })}
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <div className="mb-1 text-xs font-medium text-bodydark">Notes</div>
+                    <textarea
+                      className="w-full rounded border border-stroke bg-transparent px-3 py-2 text-black outline-none transition focus:border-primary dark:border-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                      rows={3}
+                      value={refundForm.notes}
+                      onChange={(e) => setRefundForm({ ...refundForm, notes: e.target.value })}
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="px-5 py-3 border-t flex justify-end gap-2">
+                <button
+                  className="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-md"
+                  onClick={() => setRefundModalOpen(false)}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="bg-primary text-white px-4 py-2 rounded-md"
+                  onClick={submitProcedureRefund}
+                >
+                  Record Refund
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

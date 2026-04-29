@@ -27,6 +27,10 @@ const inboundStockItemSchema = new mongoose.Schema({
         required: true,
         min: 0
     },
+    itemTax: {
+        type: Number,
+        default: 0
+    },
     batchNumber: {
         type: String,
         default: null
@@ -82,6 +86,35 @@ const pharmInboundStockSchema = new mongoose.Schema({
         required: true,
         default: 0
     },
+    paid: {
+        type: Number,
+        default: 0
+    },
+    due: {
+        type: Number,
+        default: 0
+    },
+    payment: [
+        {
+            method: { type: String, default: null },
+            payDate: { type: Date, default: null },
+            paid: { type: Number, default: 0 },
+            reference: { type: String, default: null },
+            chequeNo: { type: String, default: null },
+            bankName: { type: String, default: null },
+            chequeDate: { type: Date, default: null },
+            notes: { type: String, default: null },
+        }
+    ],
+    adjustments: [
+        {
+            adjDate: { type: Date, default: null },
+            direction: { type: String, default: null }, // 'Debit' | 'Credit'
+            amount: { type: Number, default: 0 },
+            reference: { type: String, default: null },
+            notes: { type: String, default: null },
+        }
+    ],
     remarks: {
         type: String,
         default: ''
@@ -94,7 +127,11 @@ const pharmInboundStockSchema = new mongoose.Schema({
     totalQuantity: {
         type: Number,
         default: 0
-    }
+    },
+    branchId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Branch',
+    },
 }, { timestamps: true });
 
 // Pre-save middleware to generate document number if not provided
@@ -127,6 +164,19 @@ pharmInboundStockSchema.pre('save', async function(next) {
         if (this.items && this.items.length > 0) {
             this.totalQuantity = this.items.reduce((sum, item) => sum + (item.quantity || 0), 0);
         }
+
+        const payments = Array.isArray(this.payment) ? this.payment : [];
+        const paidFromPayments = payments.reduce((sum, p) => sum + (Number(p?.paid) || 0), 0);
+        const currentPaid = this.paid === undefined || this.paid === null ? paidFromPayments : (Number(this.paid) || 0);
+        this.paid = currentPaid;
+
+        const grandTotal = Number(this.grandTotal) || 0;
+        const adjs = Array.isArray(this.adjustments) ? this.adjustments : [];
+        const debitAdj = adjs.reduce((sum, a) => sum + ((String(a?.direction || '').toLowerCase() === 'debit' ? Number(a?.amount) || 0 : 0)), 0);
+        const creditAdj = adjs.reduce((sum, a) => sum + ((String(a?.direction || '').toLowerCase() === 'credit' ? Number(a?.amount) || 0 : 0)), 0);
+        const adjustedTotal = grandTotal + debitAdj - creditAdj;
+        const currentDue = this.due === undefined || this.due === null ? (adjustedTotal - currentPaid) : (Number(this.due) || 0);
+        this.due = currentDue;
 
         // 3. Update inventory for each item (add stock)
         if (this.isNew) {

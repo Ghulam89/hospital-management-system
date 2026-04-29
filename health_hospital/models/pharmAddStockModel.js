@@ -26,6 +26,10 @@ const pharmAddStock = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'PharmSupplier',
     },
+    branchId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Branch',
+    },
 }, { timestamps: true });
 
 // ✅ Pre-save (Create)

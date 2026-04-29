@@ -1,4 +1,5 @@
 const BedDetail = require("../models/bedDetailModel");
+const { getScopedWardIds, idInList } = require("../utils/branchScope");
 
 // 1. Create bedDetail
 const addbedDetail = async (req, res) => {
@@ -14,6 +15,13 @@ const addbedDetail = async (req, res) => {
     }
     else {
 
+      const allowedWardIds = await getScopedWardIds(req);
+      if (allowedWardIds !== null && allowedWardIds.length === 0) {
+        return res.status(403).json({ status: "fail", message: "No wards for this branch" });
+      }
+      if (allowedWardIds !== null && req.body.wardId && !idInList(req.body.wardId, allowedWardIds)) {
+        return res.status(403).json({ status: "fail", message: "Ward not allowed for this branch" });
+      }
 
       const bedDetail = await BedDetail.create({ ...req.body, });
       return res.status(200).json({ status: "ok", data: bedDetail });
@@ -54,6 +62,38 @@ const getbedDetails = async (req, res) => {
       query.status= req.query.status
     }
 
+    const allowedWardIds = await getScopedWardIds(req);
+    if (allowedWardIds !== null) {
+      if (allowedWardIds.length === 0) {
+        return res.status(200).json({
+          status: "ok",
+          data: [],
+          search,
+          page,
+          count: 0,
+          totalPages: 0,
+          currentPage: page,
+          limit
+        });
+      }
+      if (query.wardId) {
+        if (!idInList(query.wardId, allowedWardIds)) {
+          return res.status(200).json({
+            status: "ok",
+            data: [],
+            search,
+            page,
+            count: 0,
+            totalPages: 0,
+            currentPage: page,
+            limit
+          });
+        }
+      } else {
+        query.wardId = { $in: allowedWardIds };
+      }
+    }
+
     const bedDetails = await BedDetail.find(query).sort({createdAt:-1})
     .populate(['wardId'])
       .limit(limit * 1)
@@ -88,7 +128,14 @@ const getbedDetails = async (req, res) => {
 const getbedDetailById = async (req, res) => {
   try {
     const id = req.params.id;
-    const bedDetail = await BedDetail.findById(id);
+    const bedDetail = await BedDetail.findById(id).lean();
+    if (!bedDetail) {
+      return res.status(404).json({ status: "fail", message: "Bed detail not found" });
+    }
+    const allowedWardIds = await getScopedWardIds(req);
+    if (allowedWardIds !== null && !idInList(bedDetail.wardId, allowedWardIds)) {
+      return res.status(404).json({ status: "fail", message: "Bed detail not found" });
+    }
     return res.status(200).json({ status: "ok", data: bedDetail });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -99,6 +146,17 @@ const getbedDetailById = async (req, res) => {
 const updatebedDetail = async (req, res) => {
   try {
     let id = req.params.id;
+    const existing = await BedDetail.findById(id).lean();
+    if (!existing) {
+      return res.status(404).json({ status: "fail", message: "Bed detail not found" });
+    }
+    const allowedWardIds = await getScopedWardIds(req);
+    if (allowedWardIds !== null && !idInList(existing.wardId, allowedWardIds)) {
+      return res.status(404).json({ status: "fail", message: "Bed detail not found" });
+    }
+    if (allowedWardIds !== null && req.body.wardId && !idInList(req.body.wardId, allowedWardIds)) {
+      return res.status(403).json({ status: "fail", message: "Ward not allowed for this branch" });
+    }
     let getImage = await BedDetail.findById(id);
 
     const updatedbedDetail = await BedDetail.findByIdAndUpdate(
@@ -116,6 +174,14 @@ const updatebedDetail = async (req, res) => {
 const deletebedDetail = async (req, res) => {
   try {
     const id = req.params.id;
+    const existing = await BedDetail.findById(id).lean();
+    if (!existing) {
+      return res.status(404).json({ status: "fail", message: "Bed detail not found" });
+    }
+    const allowedWardIds = await getScopedWardIds(req);
+    if (allowedWardIds !== null && !idInList(existing.wardId, allowedWardIds)) {
+      return res.status(404).json({ status: "fail", message: "Bed detail not found" });
+    }
     await BedDetail.findByIdAndDelete(id);
     return res
       .status(200)

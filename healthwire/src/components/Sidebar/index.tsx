@@ -1,7 +1,15 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
+import axios from 'axios';
 import SidebarLinkGroup from './SidebarLinkGroup';
 import Logo from '../../images/logo.png';
+import { Base_url } from '../../utils/Base_url';
+import {
+  canSeeAnySidebarMenu,
+  canSeeSidebarMenu,
+  getStoredUserForPermissions,
+  usesGranularMenuTabs,
+} from '../../utils/permissions';
 
 interface SidebarProps {
   sidebarOpen: boolean;
@@ -12,6 +20,34 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
   const location = useLocation();
   const { pathname } = location;
 
+  /** Refresh permissions from DB once — merges Role.permissions into tabs so sidebar matches matrix */
+  const [permNonce, setPermNonce] = useState(0);
+  useEffect(() => {
+    const token = localStorage.getItem('userToken');
+    if (!token) return;
+    let cancelled = false;
+    axios
+      .get(`${Base_url}/apis/user/me`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      .then((res) => {
+        if (cancelled) return;
+        const data = res.data?.data;
+        if (data && typeof data === 'object') {
+          localStorage.setItem('userData', JSON.stringify(data));
+          setPermNonce((n) => n + 1);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const permUser = useMemo(
+    () => getStoredUserForPermissions(),
+    [permNonce, pathname, location.key],
+  );
   const trigger = useRef<any>(null);
   const sidebar = useRef<any>(null);
 
@@ -106,6 +142,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
           
 
 
+              {canSeeSidebarMenu(permUser, 'dashboard') && (
                         <li>
                 <NavLink
                   to="/dashboard"
@@ -142,11 +179,12 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                   Dashboard
                 </NavLink>
               </li>
-              {/* <!-- Menu Item Dashboard --> */}
+              )}
 
               {/* <!-- Menu Item Calendar --> */}
              
 
+              {canSeeSidebarMenu(permUser, 'health_records') && (
 <li>
                 <NavLink
                   to="/admin/health-records"
@@ -171,7 +209,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                   Health Records
                 </NavLink>
               </li>
-              {/* <!-- Menu Item Calendar --> */}
+              )}
 
               {/* <!-- Menu Item Profile --> */}
               {/* <li>
@@ -204,14 +242,27 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
               {/* <!-- Menu Item Profile --> */}
 
               {/* <!-- Menu Item Forms --> */}
+              {canSeeAnySidebarMenu(permUser, [
+                'ward',
+                'rooms',
+                'bed_details',
+                'room_details',
+                'discharge_patients',
+                'indoor_duty_roster',
+                'birth_reports',
+                'death_reports',
+              ]) && (
+              <li>
               <SidebarLinkGroup
                 activeCondition={
-                  pathname.includes('/ward') || 
+                  pathname.includes('/ward') ||
                   pathname.includes('/rooms') ||
                   pathname.includes('/bed-details') ||
                   pathname.includes('/room-details') ||
                   pathname.includes('/discharge-patients') ||
-                  pathname.includes('/birth-reports')
+                  pathname.includes('/birth-reports') ||
+                  pathname.includes('/death-reports') ||
+                  pathname.includes('/Indoor-duty-roster')
                 }
               >
                 {(handleClick, open) => {
@@ -291,6 +342,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                         }`}
                       >
                         <ul className="mt-4 mb-5.5 flex flex-col gap-2.5 pl-6">
+                          {canSeeSidebarMenu(permUser, 'ward') && (
                           <li>
                             <NavLink
                               to="/ward"
@@ -302,6 +354,8 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                               Wards
                             </NavLink>
                           </li>
+                          )}
+                          {canSeeSidebarMenu(permUser, 'rooms') && (
                           <li>
                             <NavLink
                               to="/rooms"
@@ -313,7 +367,9 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                               Rooms
                             </NavLink>
                           </li>
+                          )}
 
+                          {canSeeSidebarMenu(permUser, 'bed_details') && (
                           <li>
                             <NavLink
                               to="/bed-details"
@@ -325,7 +381,9 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                               Bed Details
                             </NavLink>
                           </li>
+                          )}
 
+                          {canSeeSidebarMenu(permUser, 'room_details') && (
                           <li>
                             <NavLink
                               to="/room-details"
@@ -337,7 +395,9 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                               Room Details
                             </NavLink>
                           </li>
+                          )}
 
+                          {canSeeSidebarMenu(permUser, 'discharge_patients') && (
                           <li>
                             <NavLink
                               to="/discharge-patients"
@@ -349,7 +409,9 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                               Discharged Patients
                             </NavLink>
                           </li>
+                          )}
 
+                          {canSeeSidebarMenu(permUser, 'indoor_duty_roster') && (
                           <li>
                             <NavLink
                               to="/Indoor-duty-roster"
@@ -361,6 +423,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                               Indoor Duty  Roster
                             </NavLink>
                           </li>
+                          )}
 
                           {/* <li>
                             <NavLink
@@ -387,6 +450,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                             </NavLink>
                           </li> */}
 
+                          {canSeeSidebarMenu(permUser, 'birth_reports') && (
                           <li>
                             <NavLink
                               to="/birth-reports"
@@ -398,7 +462,9 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                               Birth Certificates
                             </NavLink>
                           </li>
+                          )}
 
+                          {canSeeSidebarMenu(permUser, 'death_reports') && (
                           <li>
                             <NavLink
                               to="/death-reports"
@@ -410,8 +476,10 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                               Death Certificates
                             </NavLink>
                           </li>
+                          )}
 
 
+                          {!usesGranularMenuTabs(permUser) && (
                           <li>
                             <NavLink
                               to="#"
@@ -423,6 +491,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                               Bed/Room Transfer History 
                             </NavLink>
                           </li>
+                          )}
 
                           {/* <li>
                             <NavLink
@@ -443,12 +512,14 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                   );
                 }}
               </SidebarLinkGroup>
+              </li>
+              )}
 
-
+              {canSeeAnySidebarMenu(permUser, ['admitted_patients', 'bed_allocation']) && (
+              <li>
               <SidebarLinkGroup
-               
                 activeCondition={
-                  pathname.includes('/admin/beds') || 
+                  pathname.includes('/admin/beds') ||
                   pathname.includes('/bed-allocation')
                 }
               >
@@ -458,8 +529,8 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                       <NavLink
                         to="#"
                         className={`group relative flex items-center gap-2.5 rounded-sm py-2 px-4 font-medium text-bodydark1 duration-300 ease-in-out hover:bg-graydark dark:hover:bg-meta-4 ${
-                          (pathname === '/forms' ||
-                            pathname.includes('forms')) &&
+                          (pathname.includes('/admin/beds') ||
+                            pathname.includes('/bed-allocation')) &&
                           'bg-graydark dark:bg-meta-4'
                         }`}
                         onClick={(e) => {
@@ -524,6 +595,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                         }`}
                       >
                         <ul className="mt-4 mb-5.5 flex flex-col gap-2.5 pl-6">
+                          {canSeeSidebarMenu(permUser, 'admitted_patients') && (
                           <li>
                             <NavLink
                               to="/admin/beds"
@@ -535,7 +607,9 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                               Admitted Patients
                             </NavLink>
                           </li>
+                          )}
 
+                          {canSeeSidebarMenu(permUser, 'bed_allocation') && (
                           <li>
                             <NavLink
                               to="/bed-allocation"
@@ -547,6 +621,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                               Bed Allocation
                             </NavLink>
                           </li>
+                          )}
                          
                         </ul>
                       </div>
@@ -555,6 +630,8 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                   );
                 }}
               </SidebarLinkGroup>
+              </li>
+              )}
               
             </ul>
           </div>
@@ -567,6 +644,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
 
             <ul className="mb-6 flex flex-col gap-1.5">
             
+              {canSeeSidebarMenu(permUser, 'opd') && (
               <li>
                 <NavLink
                   to="/admin/general-consultations"
@@ -606,8 +684,10 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                   OPD
                 </NavLink>
               </li>
+              )}
 
              
+              {canSeeSidebarMenu(permUser, 'appointments') && (
               <li>
                 <NavLink
                   to="/appointments"
@@ -647,7 +727,9 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                   Appointments
                 </NavLink>
               </li>
+              )}
 
+              {canSeeSidebarMenu(permUser, 'invoices') && (
               <li>
                 <NavLink
                   to="/invoice"
@@ -687,7 +769,9 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                   Invoices
                 </NavLink>
               </li>
+              )}
 
+              {canSeeSidebarMenu(permUser, 'patients') && (
               <li>
                 <NavLink
                   to="/admin/patients"
@@ -727,11 +811,28 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                   Patients
                 </NavLink>
               </li>
+              )}
 
+              {canSeeAnySidebarMenu(permUser, [
+                'pharm_items',
+                'pharm_stock',
+                'pharm_returns',
+                'pharm_po',
+                'pharm_missed',
+                'pharm_racks',
+                'pharm_consumed_stocks',
+                'pharm_store_close',
+                'pharm_suppliers',
+                'pharm_pos',
+                'pharm_categories',
+                'pharm_manufacturers',
+                'pharm_reports_menu',
+              ]) && (
               <li>
               <SidebarLinkGroup
                 activeCondition={
-                  pathname === '/forms' || pathname.includes('forms')
+                  pathname.includes('/admin/pharmacy') ||
+                  pathname.includes('/admin/items/pharmacy')
                 }
               >
                 {(handleClick, open) => {
@@ -740,8 +841,8 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                       <NavLink
                         to="#"
                         className={`group relative flex items-center gap-2.5 rounded-sm py-2 px-4 font-medium text-bodydark1 duration-300 ease-in-out hover:bg-graydark dark:hover:bg-meta-4 ${
-                          (pathname === '/forms' ||
-                            pathname.includes('forms')) &&
+                          (pathname.includes('/admin/pharmacy') ||
+                            pathname.includes('/admin/items/pharmacy')) &&
                           'bg-graydark dark:bg-meta-4'
                         }`}
                         onClick={(e) => {
@@ -806,6 +907,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                         }`}
                       >
                         <ul className="mt-4 mb-5.5 flex flex-col gap-2.5 pl-6">
+                          {canSeeSidebarMenu(permUser, 'pharm_items') && (
                           <li>
                             <NavLink
                               to="/admin/items/pharmacy"
@@ -817,7 +919,9 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                                Items
                             </NavLink>
                           </li>
+                          )}
 
+                          {canSeeSidebarMenu(permUser, 'pharm_stock') && (
                           <li>
                             <NavLink
                               to="/admin/pharmacy/stocks"
@@ -829,8 +933,10 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                               Manage Stock
                             </NavLink>
                           </li>
+                          )}
 
 
+                          {canSeeSidebarMenu(permUser, 'pharm_returns') && (
                           <li>
                             <NavLink
                               to="/admin/pharmacy/stock_returns"
@@ -842,8 +948,10 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                                Stock Return
                              </NavLink>
                           </li>
+                          )}
 
 
+                          {canSeeSidebarMenu(permUser, 'pharm_po') && (
                           <li>
                             <NavLink
                               to="/admin/pharmacy/purchase-orders"
@@ -855,7 +963,9 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                                Purchase Orders
                              </NavLink>
                           </li>
+                          )}
 
+                          {canSeeSidebarMenu(permUser, 'pharm_missed') && (
                           <li>
                             <NavLink
                               to="/admin/pharmacy/missed-sales"
@@ -867,8 +977,10 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                                Missed Sales
                              </NavLink>
                           </li>
+                          )}
 
 
+                          {canSeeSidebarMenu(permUser, 'pharm_racks') && (
                           <li>
                             <NavLink
                               to="/admin/pharmacy/rack"
@@ -880,8 +992,10 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                                Racks
                              </NavLink>
                           </li>
+                          )}
 
 
+                          {canSeeSidebarMenu(permUser, 'pharm_consumed_stocks') && (
                           <li>
                             <NavLink
                               to="/admin/pharmacy/consumed-stocks"
@@ -893,9 +1007,11 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                                Consume Stocks
                              </NavLink>
                           </li>
+                          )}
 
 
                           
+                          {canSeeSidebarMenu(permUser, 'pharm_store_close') && (
                           <li>
                             <NavLink
                               to="/admin/pharmacy/store-closings"
@@ -907,8 +1023,10 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                                Store Closings
                              </NavLink>
                           </li>
+                          )}
 
 
+                          {canSeeSidebarMenu(permUser, 'pharm_suppliers') && (
                           <li>
                             <NavLink
                               to="/admin/pharmacy/supplier"
@@ -920,8 +1038,10 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                                 Suppliers
                              </NavLink>
                           </li>
+                          )}
 
 
+                          {canSeeSidebarMenu(permUser, 'pharm_pos') && (
                           <li>
                             <NavLink
                               to="/admin/pharmacy/invoices/new"
@@ -933,6 +1053,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                                POS
                              </NavLink>
                           </li>
+                          )}
 
 
 
@@ -948,6 +1069,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                              </NavLink>
                           </li> */}
 
+                          {canSeeSidebarMenu(permUser, 'pharm_categories') && (
                           <li>
                             <NavLink
                               to="/admin/pharmacy/categories"
@@ -959,9 +1081,11 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                                Categories
                              </NavLink>
                           </li>
+                          )}
 
 
                           
+                          {canSeeSidebarMenu(permUser, 'pharm_manufacturers') && (
                           <li>
                             <NavLink
                               to="/admin/pharmacy/manufacturers"
@@ -973,7 +1097,9 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                                Manufactures
                              </NavLink>
                           </li>
+                          )}
 
+                          {canSeeSidebarMenu(permUser, 'pharm_reports_menu') && (
                           <li>
                             <NavLink
                               to="/admin/pharmacy/reports"
@@ -985,6 +1111,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                                Pharmacy Reports
                              </NavLink>
                           </li>
+                          )}
                          
                          
                         </ul>
@@ -995,11 +1122,20 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                 }}
               </SidebarLinkGroup>
               </li>
+              )}
 
+              {canSeeAnySidebarMenu(permUser, [
+                'departments',
+                'procedures',
+                'expense_categories',
+                'expense',
+              ]) && (
               <li>
               <SidebarLinkGroup
                 activeCondition={
-                  pathname === '/forms' || pathname.includes('forms')
+                  pathname.includes('/department') ||
+                  pathname.includes('/procedures') ||
+                  pathname.includes('/expense')
                 }
               >
                 {(handleClick, open) => {
@@ -1008,8 +1144,9 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                       <NavLink
                         to="#"
                         className={`group relative flex items-center gap-2.5 rounded-sm py-2 px-4 font-medium text-bodydark1 duration-300 ease-in-out hover:bg-graydark dark:hover:bg-meta-4 ${
-                          (pathname === '/forms' ||
-                            pathname.includes('forms')) &&
+                          (pathname.includes('/department') ||
+                            pathname.includes('/procedures') ||
+                            pathname.includes('/expense')) &&
                           'bg-graydark dark:bg-meta-4'
                         }`}
                         onClick={(e) => {
@@ -1086,6 +1223,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                             </NavLink>
                           </li> */}
 
+                          {canSeeSidebarMenu(permUser, 'departments') && (
                           <li>
                             <NavLink
                               to="/department"
@@ -1097,6 +1235,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                               Departments
                             </NavLink>
                           </li>
+                          )}
 
 
 {/* 
@@ -1126,6 +1265,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                           </li> */}
 
 
+                          {!usesGranularMenuTabs(permUser) && (
                           <li>
                             <NavLink
                               to="#"
@@ -1137,8 +1277,10 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                                Patient Care
                              </NavLink>
                           </li>
+                          )}
 
 
+                          {!usesGranularMenuTabs(permUser) && (
                           <li>
                             <NavLink
                               to="#"
@@ -1150,8 +1292,10 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                                Discount
                              </NavLink>
                           </li>
+                          )}
 
 
+                          {canSeeSidebarMenu(permUser, 'procedures') && (
                           <li>
                             <NavLink
                               to="/procedures"
@@ -1163,9 +1307,11 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                                Procedure List
                              </NavLink>
                           </li>
+                          )}
 
 
                           
+                          {canSeeSidebarMenu(permUser, 'expense_categories') && (
                           <li>
                             <NavLink
                               to="/expense-categories"
@@ -1177,6 +1323,8 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                                Expense Categories
                              </NavLink>
                           </li>
+                          )}
+                          {canSeeSidebarMenu(permUser, 'expense') && (
                           <li>
                             <NavLink
                               to="/expense"
@@ -1188,6 +1336,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                                Expense
                              </NavLink>
                           </li>
+                          )}
 
 
                           {/* <li>
@@ -1212,11 +1361,21 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                 }}
               </SidebarLinkGroup>
               </li>
+              )}
 
+              {canSeeAnySidebarMenu(permUser, [
+                'report_opd',
+                'report_patients',
+                'report_financial',
+                'pharm_reports_menu',
+              ]) && (
               <li>
               <SidebarLinkGroup
                 activeCondition={
-                  pathname === '/forms' || pathname.includes('forms')
+                  pathname.includes('/opd/opd-report') ||
+                  pathname.includes('/patients/patients-report') ||
+                  pathname.includes('/financial/financial-report') ||
+                  pathname.includes('/admin/pharmacy/reports')
                 }
               >
                 {(handleClick, open) => {
@@ -1225,8 +1384,10 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                       <NavLink
                         to="#"
                         className={`group relative flex items-center gap-2.5 rounded-sm py-2 px-4 font-medium text-bodydark1 duration-300 ease-in-out hover:bg-graydark dark:hover:bg-meta-4 ${
-                          (pathname === '/forms' ||
-                            pathname.includes('forms')) &&
+                          (pathname.includes('/opd/opd-report') ||
+                            pathname.includes('/patients/patients-report') ||
+                            pathname.includes('/financial/financial-report') ||
+                            pathname.includes('/admin/pharmacy/reports')) &&
                           'bg-graydark dark:bg-meta-4'
                         }`}
                         onClick={(e) => {
@@ -1291,6 +1452,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                         }`}
                       >
                         <ul className="mt-4 mb-5.5 flex flex-col gap-2.5 pl-6">
+                          {canSeeSidebarMenu(permUser, 'report_opd') && (
                           <li>
                             <NavLink
                               to="/opd/opd-report"
@@ -1302,7 +1464,9 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                                OPD
                             </NavLink>
                           </li>
+                          )}
 
+                          {canSeeSidebarMenu(permUser, 'report_patients') && (
                           <li>
                             <NavLink
                               to="/patients/patients-report"
@@ -1314,8 +1478,10 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                               Patients
                             </NavLink>
                           </li>
+                          )}
 
 
+                          {canSeeSidebarMenu(permUser, 'report_financial') && (
                           <li>
                             <NavLink
                               to="/financial/financial-report"
@@ -1327,8 +1493,10 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                                Financial
                              </NavLink>
                           </li>
+                          )}
 
 
+                          {!usesGranularMenuTabs(permUser) && (
                           <li>
                             <NavLink
                               to="#"
@@ -1340,6 +1508,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                                Health Record
                              </NavLink>
                           </li>
+                          )}
 
 
                           {/* <li>
@@ -1368,6 +1537,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                           </li> */}
 
 
+                          {canSeeSidebarMenu(permUser, 'pharm_reports_menu') && (
                           <li>
                             <NavLink
                               to="/admin/pharmacy/reports"
@@ -1379,6 +1549,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                                Pharmacy
                              </NavLink>
                           </li>
+                          )}
 
 
                           
@@ -1394,12 +1565,14 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                 }}
               </SidebarLinkGroup>
               </li>
+              )}
 
+              {canSeeSidebarMenu(permUser, 'users') && (
               <li>
                 <NavLink
                   to="/admin/users"
                   className={`group relative flex items-center gap-2.5 rounded-sm py-2 px-4 font-medium text-bodydark1 duration-300 ease-in-out hover:bg-graydark dark:hover:bg-meta-4 ${
-                    pathname.includes('chart') && 'bg-graydark dark:bg-meta-4'
+                    pathname.includes('/admin/users') && 'bg-graydark dark:bg-meta-4'
                   }`}
                 >
                   <svg
@@ -1434,6 +1607,91 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                   Users
                 </NavLink>
               </li>
+              )}
+
+              {canSeeSidebarMenu(permUser, 'roles') && (
+              <li>
+                <NavLink
+                  to="/admin/roles"
+                  className={`group relative flex items-center gap-2.5 rounded-sm py-2 px-4 font-medium text-bodydark1 duration-300 ease-in-out hover:bg-graydark dark:hover:bg-meta-4 ${
+                    pathname.includes('/admin/roles') && 'bg-graydark dark:bg-meta-4'
+                  }`}
+                >
+                  <svg
+                    className="fill-current"
+                    width="18"
+                    height="19"
+                    viewBox="0 0 18 19"
+                    fill="none"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <g clipPath="url(#clip0_roles_sidebar)">
+                      <path
+                        d="M10.8563 0.55835C10.5188 0.55835 10.2095 0.8396 10.2095 1.20522V6.83022C10.2095 7.16773 10.4907 7.4771 10.8563 7.4771H16.8751C17.0438 7.4771 17.2126 7.39272 17.3251 7.28022C17.4376 7.1396 17.4938 6.97085 17.4938 6.8021C17.2688 3.28647 14.3438 0.55835 10.8563 0.55835ZM11.4751 6.15522V1.8521C13.8095 2.13335 15.6938 3.8771 16.1438 6.18335H11.4751V6.15522Z"
+                        fill=""
+                      />
+                      <path
+                        d="M15.3845 8.7427H9.1126V2.69582C9.1126 2.35832 8.83135 2.07707 8.49385 2.07707C8.40947 2.07707 8.3251 2.07707 8.24072 2.07707C3.96572 2.04895 0.506348 5.53645 0.506348 9.81145C0.506348 14.0864 3.99385 17.5739 8.26885 17.5739C12.5438 17.5739 16.0313 14.0864 16.0313 9.81145C16.0313 9.6427 16.0313 9.47395 16.0032 9.33332C16.0032 8.99582 15.722 8.7427 15.3845 8.7427ZM8.26885 16.3083C4.66885 16.3083 1.77197 13.4114 1.77197 9.81145C1.77197 6.3802 4.47197 3.53957 7.8751 3.3427V9.36145C7.8751 9.69895 8.15635 10.0083 8.52197 10.0083H14.7938C14.6813 13.4958 11.7845 16.3083 8.26885 16.3083Z"
+                        fill=""
+                      />
+                    </g>
+                    <defs>
+                      <clipPath id="clip0_roles_sidebar">
+                        <rect
+                          width="18"
+                          height="18"
+                          fill="white"
+                          transform="translate(0 0.052124)"
+                        />
+                      </clipPath>
+                    </defs>
+                  </svg>
+                  Roles & permissions
+                </NavLink>
+              </li>
+              )}
+
+              {canSeeSidebarMenu(permUser, 'branches') && (
+              <li>
+                <NavLink
+                  to="/admin/branches"
+                  className={`group relative flex items-center gap-2.5 rounded-sm py-2 px-4 font-medium text-bodydark1 duration-300 ease-in-out hover:bg-graydark dark:hover:bg-meta-4 ${
+                    pathname.includes('/admin/branches') && 'bg-graydark dark:bg-meta-4'
+                  }`}
+                >
+                  <svg
+                    className="fill-current"
+                    width="18"
+                    height="19"
+                    viewBox="0 0 18 19"
+                    fill="none"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <g clipPath="url(#clip0_branches_sidebar)">
+                      <path
+                        d="M10.8563 0.55835C10.5188 0.55835 10.2095 0.8396 10.2095 1.20522V6.83022C10.2095 7.16773 10.4907 7.4771 10.8563 7.4771H16.8751C17.0438 7.4771 17.2126 7.39272 17.3251 7.28022C17.4376 7.1396 17.4938 6.97085 17.4938 6.8021C17.2688 3.28647 14.3438 0.55835 10.8563 0.55835ZM11.4751 6.15522V1.8521C13.8095 2.13335 15.6938 3.8771 16.1438 6.18335H11.4751V6.15522Z"
+                        fill=""
+                      />
+                      <path
+                        d="M15.3845 8.7427H9.1126V2.69582C9.1126 2.35832 8.83135 2.07707 8.49385 2.07707C8.40947 2.07707 8.3251 2.07707 8.24072 2.07707C3.96572 2.04895 0.506348 5.53645 0.506348 9.81145C0.506348 14.0864 3.99385 17.5739 8.26885 17.5739C12.5438 17.5739 16.0313 14.0864 16.0313 9.81145C16.0313 9.6427 16.0313 9.47395 16.0032 9.33332C16.0032 8.99582 15.722 8.7427 15.3845 8.7427ZM8.26885 16.3083C4.66885 16.3083 1.77197 13.4114 1.77197 9.81145C1.77197 6.3802 4.47197 3.53957 7.8751 3.3427V9.36145C7.8751 9.69895 8.15635 10.0083 8.52197 10.0083H14.7938C14.6813 13.4958 11.7845 16.3083 8.26885 16.3083Z"
+                        fill=""
+                      />
+                    </g>
+                    <defs>
+                      <clipPath id="clip0_branches_sidebar">
+                        <rect
+                          width="18"
+                          height="18"
+                          fill="white"
+                          transform="translate(0 0.052124)"
+                        />
+                      </clipPath>
+                    </defs>
+                  </svg>
+                  Branches
+                </NavLink>
+              </li>
+              )}
             
             </ul>
           </div>

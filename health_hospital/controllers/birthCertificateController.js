@@ -1,4 +1,5 @@
 const BirthCertificate = require("../models/birthCertificateModel");
+const { getScopedPatientIds } = require("../utils/branchScope");
 
 // 1. Create birthCertificate
 const addbirthCertificate = async (req, res) => {
@@ -36,23 +37,20 @@ const getbirthCertificates = async (req, res) => {
 
     const limit = "20";
 
-    const birthCertificates = await BirthCertificate.find({
-      // $or: [
-      //   { motherId: { $regex: ".*" + search + ".*", $options: "i" } },
-      //   { doctorId: { $regex: ".*" + search + ".*", $options: "i" } },
-      // ],
-    }).sort({createdAt:-1})
+    const scoped = await getScopedPatientIds(req);
+    const certQuery = {};
+    if (scoped !== null) {
+      if (scoped.length === 0) certQuery._id = { $in: [] };
+      else certQuery.motherId = { $in: scoped };
+    }
+
+    const birthCertificates = await BirthCertificate.find(certQuery).sort({createdAt:-1})
     .populate(['motherId','doctorId'])
       .limit(limit * 1)
       .skip((page - 1) * limit)
       .exec();
 
-    const count = await BirthCertificate.find({
-      // $or: [
-      //   { motherId: { $regex: ".*" + search + ".*", $options: "i" } },
-      //   { doctorId: { $regex: ".*" + search + ".*", $options: "i" } },
-      // ],
-    })
+    const count = await BirthCertificate.find(certQuery)
     .populate(['motherId','doctorId'])
       .countDocuments();
 

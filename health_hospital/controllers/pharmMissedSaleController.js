@@ -1,4 +1,5 @@
 const PharmMissedSale = require("../models/pharmMissedSaleModel");
+const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible } = require("../utils/branchScope");
 
 // 1. Create Missed Sale
 const addMissedSale = async (req, res) => {
@@ -29,7 +30,7 @@ const addMissedSale = async (req, res) => {
       cleanedBody.missedDate = new Date(cleanedBody.missedDate);
     }
     
-    const data = await PharmMissedSale.create(cleanedBody);
+    const data = await PharmMissedSale.create(assignBranchIdForCreate(req, cleanedBody));
     console.log('Missed sale created successfully:', data._id);
     
     return res.status(200).json({ status: "ok", data: data });
@@ -47,6 +48,9 @@ const getMissedSales = async (req, res) => {
     const limit = req.query.limit ? parseInt(req.query.limit) : 20;
 
     const baseQuery = {};
+
+    const branchQ = await mergeBranchScopedQuery(req);
+    if (branchQ) Object.assign(baseQuery, branchQ);
 
     // Optional filters
     if (req.query.status) {
@@ -106,8 +110,10 @@ const getMissedSales = async (req, res) => {
 const getMissedSaleById = async (req, res) => {
   try {
     const id = req.params.id;
-    const data = await PharmMissedSale.findById(id)
-      .populate(['pharmItemId', 'createdBy', 'resolvedBy']);
+    const data = await PharmMissedSale.findById(id).populate(["pharmItemId", "createdBy", "resolvedBy"]);
+    if (!data || !(await branchDocumentVisible(req, data.branchId))) {
+      return res.status(404).json({ status: "fail", message: "Missed sale not found" });
+    }
     return res.status(200).json({ status: "ok", data: data });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -118,6 +124,10 @@ const getMissedSaleById = async (req, res) => {
 const updateMissedSale = async (req, res) => {
   try {
     let id = req.params.id;
+    const existing = await PharmMissedSale.findById(id);
+    if (!existing || !(await branchDocumentVisible(req, existing.branchId))) {
+      return res.status(404).json({ status: "fail", message: "Missed sale not found" });
+    }
     const data = await PharmMissedSale.findByIdAndUpdate(
       id,
       { ...req.body },
@@ -133,6 +143,10 @@ const updateMissedSale = async (req, res) => {
 const deleteMissedSale = async (req, res) => {
   try {
     const id = req.params.id;
+    const row = await PharmMissedSale.findById(id);
+    if (!row || !(await branchDocumentVisible(req, row.branchId))) {
+      return res.status(404).json({ status: "fail", message: "Missed sale not found" });
+    }
     await PharmMissedSale.findByIdAndDelete(id);
     return res
       .status(200)
@@ -147,7 +161,12 @@ const resolveMissedSale = async (req, res) => {
   try {
     const id = req.params.id;
     const { resolvedBy, resolution } = req.body;
-    
+
+    const existing = await PharmMissedSale.findById(id);
+    if (!existing || !(await branchDocumentVisible(req, existing.branchId))) {
+      return res.status(404).json({ status: "fail", message: "Missed sale not found" });
+    }
+
     const data = await PharmMissedSale.findByIdAndUpdate(
       id,
       { 
@@ -168,15 +187,22 @@ const resolveMissedSale = async (req, res) => {
 // 7. Get Missed Sale Statistics
 const getMissedSaleStats = async (req, res) => {
   try {
-    const totalMissedSales = await PharmMissedSale.countDocuments();
-    const pendingMissedSales = await PharmMissedSale.countDocuments({ status: 'Pending' });
-    const resolvedMissedSales = await PharmMissedSale.countDocuments({ status: 'Resolved' });
-    
+    const branchQ = await mergeBranchScopedQuery(req);
+    const scope = branchQ || {};
+
+    const totalMissedSales = await PharmMissedSale.countDocuments(scope);
+    const pendingMissedSales = await PharmMissedSale.countDocuments({ ...scope, status: "Pending" });
+    const resolvedMissedSales = await PharmMissedSale.countDocuments({ ...scope, status: "Resolved" });
+
+    const matchStages = branchQ ? [{ $match: branchQ }] : [];
+
     const totalLoss = await PharmMissedSale.aggregate([
-      { $group: { _id: null, total: { $sum: "$estimatedLoss" } } }
+      ...matchStages,
+      { $group: { _id: null, total: { $sum: "$estimatedLoss" } } },
     ]);
 
     const reasonStats = await PharmMissedSale.aggregate([
+      ...matchStages,
       { $group: { _id: "$reason", count: { $sum: 1 }, totalLoss: { $sum: "$estimatedLoss" } } },
       { $sort: { count: -1 } }
     ]);

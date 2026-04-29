@@ -3,6 +3,7 @@ import { Table, Button, message, Select } from 'antd';
 
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 import axios from 'axios';
+import { Base_url } from '../../../utils/Base_url';
 import { FaRegEdit, FaEye } from 'react-icons/fa';
 import { RiDeleteBin5Line } from 'react-icons/ri';
 import Swal from 'sweetalert2';
@@ -11,11 +12,17 @@ import moment from 'moment';
 
 const { Option } = Select;
 
-const ExpenseList = () => {
+type ExpenseListProps = {
+  module?: string;
+  pageName?: string;
+};
+
+const ExpenseList: React.FC<ExpenseListProps> = ({ module, pageName }) => {
   const [expenses, setExpenses] = useState([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
+  const [pageSize, setPageSize] = useState(20);
   const [editingExpense, setEditingExpense] = useState(null);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -81,14 +88,21 @@ const ExpenseList = () => {
     },
   ];
 
-  const fetchExpenses = async (page, search = '', category = '') => {
+  const fetchExpenses = async (page, search = '', expenseCategoryId = '') => {
     try {
       setLoading(true);
-      const url = `https://api.holisticare.pk/apis/expense/get?page=${page}&search=${search}&category=${category}`;
-      const res = await axios.get(url);
+      const res = await axios.get(`${Base_url}/apis/expense/get`, {
+        params: {
+          page,
+          search,
+          ...(expenseCategoryId ? { expenseCategoryId } : {}),
+          ...(module ? { module } : {}),
+        },
+      });
       
       setExpenses(res.data.data);
-      setTotalPages(res.data.totalPages);
+      setTotalCount(res.data.count || 0);
+      setPageSize(res.data.limit || 20);
     } catch (error) {
       message.error('Failed to fetch expenses');
     } finally {
@@ -98,8 +112,10 @@ const ExpenseList = () => {
 
   const fetchCategories = async () => {
     try {
-      const res = await axios.get('https://api.holisticare.pk/apis/expenseCategory/get');
-      setCategories(res.data.data);
+      const res = await axios.get(`${Base_url}/apis/expenseCategory/get`, {
+        params: { page: 1, limit: 1000 },
+      });
+      setCategories(res.data.data || []);
     } catch (error) {
       message.error('Failed to fetch categories');
     }
@@ -126,7 +142,7 @@ const ExpenseList = () => {
       cancelButtonText: "Cancel",
     }).then((result) => {
       if (result.isConfirmed) {
-        axios.delete(`https://api.holisticare.pk/apis/expense/delete/${id}`)
+        axios.delete(`${Base_url}/apis/expense/delete/${id}`)
           .then((res) => {
             if (res.data.status === 'ok') {
               Swal.fire({
@@ -194,7 +210,7 @@ const ExpenseList = () => {
 
   return (
     <>
-      <Breadcrumb pageName="Expense Management" />
+      <Breadcrumb pageName={pageName || "Expense Management"} />
 
       <AddExpense
         isModalOpen={isModalOpen}
@@ -202,6 +218,7 @@ const ExpenseList = () => {
         fetchExpenses={() => fetchExpenses(currentPage, searchTerm, filterCategory)}
         selectedExpense={editingExpense}
         categories={categories}
+        module={module}
       />
 
       <div className="mb-5 flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
@@ -252,8 +269,8 @@ const ExpenseList = () => {
           dataSource={expenses}
           pagination={{ 
             current: currentPage, 
-            pageSize: 10, 
-            total: totalPages * 10,
+            pageSize: pageSize, 
+            total: totalCount,
             showSizeChanger: false,
             showQuickJumper: true,
           }}

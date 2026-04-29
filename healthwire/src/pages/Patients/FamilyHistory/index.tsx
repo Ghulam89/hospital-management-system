@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, message, DatePicker, Space } from 'antd';
+import { Table, Button, message, DatePicker, Modal } from 'antd';
 import { Link, useParams } from 'react-router-dom';
 import axios from 'axios';
 import { RiDeleteBin5Line, RiFile2Line, RiEdit2Line } from 'react-icons/ri';
@@ -142,14 +142,23 @@ const FamilyHistory = () => {
   }, [pagination.current, pagination.pageSize, dateRange]);
 
   const handleDelete = async (id) => {
-    try {
-      await axios.delete(`${Base_url}/apis/familyHistory/delete/${id}`);
-      message.success('Family history deleted successfully');
-      fetchFamilyHistory(pagination.current, pagination.pageSize);
-    } catch (err) {
-      message.error('Failed to delete family history');
-      console.error(err);
-    }
+    Modal.confirm({
+      title: 'Delete Family History?',
+      content: 'Are you sure you want to delete this record? This action cannot be undone.',
+      okText: 'Delete',
+      okType: 'danger',
+      cancelText: 'Cancel',
+      onOk: async () => {
+        try {
+          await axios.delete(`${Base_url}/apis/familyHistory/delete/${id}`);
+          message.success('Family history deleted successfully');
+          fetchFamilyHistory(pagination.current, pagination.pageSize);
+        } catch (err) {
+          message.error('Failed to delete family history');
+          console.error(err);
+        }
+      },
+    });
   };
 
   const handleTableChange = (newPagination) => {

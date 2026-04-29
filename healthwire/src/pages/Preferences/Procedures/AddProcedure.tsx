@@ -3,6 +3,7 @@ import Modal from '../../../components/modal';
 import { MdClose } from 'react-icons/md';
 import axios from 'axios';
 import { toast } from 'react-toastify';
+import { Base_url } from '../../../utils/Base_url';
 
 // Add a type for Department
 interface Department {
@@ -44,7 +45,7 @@ const AddProcedure = ({ isModalOpen, setIsModalOpen, selectedProcedure, fetchPro
 
   const fetchDepartments = async () => {
     try {
-      const response = await axios.get('https://api.holisticare.pk/apis/department/get');
+      const response = await axios.get(`${Base_url}/apis/department/get`);
       setDepartments(response?.data?.data || []);
     } catch (error) {
       toast.error('Failed to fetch departments');
@@ -96,8 +97,8 @@ const AddProcedure = ({ isModalOpen, setIsModalOpen, selectedProcedure, fetchPro
     };
 
       const request = selectedProcedure
-        ? axios.put(`https://api.holisticare.pk/apis/procedure/update/${selectedProcedure._id}`, payload)
-        : axios.post('https://api.holisticare.pk/apis/procedure/create', payload);
+        ? axios.put(`${Base_url}/apis/procedure/update/${selectedProcedure._id}`, payload)
+        : axios.post(`${Base_url}/apis/procedure/create`, payload);
 
       const res = await request;
 

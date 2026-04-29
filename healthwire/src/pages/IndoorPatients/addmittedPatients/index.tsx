@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, message, Input, Select } from 'antd';
+import { Table, Button, message, Input, Select, Modal } from 'antd';
 import { Link } from 'react-router-dom';
 import axios from 'axios';
 import { FaRegEdit } from 'react-icons/fa';
@@ -155,14 +155,23 @@ const AddmittedPatients = () => {
   };
 
   const handleDelete = (key: any) => {
-    axios.delete(`https://api.holisticare.pk/apis/admitPatient/delete/${key}`)
-      .then((res) => {
-        message.success('Patient deleted successfully');
-        fetchPatientData(currentPage);
-      })
-      .catch(err => {
-        message.error('Failed to delete patient');
-      });
+    Modal.confirm({
+      title: 'Delete Confirmation',
+      content: 'Are you sure you want to delete this admission record?',
+      okText: 'Yes, Delete',
+      cancelText: 'Cancel',
+      okButtonProps: { danger: true },
+      centered: true,
+      onOk: async () => {
+        try {
+          await axios.delete(`https://api.holisticare.pk/apis/admitPatient/delete/${key}`);
+          message.success('Patient deleted successfully');
+          fetchPatientData(currentPage);
+        } catch (err) {
+          message.error('Failed to delete patient');
+        }
+      },
+    });
   };
 
   const handleFilterChange = (name, value) => {

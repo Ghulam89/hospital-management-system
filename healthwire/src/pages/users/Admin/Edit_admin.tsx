@@ -9,110 +9,63 @@ import { toast } from 'react-toastify';
 import { Base_url } from '../../../utils/Base_url';
 
 const Edit_admin = () => {
+  const { id } = useParams();
   const [gender, setGender] = useState('');
-
-  console.log(gender);
-  
-  const [roleRights, setRoleRights] = useState({
-     
-    createUsers: '',
-    viewFinanicalReports:'',
-    editUsers:'',
-    administrator: ''
+  const [user, setUser] = useState(null);
+  const [state, setState] = useState({
+    name: '',
+    phone: '',
+    email: '',
+    password: '',
+    shift: '',
   });
 
-
-  const { id } = useParams();
-  const [user, setUser] = useState(null);
-
   useEffect(() => {
-    axios.put(`${Base_url}/apis/user/update/${id}`).then((res) => {
-      console.log(res.data);
-      
-      setUser(res.data.data);
-       if (res.data.data && ['Male', 'Female', 'Other'].includes(res.data.data.gender)) {
-        setGender(res.data.data.gender);
-      }
-
-      if (res.data.data.role === 'administrator') {
-        setRoleRights((prevRights) => ({
-          ...prevRights,
-          accountant: 'administrator', 
-        }));
-      }
-
-
-      if (res.data.data.tabs) {
-        res.data.data.tabs.forEach(item => {
-          if (roleRights[item] !== undefined) { 
-            setRoleRights((prevRights) => ({
-              ...prevRights,
-              [item]: item,
-            }));
-          }
+    axios
+      .get(`${Base_url}/apis/user/get/${id}`)
+      .then((res) => {
+        const u = res.data.data;
+        setUser(u);
+        if (u && ['Male', 'Female', 'Other'].includes(u.gender)) {
+          setGender(u.gender);
+        }
+        setState({
+          name: u?.name || '',
+          phone: u?.phone || '',
+          email: u?.email || '',
+          password: '',
+          shift: u?.shift || '',
         });
-      }
-       
-      }).catch(err => {
-       
-      });
-    }, [id]);
-  
-    console.log(roleRights);
-    
-  
-    const handleRoleRightChange = (right) => {
-      setRoleRights((prevRights) => ({
-        ...prevRights,
-        [right]: prevRights[right] ? '' : right,
-      }));
-    };
-    
-  
-    const handleGenderChange = (gender) => {
-      setGender(gender);
-    };
+      })
+      .catch(() => {});
+  }, [id]);
 
-
-
-
-  const [state,setState] = useState({
-   name:"",
-   phone:"",
-   email:"",
-   password:"",
-   shift:"" 
-  })
+  const handleGenderChange = (g) => {
+    setGender(g);
+  };
 
   const handleInputs = (e) => {
     setState({ ...state, [e.target.name]: e.target.value });
   };
-  console.log(state);
 
   const navigate = useNavigate();
 
-  const SubmitFun =(e)=>{
-
+  const SubmitFun = (e) => {
     e.preventDefault();
 
-    const params={
-      name:state.name,
-      gender:gender,
-      phone:state.phone,
-      email:state.email,
-      password:state.password,
-      shift:state.shift,
-      role:roleRights.accountant,
-      tabs: [
-        roleRights.editInvoice,
-        roleRights.editExpenses,
-        roleRights.viewLaboratoryReports,
-        roleRights.refundPayment
-      ].filter(tab => tab !== '' && tab !== ' '),
+    const params = {
+      name: String(state.name || '').trim() || String(user?.name || '').trim(),
+      gender: String(gender || '').trim() || String(user?.gender || '').trim(),
+      phone: String(state.phone || '').trim() || String(user?.phone || '').trim(),
+      email: String(state.email || '').trim() || String(user?.email || '').trim(),
+      shift: String(state.shift || '').trim() || String(user?.shift || '').trim(),
+      role: String(user?.role || 'administrator').trim(),
+      tabs: Array.isArray(user?.tabs) ? user.tabs : [],
+    };
+    const password = String(state.password || '').trim();
+    if (password) params.password = password;
 
-
-    }
-        axios.put(`https://api.holisticare.pk/apis/user/update/${id}`,params).then((res)=>{
+        axios.put(`${Base_url}/apis/user/update/${id}`,params).then((res)=>{
 
           console.log(res.data);
 
@@ -129,7 +82,9 @@ const Edit_admin = () => {
     
         console.log(error);
         
-          toast.error(error.response.data.message)
+          toast.error(
+            error?.response?.data?.message || error?.message || 'Request failed',
+          )
           
         })
       
@@ -264,399 +219,7 @@ const Edit_admin = () => {
                       defaultValue={user?.shift}
                     />
                   </div>
-
-                  <div className="w-full">
-                    <label className="mb-2.5 block text-black dark:text-white">
-                      Roles
-                    </label>
-                    <div>
-                      <label className="flex cursor-pointer select-none items-center">
-                        <div className="relative">
-                          <input
-                            type="checkbox"
-                            id="roleAdministrator"
-                            className="sr-only"
-                            checked={roleRights.administrator === 'administrator'}
-                            onChange={() => handleRoleRightChange('administrator')}
-                          />
-                          <div
-            className={`mr-4 flex h-5 w-5 items-center justify-center rounded border ${
-              roleRights.administrator === 'administrator' ? 'border-primary bg-gray dark:bg-transparent' : ''
-            }`}
-          >
-                            {roleRights.administrator === 'administrator' && (
-                              <svg
-                                width="11"
-                                height="8"
-                                viewBox="0 0 11 8"
-                                fill="none"
-                                xmlns="http://www.w3.org/2000/svg"
-                              >
-                                <path
-                                  d="M10.0915 0.951972L10.0867 0.946075L10.0813 0.940568C9.90076 0.753564 9.61034 0.753146 9.42927 0.939309L4.16201 6.22962L1.58507 3.63469C1.40401 3.44841 1.11351 3.44879 0.932892 3.63584C0.755703 3.81933 0.755703 4.10875 0.932892 4.29224L0.932878 4.29225L0.934851 4.29424L3.58046 6.95832C3.73676 7.11955 3.94983 7.2 4.1473 7.2C4.36196 7.2 4.55963 7.11773 4.71406 6.9584L10.0468 1.60234C10.2436 1.4199 10.2421 1.1339 10.0915 0.951972Z"
-                                  fill="#3056D3"
-                                  stroke="#3056D3"
-                                  strokeWidth="0.4"
-                                />
-                              </svg>
-                            )}
-                          </div>
-                        </div>
-                        Administrator (Complete Access)
-                      </label>
-                    </div>
-                  </div>
-
-
-
-               
                 </div>
-                <div className="w-full pt-8">
-                    <label className="mb-2.5 block text-black dark:text-white">
-                    Admin Role User  Rights
-                    </label>
-                  
-                  </div>
-
-                  <div className=' grid grid-cols-4'>
-                  
-                  <div>
-                  <div className="flex flex-col pt-4 gap-5">
-                    <div>
-                      <label className="flex cursor-pointer select-none items-center">
-                        <div className="relative">
-                          <input
-                            type="checkbox"
-                            id="createUsers"
-                            className="sr-only"
-                            checked={roleRights.createUsers}
-                            onChange={() =>
-                              handleRoleRightChange('createUsers')
-                            }
-                          />
-                          <div
-                            className={`mr-4 flex h-5 w-5 items-center justify-center rounded border ${
-                              roleRights.createUsers &&
-                              'border-primary bg-gray dark:bg-transparent'
-                            }`}
-                          >
-                            {roleRights.createUsers && (
-                              <svg
-                                width="11"
-                                height="8"
-                                viewBox="0 0 11 8"
-                                fill="none"
-                                xmlns="http://www.w3.org/2000/svg"
-                              >
-                                <path
-                                  d="M10.0915 0.951972L10.0867 0.946075L10.0813 0.940568C9.90076 0.753564 9.61034 0.753146 9.42927 0.939309L4.16201 6.22962L1.58507 3.63469C1.40401 3.44841 1.11351 3.44879 0.932892 3.63584C0.755703 3.81933 0.755703 4.10875 0.932892 4.29224L0.932878 4.29225L0.934851 4.29424L3.58046 6.95832C3.73676 7.11955 3.94983 7.2 4.1473 7.2C4.36196 7.2 4.55963 7.11773 4.71406 6.9584L10.0468 1.60234C10.2436 1.4199 10.2421 1.1339 10.0915 0.951972Z"
-                                  fill="#3056D3"
-                                  stroke="#3056D3"
-                                  strokeWidth="0.4"
-                                />
-                              </svg>
-                            )}
-                          </div>
-                        </div>
-                        Create Users
-                      </label>
-                    </div>
-                    <div>
-                      <label className="flex cursor-pointer select-none items-center">
-                        <div className="relative">
-                          <input
-                            type="checkbox"
-                            id="viewFinanicalReports"
-                            className="sr-only"
-                            checked={roleRights.viewFinanicalReports}
-                            onChange={() =>
-                              handleRoleRightChange('viewFinanicalReports')
-                            }
-                          />
-                          <div
-                            className={`mr-4 flex h-5 w-5 items-center justify-center rounded border ${
-                              roleRights.viewFinanicalReports &&
-                              'border-primary bg-gray dark:bg-transparent'
-                            }`}
-                          >
-                            {roleRights.viewFinanicalReports && (
-                              <svg
-                                width="11"
-                                height="8"
-                                viewBox="0 0 11 8"
-                                fill="none"
-                                xmlns="http://www.w3.org/2000/svg"
-                              >
-                                <path
-                                  d="M10.0915 0.951972L10.0867 0.946075L10.0813 0.940568C9.90076 0.753564 9.61034 0.753146 9.42927 0.939309L4.16201 6.22962L1.58507 3.63469C1.40401 3.44841 1.11351 3.44879 0.932892 3.63584C0.755703 3.81933 0.755703 4.10875 0.932892 4.29224L0.932878 4.29225L0.934851 4.29424L3.58046 6.95832C3.73676 7.11955 3.94983 7.2 4.1473 7.2C4.36196 7.2 4.55963 7.11773 4.71406 6.9584L10.0468 1.60234C10.2436 1.4199 10.2421 1.1339 10.0915 0.951972Z"
-                                  fill="#3056D3"
-                                  stroke="#3056D3"
-                                  strokeWidth="0.4"
-                                />
-                              </svg>
-                            )}
-                          </div>
-                        </div>
-                        View Finanical Reports
-                      </label>
-                    </div>
-                  
-                  </div>
-
-
-               
-                  </div>
-                  <div>
-                  <div className="flex flex-col pt-4 gap-5">
-                    <div>
-                      <label className="flex cursor-pointer select-none items-center">
-                        <div className="relative">
-                          <input
-                            type="checkbox"
-                            id="editUsers"
-                            className="sr-only"
-                            checked={roleRights.editUsers}
-                            onChange={() =>
-                              handleRoleRightChange('editUsers')
-                            }
-                          />
-                          <div
-                            className={`mr-4 flex h-5 w-5 items-center justify-center rounded border ${
-                              roleRights.editUsers &&
-                              'border-primary bg-gray dark:bg-transparent'
-                            }`}
-                          >
-                            {roleRights.editUsers && (
-                              <svg
-                                width="11"
-                                height="8"
-                                viewBox="0 0 11 8"
-                                fill="none"
-                                xmlns="http://www.w3.org/2000/svg"
-                              >
-                                <path
-                                  d="M10.0915 0.951972L10.0867 0.946075L10.0813 0.940568C9.90076 0.753564 9.61034 0.753146 9.42927 0.939309L4.16201 6.22962L1.58507 3.63469C1.40401 3.44841 1.11351 3.44879 0.932892 3.63584C0.755703 3.81933 0.755703 4.10875 0.932892 4.29224L0.932878 4.29225L0.934851 4.29424L3.58046 6.95832C3.73676 7.11955 3.94983 7.2 4.1473 7.2C4.36196 7.2 4.55963 7.11773 4.71406 6.9584L10.0468 1.60234C10.2436 1.4199 10.2421 1.1339 10.0915 0.951972Z"
-                                  fill="#3056D3"
-                                  stroke="#3056D3"
-                                  strokeWidth="0.4"
-                                />
-                              </svg>
-                            )}
-                          </div>
-                        </div>
-                        Edit Users
-                      </label>
-                    </div>
-                    <div>
-                      <label className="flex cursor-pointer select-none items-center">
-                        <div className="relative">
-                          <input
-                            type="checkbox"
-                            id="viewOtherReports"
-                            className="sr-only"
-                            checked={roleRights.viewOtherReports}
-                            onChange={() =>
-                              handleRoleRightChange('viewOtherReports')
-                            }
-                          />
-                          <div
-                            className={`mr-4 flex h-5 w-5 items-center justify-center rounded border ${
-                              roleRights.viewOtherReports &&
-                              'border-primary bg-gray dark:bg-transparent'
-                            }`}
-                          >
-                            {roleRights.viewOtherReports && (
-                              <svg
-                                width="11"
-                                height="8"
-                                viewBox="0 0 11 8"
-                                fill="none"
-                                xmlns="http://www.w3.org/2000/svg"
-                              >
-                                <path
-                                  d="M10.0915 0.951972L10.0867 0.946075L10.0813 0.940568C9.90076 0.753564 9.61034 0.753146 9.42927 0.939309L4.16201 6.22962L1.58507 3.63469C1.40401 3.44841 1.11351 3.44879 0.932892 3.63584C0.755703 3.81933 0.755703 4.10875 0.932892 4.29224L0.932878 4.29225L0.934851 4.29424L3.58046 6.95832C3.73676 7.11955 3.94983 7.2 4.1473 7.2C4.36196 7.2 4.55963 7.11773 4.71406 6.9584L10.0468 1.60234C10.2436 1.4199 10.2421 1.1339 10.0915 0.951972Z"
-                                  fill="#3056D3"
-                                  stroke="#3056D3"
-                                  strokeWidth="0.4"
-                                />
-                              </svg>
-                            )}
-                          </div>
-                        </div>
-                        View Other Reports
-                      </label>
-                    </div>
-                   
-                  </div>
-                  </div>
-                  <div>
-                  <div className="flex flex-col pt-4 gap-5">
-                    <div>
-                      <label className="flex cursor-pointer select-none items-center">
-                        <div className="relative">
-                          <input
-                            type="checkbox"
-                            id="deleteUsers"
-                            className="sr-only"
-                            checked={roleRights.deleteUsers}
-                            onChange={() =>
-                              handleRoleRightChange('deleteUsers')
-                            }
-                          />
-                          <div
-                            className={`mr-4 flex h-5 w-5 items-center justify-center rounded border ${
-                              roleRights.deleteUsers &&
-                              'border-primary bg-gray dark:bg-transparent'
-                            }`}
-                          >
-                            {roleRights.deleteUsers && (
-                              <svg
-                                width="11"
-                                height="8"
-                                viewBox="0 0 11 8"
-                                fill="none"
-                                xmlns="http://www.w3.org/2000/svg"
-                              >
-                                <path
-                                  d="M10.0915 0.951972L10.0867 0.946075L10.0813 0.940568C9.90076 0.753564 9.61034 0.753146 9.42927 0.939309L4.16201 6.22962L1.58507 3.63469C1.40401 3.44841 1.11351 3.44879 0.932892 3.63584C0.755703 3.81933 0.755703 4.10875 0.932892 4.29224L0.932878 4.29225L0.934851 4.29424L3.58046 6.95832C3.73676 7.11955 3.94983 7.2 4.1473 7.2C4.36196 7.2 4.55963 7.11773 4.71406 6.9584L10.0468 1.60234C10.2436 1.4199 10.2421 1.1339 10.0915 0.951972Z"
-                                  fill="#3056D3"
-                                  stroke="#3056D3"
-                                  strokeWidth="0.4"
-                                />
-                              </svg>
-                            )}
-                          </div>
-                        </div>
-                        Delete Users
-                      </label>
-                    </div>
-                    <div>
-                      <label className="flex cursor-pointer select-none items-center">
-                        <div className="relative">
-                          <input
-                            type="checkbox"
-                            id="deletePatient"
-                            className="sr-only"
-                            checked={roleRights.deletePatient}
-                            onChange={() =>
-                              handleRoleRightChange('deletePatient')
-                            }
-                          />
-                          <div
-                            className={`mr-4 flex h-5 w-5 items-center justify-center rounded border ${
-                              roleRights.deletePatient &&
-                              'border-primary bg-gray dark:bg-transparent'
-                            }`}
-                          >
-                            {roleRights.deletePatient && (
-                              <svg
-                                width="11"
-                                height="8"
-                                viewBox="0 0 11 8"
-                                fill="none"
-                                xmlns="http://www.w3.org/2000/svg"
-                              >
-                                <path
-                                  d="M10.0915 0.951972L10.0867 0.946075L10.0813 0.940568C9.90076 0.753564 9.61034 0.753146 9.42927 0.939309L4.16201 6.22962L1.58507 3.63469C1.40401 3.44841 1.11351 3.44879 0.932892 3.63584C0.755703 3.81933 0.755703 4.10875 0.932892 4.29224L0.932878 4.29225L0.934851 4.29424L3.58046 6.95832C3.73676 7.11955 3.94983 7.2 4.1473 7.2C4.36196 7.2 4.55963 7.11773 4.71406 6.9584L10.0468 1.60234C10.2436 1.4199 10.2421 1.1339 10.0915 0.951972Z"
-                                  fill="#3056D3"
-                                  stroke="#3056D3"
-                                  strokeWidth="0.4"
-                                />
-                              </svg>
-                            )}
-                          </div>
-                        </div>
-                        Delete Patient
-                      </label>
-                    </div>
-                
-                  </div>
-                  </div>
-                  <div>
-                  <div className="flex flex-col pt-4 gap-5">
-                   
-                    <div>
-                      <label className="flex cursor-pointer select-none items-center">
-                        <div className="relative">
-                          <input
-                            type="checkbox"
-                            id="editPaymentInvoiceDate"
-                            className="sr-only"
-                            checked={roleRights.editPaymentInvoiceDate}
-                            onChange={() =>
-                              handleRoleRightChange('editPaymentInvoiceDate')
-                            }
-                          />
-                          <div
-                            className={`mr-4 flex h-5 w-5 items-center justify-center rounded border ${
-                              roleRights.editPaymentInvoiceDate &&
-                              'border-primary bg-gray dark:bg-transparent'
-                            }`}
-                          >
-                            {roleRights.editPaymentInvoiceDate && (
-                              <svg
-                                width="11"
-                                height="8"
-                                viewBox="0 0 11 8"
-                                fill="none"
-                                xmlns="http://www.w3.org/2000/svg"
-                              >
-                                <path
-                                  d="M10.0915 0.951972L10.0867 0.946075L10.0813 0.940568C9.90076 0.753564 9.61034 0.753146 9.42927 0.939309L4.16201 6.22962L1.58507 3.63469C1.40401 3.44841 1.11351 3.44879 0.932892 3.63584C0.755703 3.81933 0.755703 4.10875 0.932892 4.29224L0.932878 4.29225L0.934851 4.29424L3.58046 6.95832C3.73676 7.11955 3.94983 7.2 4.1473 7.2C4.36196 7.2 4.55963 7.11773 4.71406 6.9584L10.0468 1.60234C10.2436 1.4199 10.2421 1.1339 10.0915 0.951972Z"
-                                  fill="#3056D3"
-                                  stroke="#3056D3"
-                                  strokeWidth="0.4"
-                                />
-                              </svg>
-                            )}
-                          </div>
-                        </div>
-                        Edit Payment/Invoice Date
-                      </label>
-                    </div>
-                    <div>
-                      <label className="flex cursor-pointer select-none items-center">
-                        <div className="relative">
-                          <input
-                            type="checkbox"
-                            id="editExpenses"
-                            className="sr-only"
-                            checked={roleRights.editExpenses}
-                            onChange={() =>
-                              handleRoleRightChange('editExpenses')
-                            }
-                          />
-                          <div
-                            className={`mr-4 flex h-5 w-5 items-center justify-center rounded border ${
-                              roleRights.editExpenses &&
-                              'border-primary bg-gray dark:bg-transparent'
-                            }`}
-                          >
-                            {roleRights.editExpenses && (
-                              <svg
-                                width="11"
-                                height="8"
-                                viewBox="0 0 11 8"
-                                fill="none"
-                                xmlns="http://www.w3.org/2000/svg"
-                              >
-                                <path
-                                  d="M10.0915 0.951972L10.0867 0.946075L10.0813 0.940568C9.90076 0.753564 9.61034 0.753146 9.42927 0.939309L4.16201 6.22962L1.58507 3.63469C1.40401 3.44841 1.11351 3.44879 0.932892 3.63584C0.755703 3.81933 0.755703 4.10875 0.932892 4.29224L0.932878 4.29225L0.934851 4.29424L3.58046 6.95832C3.73676 7.11955 3.94983 7.2 4.1473 7.2C4.36196 7.2 4.55963 7.11773 4.71406 6.9584L10.0468 1.60234C10.2436 1.4199 10.2421 1.1339 10.0915 0.951972Z"
-                                  fill="#3056D3"
-                                  stroke="#3056D3"
-                                  strokeWidth="0.4"
-                                />
-                              </svg>
-                            )}
-                          </div>
-                        </div>
-                        Edit Expenses
-                      </label>
-                    </div>
-                  </div>
-                  </div>
-                    </div>
-
                 <div className="mt-4.5">
                   <button
                     type="submit"

@@ -6,6 +6,7 @@ import {
   Input,
   Button,
   message,
+  Modal,
   Card,
   Row,
   Col,
@@ -13,6 +14,7 @@ import {
   Spin,
 } from 'antd';
 import axios from 'axios';
+import dayjs, { type Dayjs } from 'dayjs';
 import moment from 'moment';
 import {
   RiDeleteBin5Line,
@@ -23,12 +25,14 @@ import {
 } from 'react-icons/ri';
 import logoDataUrl from '../../../images/logo-icon.png';
 import { Base_url } from '../../../utils/Base_url';
+import { AsyncPaginate, type LoadOptions } from 'react-select-async-paginate';
 
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 import * as XLSX from 'xlsx';
 import { useReactToPrint } from 'react-to-print';
 import { Link } from 'react-router-dom';
-import InvoicePdf from '../InvoicePdf/InvoicePdf';
+import { getInvoiceHeaderForPdf } from '../../../utils/branchPdfHeader';
+import { enrichInvoiceForPdf } from '../../../utils/enrichInvoiceForPdf';
 import { Document, Image, Page, pdf, StyleSheet, Text, View } from '@react-pdf/renderer';
 
 // TypeScript interfaces
@@ -67,6 +71,35 @@ interface Procedure {
   name: string;
 }
 
+type DoctorOption = {
+  value: string;
+  label: string;
+  doctorData?: any;
+};
+
+type DepartmentOption = {
+  value: string;
+  label: string;
+  departmentData?: any;
+};
+
+type ProcedureOption = {
+  value: string;
+  label: string;
+  procedureData?: any;
+};
+
+interface PatientOption {
+  label: string;
+  value: string;
+  patientData?: {
+    _id: string;
+    mr: string;
+    name: string;
+    phone?: string;
+  };
+}
+
 interface Payment {
   method: string;
 }
@@ -86,6 +119,7 @@ interface RawTransaction {
   totalPay: number;
   duePay: number;
   payment: Payment[];
+  branchId?: unknown;
 }
 
 interface TransformedTransaction {
@@ -107,10 +141,12 @@ interface TransformedTransaction {
   total: number;
   paid: number;
   due: number;
+  advance: number;
   doctorShare: number;
   hospitalShare: number;
   paymentMode: string;
   status: string;
+  branchId?: unknown;
 }
 
 interface PaginationState {
@@ -135,7 +171,13 @@ interface Filters {
   status: string;
   minAmount: string;
   maxAmount: string;
+  // which amount field min/max applies to
+  amountField: 'paid' | 'total' | 'discount' | 'due' | 'advance';
   dateRange: [moment.Moment, moment.Moment];
+  paymentDateStart?: string;
+  paymentDateEnd?: string;
+  quickPayment?: '' | 'paid' | 'due' | 'advance';
+  discountPercent?: string;
 }
 
 interface ApiResponse {
@@ -169,16 +211,21 @@ const FinancialReports = () => {
   const [paymentModes, setPaymentModes] = useState([
     'Cash',
     'Card',
-    'Credit',
     'Bank Transfer',
     'Cheque',
     'Insurance',
   ]);
   const tableRef = useRef<HTMLDivElement>(null);
+  const [selectedPatient, setSelectedPatient] = useState<PatientOption | null>(null);
+  const [selectedDoctor, setSelectedDoctor] = useState<DoctorOption | null>(null);
+  const [selectedDepartment, setSelectedDepartment] = useState<DepartmentOption | null>(null);
+  const [selectedProcedure, setSelectedProcedure] = useState<ProcedureOption | null>(null);
+  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<TransformedTransaction | null>(null);
 
 const [filters, setFilters] = useState<Filters>({
     startDate: moment().startOf('month'),
-    endDate: moment(),
+    endDate: moment().endOf('day'),
   department: '',
   paymentMode: '',
   doctor: '',
@@ -191,8 +238,12 @@ const [filters, setFilters] = useState<Filters>({
   status: '',
   minAmount: '',
   maxAmount: '',
-    dateRange: [moment().startOf('month'), moment()],
-  
+  amountField: 'paid',
+  dateRange: [moment().startOf('month'), moment().endOf('day')],
+  paymentDateStart: '',
+  paymentDateEnd: '',
+  quickPayment: '',
+  discountPercent: '',
 });
 
   // Fetch departments
@@ -218,8 +269,30 @@ const [filters, setFilters] = useState<Filters>({
       if (filters.patientPhone) baseParams.append('patientPhone', filters.patientPhone);
       if (filters.invoiceNumber) baseParams.append('invoiceNo', filters.invoiceNumber);
       if (filters.search) baseParams.append('search', filters.search);
-      if (filters.minAmount) baseParams.append('minTotalBill', filters.minAmount);
-      if (filters.maxAmount) baseParams.append('maxTotalBill', filters.maxAmount);
+      // Amount range (export) – mirror same mapping as filters
+      const amountField = filters.amountField || 'paid';
+      if (filters.minAmount) {
+        const min = Number(filters.minAmount);
+        if (Number.isFinite(min)) {
+          if (amountField === 'total') baseParams.append('minTotalBill', String(min));
+          else if (amountField === 'discount') baseParams.append('minDiscountBill', String(min));
+          else if (amountField === 'due') baseParams.append('minDue', String(min));
+          else if (amountField === 'advance') baseParams.append('minAdvance', String(min));
+          else if (amountField === 'refund') { /* frontend filter only */ }
+          else baseParams.append('minPaid', String(min));
+        }
+      }
+      if (filters.maxAmount) {
+        const max = Number(filters.maxAmount);
+        if (Number.isFinite(max)) {
+          if (amountField === 'total') baseParams.append('maxTotalBill', String(max));
+          else if (amountField === 'discount') baseParams.append('maxDiscountBill', String(max));
+          else if (amountField === 'due') baseParams.append('maxDue', String(max));
+          else if (amountField === 'advance') baseParams.append('maxAdvance', String(max));
+          else if (amountField === 'refund') { /* frontend filter only */ }
+          else baseParams.append('maxPaid', String(max));
+        }
+      }
       if (filters.procedure) baseParams.append('procedureId', filters.procedure);
       if (filters.paymentMode) baseParams.append('paymentMode', filters.paymentMode);
       // Date filtering same as fetchTransactions
@@ -287,6 +360,12 @@ const [filters, setFilters] = useState<Filters>({
           (sum: number, item: TransactionItem) => sum + (item.hospitalAmount || 0),
           0,
         ) || 0;
+        const refund = Array.isArray(transaction.payment)
+          ? transaction.payment.reduce((sum: number, p: any) => {
+              const v = Number(p?.paid) || 0;
+              return v < 0 ? sum + Math.abs(v) : sum;
+            }, 0)
+          : 0;
         return {
           invoiceNo: transaction.invoiceNo,
           date: transaction['invoiceDate' as any] || (transaction as any).date || transaction.createdAt,
@@ -302,6 +381,7 @@ const [filters, setFilters] = useState<Filters>({
           total: transaction.totalBill || 0,
           paid: transaction.totalPay || 0,
           due: transaction.duePay || 0,
+          refund,
           doctorShare,
           hospitalShare,
           paymentMode: transaction.payment?.[0]?.method || 'N/A',
@@ -322,6 +402,7 @@ const [filters, setFilters] = useState<Filters>({
         'TAX': t.tax.toLocaleString(),
         'TOTAL': t.total.toLocaleString(),
         'PAID': t.paid.toLocaleString(),
+        'REFUND': t.refund.toLocaleString(),
         'DUE': t.due.toLocaleString(),
         'DOCTOR SHARE': t.doctorShare.toLocaleString(),
         'HOSPITAL SHARE': t.hospitalShare.toLocaleString(),
@@ -343,6 +424,7 @@ const [filters, setFilters] = useState<Filters>({
           acc.tax += t.tax;
           acc.total += t.total;
           acc.paid += t.paid;
+          acc.refund += t.refund;
           acc.due += t.due;
           acc.doctorShare += t.doctorShare;
           acc.hospitalShare += t.hospitalShare;
@@ -354,6 +436,7 @@ const [filters, setFilters] = useState<Filters>({
           tax: 0,
           total: 0,
           paid: 0,
+          refund: 0,
           due: 0,
           doctorShare: 0,
           hospitalShare: 0,
@@ -379,6 +462,7 @@ const [filters, setFilters] = useState<Filters>({
             'TAX': totals.tax.toLocaleString(),
             'TOTAL': totals.total.toLocaleString(),
             'PAID': totals.paid.toLocaleString(),
+            'REFUND': totals.refund.toLocaleString(),
             'DUE': totals.due.toLocaleString(),
             'DOCTOR SHARE': totals.doctorShare.toLocaleString(),
             'HOSPITAL SHARE': totals.hospitalShare.toLocaleString(),
@@ -416,6 +500,181 @@ const [filters, setFilters] = useState<Filters>({
     } catch (error) {
       message.error('Failed to fetch procedures');
     }
+  };
+
+  const loadDoctorOptions: LoadOptions<DoctorOption, any, { page: number }> = async (
+    searchQuery,
+    _loadedOptions,
+    additional,
+  ) => {
+    const page = additional?.page ?? 1;
+    const limit = 20;
+
+    const res = await axios.get(`${Base_url}/apis/user/get`, {
+      params: {
+        role: 'doctor',
+        page,
+        limit,
+        ...(searchQuery ? { search: searchQuery } : {}),
+      },
+    });
+
+    const list = res?.data?.data || [];
+    const options: DoctorOption[] = (list || []).map((d: any) => ({
+      label: d?.name || 'Doctor',
+      value: d?._id,
+      doctorData: d,
+    }));
+
+    const totalPages = Number(res?.data?.totalPages) || 0;
+    const hasMore = totalPages ? page < totalPages : options.length === limit;
+
+    return {
+      options,
+      hasMore,
+      additional: { page: page + 1 },
+    };
+  };
+
+  const loadDepartmentOptions: LoadOptions<DepartmentOption, any, { page: number }> = async (
+    searchQuery,
+    _loadedOptions,
+    additional,
+  ) => {
+    const page = additional?.page ?? 1;
+    const limit = 20;
+
+    const res = await axios.get(`${Base_url}/apis/department/get`, {
+      params: {
+        page,
+        limit,
+        ...(searchQuery ? { search: searchQuery } : {}),
+      },
+    });
+
+    const responseData = res?.data;
+    const list = responseData?.data || responseData || [];
+    const options: DepartmentOption[] = (list || []).map((d: any) => ({
+      label: d?.name || 'Department',
+      value: d?._id,
+      departmentData: d,
+    }));
+
+    const totalPages = Number(responseData?.totalPages) || 0;
+    const currentPage = Number(responseData?.currentPage || responseData?.page) || page;
+    const hasMore = totalPages ? currentPage < totalPages : options.length === limit;
+
+    return {
+      options,
+      hasMore,
+      additional: { page: page + 1 },
+    };
+  };
+
+  const loadProcedureOptions: LoadOptions<ProcedureOption, any, { page: number }> = async (
+    searchQuery,
+    _loadedOptions,
+    additional,
+  ) => {
+    const page = additional?.page ?? 1;
+    const limit = 20;
+
+    const res = await axios.get(`${Base_url}/apis/procedure/get`, {
+      params: {
+        page,
+        limit,
+        ...(searchQuery ? { search: searchQuery } : {}),
+      },
+    });
+
+    const responseData = res?.data;
+    const list = responseData?.data || responseData || [];
+    const options: ProcedureOption[] = (list || []).map((p: any) => ({
+      label: p?.name || 'Procedure',
+      value: p?._id,
+      procedureData: p,
+    }));
+
+    const totalPages = Number(responseData?.totalPages) || 0;
+    const currentPage = Number(responseData?.currentPage || responseData?.page) || page;
+    const hasMore = totalPages ? currentPage < totalPages : options.length === limit;
+
+    return {
+      options,
+      hasMore,
+      additional: { page: page + 1 },
+    };
+  };
+
+  // Async patient search (MR / name / phone) – same behaviour as invoices list
+  const loadPatientOptions: LoadOptions<PatientOption, any, { page: number }> = async (
+    searchQuery,
+    _loadedOptions,
+    additional,
+  ) => {
+    const page = additional?.page ?? 1;
+    const limit = 20;
+
+    const res = await axios.get(`${Base_url}/apis/patient/get`, {
+      params: {
+        page,
+        limit,
+        ...(searchQuery ? { search: searchQuery } : {}),
+      },
+    });
+
+    const responseData = res?.data;
+    const list = responseData?.data || responseData || [];
+
+    const options: PatientOption[] = (list || []).map((p: any) => ({
+      value: p?._id,
+      label: p?.name || 'Patient',
+      patientData: p,
+    }));
+
+    const totalPages = Number(responseData?.totalPages) || 0;
+    const currentPage = Number(responseData?.currentPage || responseData?.page) || page;
+    const hasMore = totalPages ? currentPage < totalPages : options.length === limit;
+
+    return {
+      options,
+      hasMore,
+      additional: { page: currentPage + 1 },
+    };
+  };
+  const parsePayDateToTs = (payDate: any) => {
+    if (!payDate) return null;
+    if (typeof payDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(payDate)) {
+      const [y, m, d] = payDate.split('-').map((v) => Number(v));
+      if (!y || !m || !d) return null;
+      const local = new Date(y, m - 1, d);
+      return Number.isFinite(local.getTime()) ? local.getTime() : null;
+    }
+    const d = dayjs(payDate);
+    return d.isValid() ? d.valueOf() : null;
+  };
+  const parsePayDateToTsWithFallback = (payDate: any, fallbackDateTime: any) => {
+    if (!payDate) return null;
+    if (
+      typeof payDate === 'string' &&
+      /^\d{4}-\d{2}-\d{2}T00:00:00(\.000)?Z$/.test(payDate)
+    ) {
+      return parsePayDateToTsWithFallback(payDate.slice(0, 10), fallbackDateTime);
+    }
+    if (typeof payDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(payDate)) {
+      const baseTs = parsePayDateToTs(payDate);
+      if (!baseTs) return baseTs;
+      const fb = dayjs(fallbackDateTime);
+      if (!fb.isValid()) return baseTs;
+      const base = dayjs(baseTs);
+      return base
+        .hour(fb.hour())
+        .minute(fb.minute())
+        .second(fb.second())
+        .millisecond(fb.millisecond())
+        .valueOf();
+    }
+    return parsePayDateToTs(payDate);
   };
   const fetchTransactions = async (page = 1, pageSize = 20, retryCount = 0) => {
     setLoading(true);
@@ -472,10 +731,34 @@ const [filters, setFilters] = useState<Filters>({
       if (filters.invoiceNumber) queryParams.append('invoiceNo', filters.invoiceNumber);
       if (filters.search) queryParams.append('search', filters.search);
 
-      if (filters.minAmount) queryParams.append('minTotalBill', filters.minAmount);
-      if (filters.maxAmount) queryParams.append('maxTotalBill', filters.maxAmount);
+      // Amount range: decide which field to filter (default = Paid)
+      const amountField = filters.amountField || 'paid';
+      if (filters.minAmount) {
+        const min = Number(filters.minAmount);
+        if (Number.isFinite(min)) {
+          if (amountField === 'total') queryParams.append('minTotalBill', String(min));
+          else if (amountField === 'discount') queryParams.append('minDiscountBill', String(min));
+          else if (amountField === 'due') queryParams.append('minDue', String(min));
+          else if (amountField === 'advance') queryParams.append('minAdvance', String(min));
+          else if (amountField === 'refund') { /* frontend filter only */ }
+          else queryParams.append('minPaid', String(min));
+        }
+      }
+      if (filters.maxAmount) {
+        const max = Number(filters.maxAmount);
+        if (Number.isFinite(max)) {
+          if (amountField === 'total') queryParams.append('maxTotalBill', String(max));
+          else if (amountField === 'discount') queryParams.append('maxDiscountBill', String(max));
+          else if (amountField === 'due') queryParams.append('maxDue', String(max));
+          else if (amountField === 'advance') queryParams.append('maxAdvance', String(max));
+          else if (amountField === 'refund') { /* frontend filter only */ }
+          else queryParams.append('maxPaid', String(max));
+        }
+      }
       if (filters.procedure) queryParams.append('procedureId', filters.procedure);
       if (filters.paymentMode) queryParams.append('paymentMode', filters.paymentMode);
+      if (filters.paymentDateStart) queryParams.append('paymentDateStart', filters.paymentDateStart);
+      if (filters.paymentDateEnd) queryParams.append('paymentDateEnd', filters.paymentDateEnd);
       
       // Add pagination parameters
       queryParams.append('page', page.toString());
@@ -505,9 +788,20 @@ const [filters, setFilters] = useState<Filters>({
       
       // Debug: Log the filter dates and data received
       console.log('Filter dates:', {
-        startDate: filters.startDate?.format('YYYY-MM-DD'),
-        endDate: filters.endDate?.format('YYYY-MM-DD'),
-        isSameDay: filters.startDate?.isSame(filters.endDate, 'day')
+        startDate:
+          (filters.startDate && typeof (filters.startDate as any).format === 'function')
+            ? (filters.startDate as any).format('YYYY-MM-DD')
+            : undefined,
+        endDate:
+          (filters.endDate && typeof (filters.endDate as any).format === 'function')
+            ? (filters.endDate as any).format('YYYY-MM-DD')
+            : undefined,
+        isSameDay:
+          (filters.startDate &&
+           filters.endDate &&
+           typeof (filters.startDate as any).isSame === 'function')
+            ? (filters.startDate as any).isSame(filters.endDate, 'day')
+            : false
       });
       console.log('Raw data from API:', data.map(item => ({
         invoiceNo: item.invoiceNo,
@@ -559,6 +853,39 @@ const [filters, setFilters] = useState<Filters>({
         }
       }
 
+      if (filters.paymentDateStart || filters.paymentDateEnd) {
+        filteredData = filteredData.filter((t: RawTransaction) => {
+          const paymentTimestamps =
+            t.payment?.map((p: any) => parsePayDateToTs(p?.payDate)).filter((v: any) => typeof v === 'number') || [];
+          if (paymentTimestamps.length === 0) return false;
+
+          const paymentDateStrs = paymentTimestamps.map((ts: number) => dayjs(ts).format('YYYY-MM-DD'));
+          const start = filters.paymentDateStart || null;
+          const end = filters.paymentDateEnd || null;
+
+          if (start && end) {
+            return paymentDateStrs.some((d: string) => d >= start && d <= end);
+          } else if (start) {
+            return paymentDateStrs.some((d: string) => d >= start);
+          } else if (end) {
+            return paymentDateStrs.some((d: string) => d <= end);
+          }
+          return true;
+        });
+      }
+      
+      if (filters.discountPercent) {
+        const threshold = Number(filters.discountPercent);
+        if (Number.isFinite(threshold)) {
+          filteredData = filteredData.filter((t: RawTransaction) => {
+            const total = Number(t.totalBill) || 0;
+            const discount = Number(t.discountBill) || 0;
+            const pct = total > 0 ? (discount / total) * 100 : 0;
+            return pct >= threshold;
+          });
+        }
+      }
+
       const transformedData = filteredData.map((transaction: RawTransaction) => {
         // Add debug log
         console.log('Transaction department data:', {
@@ -575,6 +902,35 @@ const [filters, setFilters] = useState<Filters>({
           (sum: number, item: TransactionItem) => sum + (item.hospitalAmount || 0),
           0,
         );
+        const paymentEntries = Array.isArray(transaction.payment) ? transaction.payment : [];
+        const paymentEntriesWithTs = paymentEntries
+          .map((p: any) => ({
+            payDate: p?.payDate,
+            ts: parsePayDateToTsWithFallback(
+              p?.payDate,
+              p?.createdAt || p?.updatedAt || (transaction as any).updatedAt || (transaction as any).createdAt
+            ),
+          }))
+          .filter((p: any) => typeof p.ts === 'number');
+        const latestPayment = paymentEntriesWithTs.length
+          ? paymentEntriesWithTs.reduce((acc: any, cur: any) => (cur.ts > acc.ts ? cur : acc))
+          : null;
+        let selectedPayment = latestPayment;
+        const start = filters.paymentDateStart || null;
+        const end = filters.paymentDateEnd || null;
+        if (start || end) {
+          const inRange = (ts: number) => {
+            const d = dayjs(ts).format('YYYY-MM-DD');
+            if (start && end) return d >= start && d <= end;
+            if (start) return d >= start;
+            if (end) return d <= end;
+            return true;
+          };
+          const matched = paymentEntriesWithTs.filter((p: any) => inRange(p.ts));
+          if (matched.length > 0) {
+            selectedPayment = matched.reduce((acc: any, cur: any) => (cur.ts > acc.ts ? cur : acc));
+          }
+        }
   
         return {
           key: transaction._id,
@@ -589,23 +945,107 @@ const [filters, setFilters] = useState<Filters>({
           department: transaction.doctorId?.departmentId?.name || transaction.departmentData?.name || 'N/A',
           items: transaction.item.map((i) => i.description).join(', '),
           item: transaction.item,
+          branchId: transaction.branchId,
           subTotal: transaction.subTotalBill || 0,
           discount: transaction.discountBill || 0,
           tax: transaction.taxBill || 0,
           total: transaction.totalBill || 0,
           paid: transaction.totalPay || 0,
           due: transaction.duePay || 0,
+          refund: (Array.isArray(transaction.payment)
+            ? transaction.payment.reduce((sum: number, p: any) => {
+                const v = Number(p?.paid) || 0;
+                return v < 0 ? sum + Math.abs(v) : sum;
+              }, 0)
+            : 0),
+          advance: (() => {
+            const rawDue = Number(transaction.duePay) || 0;
+            const adv = Number((transaction as any).advancePay) || 0;
+            return adv > 0 ? adv : rawDue < 0 ? Math.abs(rawDue) : 0;
+          })(),
           doctorShare,
           hospitalShare,
           paymentMode: transaction.payment?.[0]?.method || 'N/A',
-          status: transaction.duePay > 0 ? 'Pending' : 'Paid',
+          paymentDate: selectedPayment?.payDate || latestPayment?.payDate || null,
+          paymentDateTs: selectedPayment?.ts || latestPayment?.ts || null,
+          status: (() => {
+            const adv = Number((transaction as any).advancePay) || 0;
+            const due = Number(transaction.duePay) || 0;
+            if (adv > 0 || due < 0) return 'Advance';
+            if (due === 0) return 'Paid';
+            return 'Pending';
+          })(),
         };
       });
   
-      setTransactions(transformedData);
-      // For server-side pagination, we don't need filteredTransactions
-      // as the API already returns the filtered/paginated data
-      setFilteredTransactions(transformedData);
+      let finalData = transformedData;
+      if (filters.minAmount) {
+        const min = Number(filters.minAmount);
+        if (Number.isFinite(min)) {
+          finalData = finalData.filter((t) => {
+            const value =
+              amountField === 'total'
+                ? t.total
+                : amountField === 'discount'
+                ? t.discount
+                : amountField === 'due'
+                ? t.due
+                : amountField === 'advance'
+                ? t.advance
+                : amountField === 'refund'
+                ? t.refund
+                : t.paid;
+            return Number(value) >= min;
+          });
+        }
+      }
+      if (filters.maxAmount) {
+        const max = Number(filters.maxAmount);
+        if (Number.isFinite(max)) {
+          finalData = finalData.filter((t) => {
+            const value =
+              amountField === 'total'
+                ? t.total
+                : amountField === 'discount'
+                ? t.discount
+                : amountField === 'due'
+                ? t.due
+                : amountField === 'advance'
+                ? t.advance
+                : amountField === 'refund'
+                ? t.refund
+                : t.paid;
+            return Number(value) <= max;
+          });
+        }
+      }
+      if (filters.minAmount || filters.maxAmount) {
+        finalData = [...finalData].sort((a, b) => {
+          const getValue = (x: any) =>
+            amountField === 'total'
+              ? x.total
+              : amountField === 'discount'
+              ? x.discount
+              : amountField === 'due'
+              ? x.due
+              : amountField === 'advance'
+              ? x.advance
+              : amountField === 'refund'
+              ? x.refund
+              : x.paid;
+          return Number(getValue(a)) - Number(getValue(b));
+        });
+      }
+      if (filters.quickPayment === 'paid') {
+        finalData = finalData.filter((t) => Number(t.paid) > 0);
+      } else if (filters.quickPayment === 'due') {
+        finalData = finalData.filter((t) => Number(t.due) > 0);
+      } else if (filters.quickPayment === 'advance') {
+        finalData = finalData.filter((t) => Number(t.advance) > 0);
+      }
+  
+      setTransactions(finalData);
+      setFilteredTransactions(finalData);
       
       // Update pagination state with debug logging
       console.log('Pagination data from API:', paginationData);
@@ -659,16 +1099,27 @@ const [filters, setFilters] = useState<Filters>({
       setLoading(false);
     }
   };
-  const handleDelete = (id: string) => {
-    axios
-      .delete(`${Base_url}/apis/invoice/delete/${id}`)
-      .then((res) => {
-        message.success('Invoice deleted successfully');
-        fetchTransactions(pagination.current, pagination.pageSize, 0);
-      })
-      .catch((err) => {
-        message.error('Failed to delete invoice');
-      });
+  const openDeleteModal = (record: TransformedTransaction) => {
+    setDeleteTarget(record);
+    setDeleteModalOpen(true);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    try {
+      await axios.delete(`${Base_url}/apis/invoice/delete/${deleteTarget._id}`);
+      message.success('Invoice deleted successfully');
+      setDeleteModalOpen(false);
+      setDeleteTarget(null);
+      fetchTransactions(pagination.current, pagination.pageSize, 0);
+    } catch (err) {
+      const anyErr = err as { response?: { data?: { message?: string; error?: string } } };
+      const detail =
+        anyErr?.response?.data?.message ||
+        anyErr?.response?.data?.error ||
+        (err instanceof Error ? err.message : null);
+      message.error(detail ? `Failed to delete invoice: ${detail}` : 'Failed to delete invoice');
+    }
   };
   useEffect(() => {
     fetchDepartments();
@@ -676,17 +1127,11 @@ const [filters, setFilters] = useState<Filters>({
     fetchProcedures();
   }, []);
 
-  // Fetch summary ONCE on initial load - FIXED summary (doesn't change with filters)
-  useEffect(() => {
-    if (departments.length > 0 && doctors.length > 0 && procedures.length > 0) {
-      fetchSummaryData(); // Fetch FIXED summary once
-    }
-  }, [departments, doctors, procedures]);
-
-  // Fetch transactions when filters change (table data changes, but summary stays fixed)
+  // Fetch transactions + summary when filters change
   useEffect(() => {
     if (departments.length > 0 && doctors.length > 0 && procedures.length > 0) {
       fetchTransactions(1, pagination.pageSize, 0);
+      fetchSummaryData();
     }
   }, [filters, departments, doctors, procedures]);
 
@@ -718,30 +1163,74 @@ const [filters, setFilters] = useState<Filters>({
     transactionCount: 0,
   });
 
-  // Fetch FIXED summary from BACKEND - NO filters applied (Total/Overall Summary)
+  const buildSummaryQueryParams = () => {
+    const queryParams = new URLSearchParams();
+
+    if (filters.doctor) queryParams.append('doctorId', filters.doctor);
+    if (filters.department) queryParams.append('departmentId', filters.department);
+
+    if (filters.startDate && filters.endDate) {
+      const startDate = filters.startDate.clone();
+      const endDate = filters.endDate.clone();
+
+      if (startDate.isSame(endDate, 'day')) {
+        queryParams.append('startDate', startDate.clone().startOf('day').toISOString());
+        queryParams.append('endDate', startDate.clone().endOf('day').toISOString());
+      } else {
+        queryParams.append('startDate', startDate.clone().startOf('day').toISOString());
+        queryParams.append('endDate', endDate.clone().endOf('day').toISOString());
+      }
+    }
+
+    if (filters.patientMR) queryParams.append('patientMR', filters.patientMR);
+    if (filters.status) queryParams.append('status', filters.status);
+    if (filters.patientName) queryParams.append('patientName', filters.patientName);
+    if (filters.patientPhone) queryParams.append('patientPhone', filters.patientPhone);
+    if (filters.invoiceNumber) queryParams.append('invoiceNo', filters.invoiceNumber);
+    if (filters.search) queryParams.append('search', filters.search);
+
+    // Amount range for summary – same mapping as in fetchTransactions
+    const amountField = filters.amountField || 'paid';
+    if (filters.minAmount) {
+      const min = Number(filters.minAmount);
+      if (Number.isFinite(min)) {
+        if (amountField === 'total') queryParams.append('minTotalBill', String(min));
+        else if (amountField === 'discount') queryParams.append('minDiscountBill', String(min));
+        else if (amountField === 'due') queryParams.append('minDue', String(min));
+        else if (amountField === 'advance') queryParams.append('minAdvance', String(min));
+        else queryParams.append('minPaid', String(min)); // default = paid
+      }
+    }
+    if (filters.maxAmount) {
+      const max = Number(filters.maxAmount);
+      if (Number.isFinite(max)) {
+        if (amountField === 'total') queryParams.append('maxTotalBill', String(max));
+        else if (amountField === 'discount') queryParams.append('maxDiscountBill', String(max));
+        else if (amountField === 'due') queryParams.append('maxDue', String(max));
+        else if (amountField === 'advance') queryParams.append('maxAdvance', String(max));
+        else queryParams.append('maxPaid', String(max)); // default = paid
+      }
+    }
+
+    if (filters.procedure) queryParams.append('procedureId', filters.procedure);
+    if (filters.paymentMode) queryParams.append('paymentMode', filters.paymentMode);
+    if (filters.paymentDateStart) queryParams.append('paymentDateStart', filters.paymentDateStart);
+    if (filters.paymentDateEnd) queryParams.append('paymentDateEnd', filters.paymentDateEnd);
+
+    return queryParams;
+  };
+
+  // Fetch summary from BACKEND with same filters/date-range as table
   const fetchSummaryData = async () => {
     try {
-      // NO filters - fetch overall/total summary (ALWAYS shows default/total data)
-      // Remove all filters to show complete total summary (861 invoices)
-      
-      console.log('📊 Fetching FIXED/TOTAL summary (NO filters applied - DEFAULT data)');
-      
-      // Always call summary API without any query params for default/total data
-      const summaryUrl = `${Base_url}/apis/invoice/summary`;
-      
-      console.log('📊 Summary API URL:', summaryUrl);
+      const queryParams = buildSummaryQueryParams();
+      const summaryUrl = `${Base_url}/apis/invoice/summary${queryParams.toString() ? `?${queryParams.toString()}` : ''}`;
 
-      // Call dedicated summary API - backend does ALL calculations (returns ALL data)
       const response = await axios.get(summaryUrl);
-      
-      console.log('📊 Fixed Summary API Response:', response.data);
 
       if (response.data.status === 'ok' && response.data.summary) {
         const backendSummary = response.data.summary;
-        
-        console.log('✅ FIXED Summary received (shows TOTAL data):', backendSummary);
-        
-        // Direct assignment - NO calculations, just display backend data
+
         setSummaryData({
           totalRevenue: backendSummary.totalRevenue || 0,
           totalTax: backendSummary.totalTax || 0,
@@ -752,8 +1241,6 @@ const [filters, setFilters] = useState<Filters>({
           totalHospitalShare: backendSummary.totalHospitalShare || 0,
           transactionCount: backendSummary.totalTransactions || 0,
         });
-        
-        console.log('✅ FIXED summary updated - shows overall totals regardless of table filters!');
       } else {
         console.warn('⚠️ Invalid summary response format:', response.data);
       }
@@ -936,6 +1423,7 @@ const [filters, setFilters] = useState<Filters>({
   const patient = invoice.patientId || {};
   const doctor = invoice.doctorId || {};
   const items = invoice.item || [];
+  const header = getInvoiceHeaderForPdf(invoice);
 
   console.log(invoice);
   
@@ -946,9 +1434,9 @@ const [filters, setFilters] = useState<Filters>({
         <View style={styles.header}>
           <Image src={logoDataUrl} style={styles.logo} />
           <View style={styles.clinicInfo}>
-            <Text style={styles.clinicName}>HOLISTIC CARE CLINIC</Text>
-            <Text style={styles.clinicAddress}>188-Y Block Phase III, DHA, Lahore, Punjab, Pakistan</Text>
-            <Text style={styles.clinicAddress}>Phone: 0342-4211888 | Email: info@holisticcare.com</Text>
+            <Text style={styles.clinicName}>{header.clinicName}</Text>
+            {header.addressLine ? <Text style={styles.clinicAddress}>{header.addressLine}</Text> : null}
+            <Text style={styles.clinicAddress}>{header.contactLine}</Text>
           </View>
         </View>
 
@@ -1022,7 +1510,7 @@ const [filters, setFilters] = useState<Filters>({
 
         <View style={styles.notes}>
           <Text>* Procedures & Medicines once purchased are non-refundable.</Text>
-          <Text>* Purchased Packages Are Valid for 80m (CW).</Text>
+          <Text>* Purchased Packages Are Valid For 06 Months Only.</Text>
         </View>
 
         <View style={styles.signature}>
@@ -1033,8 +1521,8 @@ const [filters, setFilters] = useState<Filters>({
         </View>
 
         <View style={styles.footer}>
-          <Text>Thank you for choosing Holistic Care Clinic</Text>
-          <Text>For any queries, please contact: 0342-4211888</Text>
+          <Text>{header.footerThanks}</Text>
+          <Text>{header.footerContactLine}</Text>
         </View>
       </Page>
     </Document>
@@ -1043,16 +1531,64 @@ const [filters, setFilters] = useState<Filters>({
  
 
 
-  const handleDateChange = (date, index) => {
-  const newDateRange = [...filters.dateRange];
-  newDateRange[index] = moment(date);
-  setFilters(prev => ({
-    ...prev,
-    dateRange: newDateRange,
-    startDate: newDateRange[0],
-    endDate: newDateRange[1]
-  }));
-};
+  const dateRangePresets = [
+    {
+      label: 'Today',
+      value: [dayjs().startOf('day'), dayjs().endOf('day')],
+    },
+    {
+      label: 'Yesterday',
+      value: [dayjs().subtract(1, 'day').startOf('day'), dayjs().subtract(1, 'day').endOf('day')],
+    },
+    {
+      label: 'This Week',
+      value: [dayjs().startOf('week').startOf('day'), dayjs().endOf('week').endOf('day')],
+    },
+    {
+      label: 'Last Week',
+      value: [dayjs().subtract(1, 'week').startOf('week').startOf('day'), dayjs().subtract(1, 'week').endOf('week').endOf('day')],
+    },
+    {
+      label: 'This Month',
+      value: [dayjs().startOf('month').startOf('day'), dayjs().endOf('month').endOf('day')],
+    },
+    {
+      label: 'Last Month',
+      value: [dayjs().subtract(1, 'month').startOf('month').startOf('day'), dayjs().subtract(1, 'month').endOf('month').endOf('day')],
+    },
+  ] satisfies Array<{ label: string; value: [Dayjs, Dayjs] }>;
+
+  const disabledDate = (current: Dayjs) => current && current > dayjs().endOf('day');
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem('financialReportFilters');
+      if (!raw) return;
+      const saved = JSON.parse(raw);
+      const startDate = saved.startDate ? moment(saved.startDate) : undefined;
+      const endDate = saved.endDate ? moment(saved.endDate) : undefined;
+      const dateRange = startDate && endDate ? [startDate, endDate] : undefined;
+      setFilters((prev) => ({
+        ...prev,
+        ...saved,
+        startDate: startDate || prev.startDate,
+        endDate: endDate || prev.endDate,
+        dateRange: dateRange || prev.dateRange,
+      }));
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    try {
+      const payload = {
+        ...filters,
+        startDate: filters.startDate ? filters.startDate.toISOString() : '',
+        endDate: filters.endDate ? filters.endDate.toISOString() : '',
+        paymentDateStart: filters.paymentDateStart || '',
+        paymentDateEnd: filters.paymentDateEnd || '',
+      };
+      localStorage.setItem('financialReportFilters', JSON.stringify(payload));
+    } catch {}
+  }, [filters]);
 
 const generatePdf = async (invoice) => {
 
@@ -1081,8 +1617,10 @@ const generatePdf = async (invoice) => {
     
     };
 
+    const forPdf = await enrichInvoiceForPdf(completeInvoice);
+
     // Create a new blob with the PDF
-    const blob = await pdf(<InvoicePdf invoice={completeInvoice} />).toBlob();
+    const blob = await pdf(<InvoicePdf invoice={forPdf} />).toBlob();
     
     // Create a URL for the blob
     const pdfUrl = URL.createObjectURL(blob);
@@ -1118,6 +1656,8 @@ const generatePdf = async (invoice) => {
       key: 'invoiceNo',
       width: 120,
       fixed: 'left',
+      sorter: (a, b) => String(a.invoiceNo || '').localeCompare(String(b.invoiceNo || '')),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'DATE',
@@ -1127,12 +1667,32 @@ const generatePdf = async (invoice) => {
           exportRender: (record) => moment(record.date).format('DD/MM/YYYY HH:mm'),
 
       width: 150,
+      sorter: (a, b) => dayjs(a.date).valueOf() - dayjs(b.date).valueOf(),
+      sortDirections: ['ascend', 'descend'],
+    },
+    {
+      title: 'PAYMENT DATE',
+      dataIndex: 'paymentDateTs',
+      key: 'paymentDate',
+      width: 180,
+      sorter: (a, b) => {
+        if (!a.paymentDateTs && !b.paymentDateTs) return 0;
+        if (!a.paymentDateTs) return 1;
+        if (!b.paymentDateTs) return -1;
+        return a.paymentDateTs - b.paymentDateTs;
+      },
+      render: (ts) => {
+        if (!ts) return 'N/A';
+        return dayjs(ts).format('DD/MM/YYYY - hh:mm A');
+      },
     },
     {
       title: 'MR#',
       dataIndex: 'patientMR',
       key: 'patientMR',
       width: 100,
+      sorter: (a, b) => String(a.patientMR || '').localeCompare(String(b.patientMR || '')),
+      sortDirections: ['ascend', 'descend'],
     },
     
     {
@@ -1147,24 +1707,32 @@ const generatePdf = async (invoice) => {
           </Link>
         );
       },
+      sorter: (a, b) => String(a.patientName || '').localeCompare(String(b.patientName || '')),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'PHONE',
       dataIndex: 'patientPhone',
       key: 'patientPhone',
       width: 120,
+      sorter: (a, b) => String(a.patientPhone || '').localeCompare(String(b.patientPhone || '')),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'DOCTOR',
       dataIndex: 'doctor',
       key: 'doctor',
       width: 150,
+      sorter: (a, b) => String(a.doctor || '').localeCompare(String(b.doctor || '')),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'DEPARTMENT',
       dataIndex: 'department',
       key: 'department',
       width: 150,
+      sorter: (a, b) => String(a.department || '').localeCompare(String(b.department || '')),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'ITEMS',
@@ -1172,6 +1740,8 @@ const generatePdf = async (invoice) => {
       key: 'items',
       ellipsis: true,
       width: 200,
+      sorter: (a, b) => String(a.items || '').localeCompare(String(b.items || '')),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'SUBTOTAL',
@@ -1179,6 +1749,8 @@ const generatePdf = async (invoice) => {
       key: 'subTotal',
       width: 100,
       render: (value) => value.toLocaleString(),
+      sorter: (a, b) => Number(a.subTotal) - Number(b.subTotal),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'DISCOUNT',
@@ -1186,6 +1758,8 @@ const generatePdf = async (invoice) => {
       key: 'discount',
       width: 100,
       render: (value) => value.toLocaleString(),
+      sorter: (a, b) => Number(a.discount) - Number(b.discount),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'TAX',
@@ -1193,6 +1767,8 @@ const generatePdf = async (invoice) => {
       key: 'tax',
       width: 100,
       render: (value) => value.toLocaleString(),
+      sorter: (a, b) => Number(a.tax) - Number(b.tax),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'TOTAL',
@@ -1200,6 +1776,8 @@ const generatePdf = async (invoice) => {
       key: 'total',
       width: 100,
       render: (value) => value.toLocaleString(),
+      sorter: (a, b) => Number(a.total) - Number(b.total),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'PAID',
@@ -1207,6 +1785,17 @@ const generatePdf = async (invoice) => {
       key: 'paid',
       width: 100,
       render: (value) => value.toLocaleString(),
+      sorter: (a, b) => Number(a.paid) - Number(b.paid),
+      sortDirections: ['ascend', 'descend'],
+    },
+    {
+      title: 'REFUND',
+      dataIndex: 'refund',
+      key: 'refund',
+      width: 100,
+      render: (value) => value.toLocaleString(),
+      sorter: (a, b) => Number(a.refund) - Number(b.refund),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'DUE',
@@ -1214,6 +1803,8 @@ const generatePdf = async (invoice) => {
       key: 'due',
       width: 100,
       render: (value) => value.toLocaleString(),
+      sorter: (a, b) => Number(a.due) - Number(b.due),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'DOCTOR SHARE',
@@ -1221,6 +1812,8 @@ const generatePdf = async (invoice) => {
       key: 'doctorShare',
       width: 120,
       render: (value) => value.toLocaleString(),
+      sorter: (a, b) => Number(a.doctorShare) - Number(b.doctorShare),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'HOSPITAL SHARE',
@@ -1228,12 +1821,16 @@ const generatePdf = async (invoice) => {
       key: 'hospitalShare',
       width: 120,
       render: (value) => value.toLocaleString(),
+      sorter: (a, b) => Number(a.hospitalShare) - Number(b.hospitalShare),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'PAYMENT MODE',
       dataIndex: 'paymentMode',
       key: 'paymentMode',
       width: 120,
+      sorter: (a, b) => String(a.paymentMode || '').localeCompare(String(b.paymentMode || '')),
+      sortDirections: ['ascend', 'descend'],
     },
      {
   title: 'Status',
@@ -1241,16 +1838,16 @@ const generatePdf = async (invoice) => {
   key: 'status',
   render: (_, record) => {
     // Calculate status based on duePay and totalPay
-    const status = record.paid >= record.total ? 'Paid' : 'Pending';
+    const status = record.status || (record.paid >= record.total ? 'Paid' : 'Pending');
     return (
       <span 
         style={{
-          color: status === 'Paid' ? '#52c41a' : '#f5222d',
-          backgroundColor: status === 'Paid' ? '#f6ffed' : '#fff1f0',
+          color: status === 'Paid' ? '#52c41a' : status === 'Advance' ? '#1890ff' : '#f5222d',
+          backgroundColor: status === 'Paid' ? '#f6ffed' : status === 'Advance' ? '#e6f7ff' : '#fff1f0',
           padding: '4px 8px',
           borderRadius: '4px',
           display: 'inline-block',
-          border: `1px solid ${status === 'Paid' ? '#b7eb8f' : '#ffa39e'}`
+          border: `1px solid ${status === 'Paid' ? '#b7eb8f' : status === 'Advance' ? '#91d5ff' : '#ffa39e'}`
         }}
       >
         {status}
@@ -1258,6 +1855,8 @@ const generatePdf = async (invoice) => {
     );
   },
   width: 120,
+  sorter: (a, b) => String(a.status || '').localeCompare(String(b.status || '')),
+  sortDirections: ['ascend', 'descend'],
 },
     {
   title: 'Action',
@@ -1281,7 +1880,7 @@ const generatePdf = async (invoice) => {
       <RiDeleteBin5Line
         color='red' 
         size={20} 
-        onClick={() => handleDelete(record._id)} 
+        onClick={() => openDeleteModal(record)} 
         style={{ cursor: 'pointer' }}
       />
     </div>
@@ -1368,7 +1967,15 @@ const generatePdf = async (invoice) => {
               {/* Summary Section - Modern UI */}
               <div className="mb-6">
                 <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-semibold text-gray-800">Overall Summary</h3>
+                  <h3 className="text-lg font-semibold text-gray-800">
+                    {(() => {
+                      const hasStart = Boolean(filters.startDate) && typeof (filters.startDate as any).format === 'function';
+                      const hasEnd = Boolean(filters.endDate) && typeof (filters.endDate as any).format === 'function';
+                      const startLabel = hasStart ? (filters.startDate as any).format('DD/MM/YYYY') : 'All';
+                      const endLabel = hasEnd ? (filters.endDate as any).format('DD/MM/YYYY') : 'All';
+                      return `Overall Summary (${startLabel} - ${endLabel})`;
+                    })()}
+                  </h3>
                   
                 </div>
 
@@ -1391,6 +1998,28 @@ const generatePdf = async (invoice) => {
                     </div>
                   </div>
 
+      <Modal
+        open={deleteModalOpen}
+        onCancel={() => setDeleteModalOpen(false)}
+        onOk={confirmDelete}
+        okText="Delete"
+        okButtonProps={{ danger: true }}
+        cancelText="Cancel"
+        title="Delete Invoice?"
+      >
+        <div style={{ display: 'grid', gap: 8 }}>
+          <div>Are you sure you want to delete this invoice? This action cannot be undone.</div>
+          {/* {deleteTarget && (
+            <div style={{ fontSize: 12, color: '#555' }}>
+              <div>Invoice No: {deleteTarget.invoiceNo}</div>
+              <div>Total: {Number(deleteTarget.total).toFixed(2)}</div>
+              <div>Paid: {Number(deleteTarget.paid).toFixed(2)}</div>
+              <div>Due: {Number(deleteTarget.due).toFixed(2)}</div>
+              <div>Advance: {Number(deleteTarget.advance || 0).toFixed(2)}</div>
+            </div>
+          )} */}
+        </div>
+      </Modal>
                   {/* Total Paid */}
                   <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-lg p-4 border border-blue-200 shadow-sm">
                     <div className="flex items-center justify-between">
@@ -1519,69 +2148,75 @@ const generatePdf = async (invoice) => {
               <Card title="Filters" className="mb-4">
                 <Row gutter={[16, 16]}>
                   <Col xs={24} sm={12} md={8} lg={6}>
-                    <Select
-                      style={{ width: '100%' }}
-                      value={filters.department}
-                      onChange={(value) =>
-                        setFilters({ ...filters, department: value })
-                      }
-                      allowClear
-                    >
-                      <Option value="" disabled>
-                        Select Departments
-                      </Option>
-                      {departments.map((dept) => (
-                        <Option key={dept._id} value={dept._id}>
-                          {dept.name}
-                        </Option>
-                      ))}
-                    </Select>
+                    <AsyncPaginate
+                      value={selectedDepartment}
+                      loadOptions={loadDepartmentOptions}
+                      onChange={(opt) => {
+                        const option = (opt as DepartmentOption | null) || null;
+                        setSelectedDepartment(option);
+                        setFilters((prev) => ({ ...prev, department: option?.value || '' }));
+                      }}
+                      additional={{ page: 1 }}
+                      placeholder="Select Departments"
+                      classNamePrefix="react-select"
+                      className="w-full"
+                      debounceTimeout={400}
+                      menuPortalTarget={document.body}
+                      menuPosition="fixed"
+                      styles={{
+                        menuPortal: (base) => ({ ...base, zIndex: 9999 }),
+                        control: (base) => ({ ...base, minHeight: '40px' }),
+                      }}
+                      isClearable
+                    />
                   </Col>
 
                   <Col xs={24} sm={12} md={8} lg={6}>
-                    <Select
+                    <AsyncPaginate
+                      value={selectedDoctor}
+                      loadOptions={loadDoctorOptions}
+                      onChange={(opt) => {
+                        const option = (opt as DoctorOption | null) || null;
+                        setSelectedDoctor(option);
+                        setFilters((prev) => ({ ...prev, doctor: option?.value || '' }));
+                      }}
+                      additional={{ page: 1 }}
                       placeholder="Select Doctor"
-                      style={{ width: '100%' }}
-                      value={filters.doctor}
-                      onChange={(value) =>
-                        setFilters({ ...filters, doctor: value })
-                      }
-                      allowClear
-                      showSearch
-                      optionFilterProp="children"
-                    >
-                      <Option value="" disabled>
-                        Select Doctor
-                      </Option>
-                      {doctors.map((doctor) => (
-                        <Option key={doctor._id} value={doctor._id}>
-                          {doctor.name}
-                        </Option>
-                      ))}
-                    </Select>
+                      classNamePrefix="react-select"
+                      className="w-full"
+                      debounceTimeout={400}
+                      menuPortalTarget={document.body}
+                      menuPosition="fixed"
+                      styles={{
+                        menuPortal: (base) => ({ ...base, zIndex: 9999 }),
+                        control: (base) => ({ ...base, minHeight: '40px' }),
+                      }}
+                      isClearable
+                    />
                   </Col>
 
                   <Col xs={24} sm={12} md={8} lg={6}>
-                    <Select
+                    <AsyncPaginate
+                      value={selectedProcedure}
+                      loadOptions={loadProcedureOptions}
+                      onChange={(opt) => {
+                        const option = (opt as ProcedureOption | null) || null;
+                        setSelectedProcedure(option);
+                        setFilters((prev) => ({ ...prev, procedure: option?.value || '' }));
+                      }}
+                      additional={{ page: 1 }}
                       placeholder="Select Procedure"
-                      style={{ width: '100%' }}
-                      value={filters.procedure}
-                      onChange={(value) =>
-                        setFilters({ ...filters, procedure: value })
-                      }
-                      allowClear
-                      showSearch
-                      optionFilterProp="children"
-                    >
-                      <Option value="" disabled>
-                        Select Procedure
-                      </Option>
-                      {procedures.map((proc) => (
-                        <Option key={proc._id} value={proc._id}>
-                          {proc.name}
-                        </Option>
-                      ))}
-                    </Select>
+                      classNamePrefix="react-select"
+                      className="w-full"
+                      debounceTimeout={400}
+                      menuPortalTarget={document.body}
+                      menuPosition="fixed"
+                      styles={{
+                        menuPortal: (base) => ({ ...base, zIndex: 9999 }),
+                        control: (base) => ({ ...base, minHeight: '40px' }),
+                      }}
+                      isClearable
+                    />
                   </Col>
 
                   <Col xs={24} sm={12} md={8} lg={6}>
@@ -1620,30 +2255,140 @@ const generatePdf = async (invoice) => {
                       </Option>
                       <Option value="Paid">Paid</Option>
                       <Option value="Pending">Pending</Option>
+                      <Option value="Advance">Advance</Option>
                     </Select>
                   </Col>
 
                   <Col xs={24} sm={12} md={8} lg={12}>
-                   <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-      <Input
-        type="date"
-        value={filters.dateRange[0]?.format('YYYY-MM-DD') || ''}
-        onChange={(e) => handleDateChange(e.target.value, 0)}
-        style={{ flex: 1 }}
-        max={moment().format('YYYY-MM-DD')}
-      />
-      <span>to</span>
-      <Input
-        type="date"
-        value={filters.dateRange[1]?.format('YYYY-MM-DD') || ''}
-        onChange={(e) => handleDateChange(e.target.value, 1)}
-        style={{ flex: 1 }}
-        min={filters.dateRange[0]?.format('YYYY-MM-DD')}
-        max={moment().format('YYYY-MM-DD')}
-      />
-    </div>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <RangePicker
+                        style={{ flex: 1 }}
+                        value={
+                          filters.startDate && filters.endDate
+                            ? [dayjs(filters.startDate.toDate()), dayjs(filters.endDate.toDate())]
+                            : null
+                        }
+                        presets={dateRangePresets}
+                        disabledDate={disabledDate}
+                        format="DD/MM/YYYY"
+                        allowClear
+                        onChange={(dates: [Dayjs, Dayjs] | null) => {
+                          if (!dates) {
+                            setFilters((prev) => ({
+                              ...prev,
+                              dateRange: [] as any,
+                              startDate: '' as any,
+                              endDate: '' as any,
+                            }));
+                            return;
+                          }
+                          const start = moment(dates[0].toDate()).startOf('day');
+                          const end = moment(dates[1].toDate()).endOf('day');
+                          setFilters((prev) => ({
+                            ...prev,
+                            dateRange: [start, end],
+                            startDate: start,
+                            endDate: end,
+                            paymentDateStart: '',
+                            paymentDateEnd: '',
+                          }));
+                        }}
+                      />
+                    
+                    </div>
                   </Col>
    
+
+                  <Col xs={24} sm={12} md={8} lg={6}>
+                    <Select
+                      placeholder="Amount Type"
+                      style={{ width: '100%' }}
+                      value={filters.amountField}
+                      onChange={(value) =>
+                        setFilters((prev) => ({
+                          ...prev,
+                          amountField: (value as Filters['amountField']) || 'paid',
+                        }))
+                      }
+                    >
+                      <Option value="paid">Paid Amount</Option>
+                      <Option value="total">Total Amount</Option>
+                      <Option value="discount">Discount Amount</Option>
+                      <Option value="due">Due Amount</Option>
+                      <Option value="advance">Advance Amount</Option>
+                      <Option value="refund">Refund Amount</Option>
+                    </Select>
+                  </Col>
+
+                  {/* <Col xs={24} sm={12} md={8} lg={6}>
+                    <Select
+                      placeholder="Payment Filter"
+                      style={{ width: '100%' }}
+                      value={filters.quickPayment}
+                      onChange={(value) =>
+                        setFilters((prev) => ({
+                          ...prev,
+                          quickPayment: (value as Filters['quickPayment']) || '',
+                        }))
+                      }
+                      allowClear
+                    >
+                      <Option value="paid">Paid &gt; 0</Option>
+                      <Option value="due">Due &gt; 0</Option>
+                      <Option value="advance">Advance &gt; 0</Option>
+                    </Select>
+                  </Col> */}
+
+                  <Col xs={24} sm={12} md={8} lg={10}>
+                    <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                      <span style={{ whiteSpace: 'nowrap' }}>Payment Date:</span>
+                      <RangePicker
+                        style={{ flex: 1 }}
+                        value={
+                          filters.paymentDateStart && filters.paymentDateEnd
+                            ? [
+                                dayjs(filters.paymentDateStart),
+                                dayjs(filters.paymentDateEnd),
+                              ]
+                            : null
+                        }
+                        presets={dateRangePresets}
+                        disabledDate={disabledDate}
+                        format="DD/MM/YYYY"
+                        allowClear
+                        onChange={(dates: [Dayjs, Dayjs] | null) => {
+                          if (!dates) {
+                            setFilters((prev) => ({
+                              ...prev,
+                              paymentDateStart: '',
+                              paymentDateEnd: '',
+                            }));
+                            return;
+                          }
+
+                          setFilters((prev) => ({
+                            ...prev,
+                            paymentDateStart: dates[0].format('YYYY-MM-DD'),
+                            paymentDateEnd: dates[1].format('YYYY-MM-DD'),
+                            startDate: '' as any,
+                            endDate: '' as any,
+                            dateRange: [] as any,
+                          }));
+                        }}
+                      />
+                      {/* <Button
+                        onClick={() =>
+                          setFilters((prev) => ({
+                            ...prev,
+                            paymentDateStart: '',
+                            paymentDateEnd: '',
+                          }))
+                        }
+                      >
+                        Cancel
+                      </Button> */}
+                    </div>
+                  </Col>
 
 
                   <Col xs={24} sm={12} md={8} lg={6}>
@@ -1658,15 +2403,36 @@ const generatePdf = async (invoice) => {
                     />
                   </Col>
 
-                  <Col xs={24} sm={12} md={8} lg={6}>
-                    <Input
-                      placeholder="Search by MR Number"
-                      value={filters.patientMR}
-                      onChange={(e) =>
-                        setFilters({ ...filters, patientMR: e.target.value })
-                      }
-                      allowClear
-                      style={{ color: '#000' }}
+                  <Col xs={24} sm={12} md={8} lg={7}>
+                    <AsyncPaginate
+                      value={selectedPatient}
+                      loadOptions={loadPatientOptions}
+                      onChange={(opt) => {
+                        const option = (opt as PatientOption | null) || null;
+                        setSelectedPatient(option);
+                        const mr = option?.patientData?.mr || '';
+                        setFilters((prev) => ({
+                          ...prev,
+                          patientMR: mr,
+                        }));
+                      }}
+                      additional={{ page: 1 }}
+                      placeholder="Search by MR Number / Name / Phone"
+                      classNamePrefix="react-select"
+                      className="w-full"
+                      debounceTimeout={400}
+                      menuPortalTarget={document.body}
+                      menuPosition="fixed"
+                      styles={{
+                        menuPortal: (base) => ({ ...base, zIndex: 9999 }),
+                        control: (base) => ({ ...base, minHeight: '40px' }),
+                      }}
+                      isClearable
+                      getOptionLabel={(option) => {
+                        const p = (option as PatientOption).patientData;
+                        if (!p) return option.label;
+                        return `${p.name} (MR# ${p.mr || ''})${p.phone ? ` - ${p.phone}` : ''}`;
+                      }}
                     />
                   </Col>
 
@@ -1674,9 +2440,7 @@ const generatePdf = async (invoice) => {
                     <Input
                       placeholder="Search by Phone Number"
                       value={filters.patientPhone}
-                      onChange={(e) =>
-                        setFilters({ ...filters, patientPhone: e.target.value })
-                      }
+                      onChange={(e) => setFilters({ ...filters, patientPhone: e.target.value })}
                       allowClear
                       style={{ color: '#000' }}
                     />
@@ -1715,6 +2479,22 @@ const generatePdf = async (invoice) => {
                       type="number"
                     />
                   </Col>
+                  
+                  <Col xs={24} sm={12} md={8} lg={6}>
+                    <Input
+                      placeholder="Discount %"
+                      value={filters.discountPercent}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        if (val === '' || Number(val) <= 100) {
+                          setFilters((prev) => ({ ...prev, discountPercent: val }));
+                        }
+                      }}
+                      type="number"
+                      min={0}
+                      max={100}
+                    />
+                  </Col>
 
                   <Col xs={24} className="flex justify-end gap-2">
                     <Button
@@ -1732,7 +2512,7 @@ const generatePdf = async (invoice) => {
                             moment().endOf('day'),
                           ],
                           startDate: moment().startOf('month'),
-                          endDate: moment(),
+                          endDate: moment().endOf('day'),
                           department: '',
                           paymentMode: '',
                           doctor: '',
@@ -1745,6 +2525,11 @@ const generatePdf = async (invoice) => {
                           minAmount: '',
                           maxAmount: '',
                           search: '',
+                          amountField: 'paid',
+                          paymentDateStart: '',
+                          paymentDateEnd: '',
+                          quickPayment: '',
+                          discountPercent: '',
                         });
                         setPagination({
                           current: 1,
@@ -1752,6 +2537,9 @@ const generatePdf = async (invoice) => {
                           total: 0,
                           totalPages: 0
                         });
+                        setSelectedDoctor(null);
+                        setSelectedDepartment(null);
+                        setSelectedProcedure(null);
                       }}
                     >
                       Reset

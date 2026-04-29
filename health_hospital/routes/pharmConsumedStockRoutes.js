@@ -1,12 +1,13 @@
 const pharmConsumedStockController = require("../controllers/pharmConsumedStockController");
+const { optionalAuth } = require("../middleware/auth");
 
 const router = require("express").Router();
 
-router.get("/get", pharmConsumedStockController.getConsumedStocks);
-router.post("/create", pharmConsumedStockController.addConsumedStock);
-router.get("/get/:id", pharmConsumedStockController.getConsumedStockById);
-router.put("/update/:id", pharmConsumedStockController.updateConsumedStock);
-router.delete("/delete/:id", pharmConsumedStockController.deleteConsumedStock);
-router.get("/stats", pharmConsumedStockController.getConsumedStockStats);
+router.get("/get", optionalAuth, pharmConsumedStockController.getConsumedStocks);
+router.post("/create", optionalAuth, pharmConsumedStockController.addConsumedStock);
+router.get("/get/:id", optionalAuth, pharmConsumedStockController.getConsumedStockById);
+router.put("/update/:id", optionalAuth, pharmConsumedStockController.updateConsumedStock);
+router.delete("/delete/:id", optionalAuth, pharmConsumedStockController.deleteConsumedStock);
+router.get("/stats", optionalAuth, pharmConsumedStockController.getConsumedStockStats);
 
 module.exports = router;

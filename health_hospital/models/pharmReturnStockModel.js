@@ -56,6 +56,10 @@ const pharmReturnStock = new mongoose.Schema({
     notes: {
         type: String,
     },
+    inboundStockId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'PharmInboundStock',
+    },
     createdBy: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'User',
@@ -73,6 +77,10 @@ const pharmReturnStock = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'PharmItem',
     },
+    branchId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Branch',
+    },
 }, { timestamps: true });
 
 // Generate return number
@@ -82,45 +90,34 @@ pharmReturnStock.pre('save', async function (next) {
     try {
         // Generate return number if not exists
         if (!returnStock.returnNumber) {
-            const count = await mongoose.model('PharmReturnStock').countDocuments();
-            returnStock.returnNumber = `SR-${String(count + 1).padStart(6, '0')}`;
+            const lastRecord = await mongoose.model('PharmReturnStock').findOne().sort({ returnNumber: -1 });
+            let nextNum = 1;
+            if (lastRecord && lastRecord.returnNumber) {
+                const lastNumStr = lastRecord.returnNumber.replace('SR-', '');
+                const lastNum = parseInt(lastNumStr, 10);
+                if (!isNaN(lastNum)) {
+                    nextNum = lastNum + 1;
+                }
+            }
+            returnStock.returnNumber = `SR-${String(nextNum).padStart(6, '0')}`;
         }
 
         // Process items and update stock
         if (returnStock.items && returnStock.items.length > 0) {
             for (const returnItem of returnStock.items) {
                 const item = await PharmItem.findById(returnItem.itemId);
-                if (!item) {
-                    return next(new Error(`Item not found: ${returnItem.itemId}`));
-                }
+                if (item) {
+                     // Check if enough stock is available
+                    if (item.availableQuantity < returnItem.quantity) {
+                        return next(new Error(`Insufficient stock for item: ${item.name}. Available: ${item.availableQuantity}, Required: ${returnItem.quantity}`));
+                    }
 
-                // Check if enough stock is available
-                if (item.availableQuantity < returnItem.quantity) {
-                    return next(new Error(`Insufficient stock for item: ${item.name}. Available: ${item.availableQuantity}, Required: ${returnItem.quantity}`));
+                    // Reduce stock (stock is being returned to supplier)
+                    item.availableQuantity -= returnItem.quantity;
+                    await item.save();
                 }
-
-                // Reduce stock (stock is being returned to supplier)
-                item.availableQuantity -= returnItem.quantity;
-                await item.save();
             }
         }
-
-        // Handle legacy single item return
-        if (returnStock.pharmItemId && returnStock.stock) {
-            const item = await PharmItem.findById(returnStock.pharmItemId);
-            if (!item) return next(new Error("Item not found"));
-
-            const conversionUnit = item.conversionUnit || 1;
-            const actualQty = returnStock.unit === 'pack' ? returnStock.stock * conversionUnit : returnStock.stock;
-
-            if (item.availableQuantity < actualQty) {
-                return next(new Error("You do not have enough stock to return"));
-            }
-
-            item.availableQuantity -= actualQty;
-            await item.save();
-        }
-
         next();
     } catch (err) {
         next(err);

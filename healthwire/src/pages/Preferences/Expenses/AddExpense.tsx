@@ -5,17 +5,19 @@ import axios from 'axios';
 import { toast } from 'react-toastify';
 import { Select, Input, InputNumber, Upload, Button as AntButton } from 'antd';
 import { UploadOutlined } from '@ant-design/icons';
+import { Base_url } from '../../../utils/Base_url';
 
 const { Option } = Select;
 const { TextArea } = Input;
 
-const AddExpense = ({ isModalOpen, setIsModalOpen, selectedExpense, fetchExpenses, categories }) => {
+const AddExpense = ({ isModalOpen, setIsModalOpen, selectedExpense, fetchExpenses, categories, module }) => {
   const [formData, setFormData] = useState({
     amount: '',
     description: '',
     paymentMode: '',
     expenseCategoryId: '',
-    image: null
+    image: null,
+    module: module || undefined,
   });
   
   const [isLoading, setIsLoading] = useState(false);
@@ -28,7 +30,8 @@ const AddExpense = ({ isModalOpen, setIsModalOpen, selectedExpense, fetchExpense
         description: selectedExpense.description || '',
         paymentMode: selectedExpense.paymentMode || '',
         expenseCategoryId: selectedExpense.expenseCategoryId?._id || '',
-        image: selectedExpense.image || null
+        image: selectedExpense.image || null,
+        module: selectedExpense.module || module || undefined,
       });
       
       if (selectedExpense.image) {
@@ -36,7 +39,7 @@ const AddExpense = ({ isModalOpen, setIsModalOpen, selectedExpense, fetchExpense
           uid: '-1',
           name: 'expense_image',
           status: 'done',
-          url: `https://api.holisticare.pk/${selectedExpense.image}`,
+          url: `${Base_url}/${selectedExpense.image}`,
         }]);
       }
     } else {
@@ -45,11 +48,12 @@ const AddExpense = ({ isModalOpen, setIsModalOpen, selectedExpense, fetchExpense
         description: '',
         paymentMode: '',
         expenseCategoryId: '',
-        image: null
+        image: null,
+        module: module || undefined,
       });
       setFileList([]);
     }
-  }, [selectedExpense, isModalOpen]);
+  }, [selectedExpense, isModalOpen, module]);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -105,17 +109,20 @@ const AddExpense = ({ isModalOpen, setIsModalOpen, selectedExpense, fetchExpense
       formDataToSend.append('description', formData.description);
       formDataToSend.append('paymentMode', formData.paymentMode);
       formDataToSend.append('expenseCategoryId', formData.expenseCategoryId);
+      if (formData.module) {
+        formDataToSend.append('module', formData.module);
+      }
       if (formData.image && formData.image instanceof File) {
         formDataToSend.append('image', formData.image);
       }
 
       const request = selectedExpense
-        ? axios.put(`https://api.holisticare.pk/apis/expense/update/${selectedExpense._id}`, formDataToSend, {
+        ? axios.put(`${Base_url}/apis/expense/update/${selectedExpense._id}`, formDataToSend, {
             headers: {
               'Content-Type': 'multipart/form-data'
             }
           })
-        : axios.post('https://api.holisticare.pk/apis/expense/create', formDataToSend, {
+        : axios.post(`${Base_url}/apis/expense/create`, formDataToSend, {
             headers: {
               'Content-Type': 'multipart/form-data'
             }

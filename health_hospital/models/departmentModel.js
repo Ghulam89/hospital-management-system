@@ -9,6 +9,10 @@ const departmentSchema = new mongoose.Schema({
         type: Array,
         allowNull: true,
     },
+    branchId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Branch',
+    },
 },{timestamps:true});
 
 

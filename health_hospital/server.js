@@ -27,6 +27,8 @@ const procedureRouter = require("./routes/procedureRoutes.js");
 const tokenRouter = require("./routes/tokenRoutes.js");
 const userRouter = require("./routes/userRoutes.js");
 const patientRouter = require("./routes/patientRoutes.js");
+const patientsRouter = require("./routes/patientsRoutes.js");
+const visitRouter = require("./routes/visitRoutes.js");
 const departmentRouter = require("./routes/departmentRoutes.js");
 const wardRouter = require("./routes/wardRoutes.js");
 const roomRouter = require("./routes/roomRoutes.js");
@@ -56,10 +58,8 @@ const pharmPosRouter = require("./routes/pharmPosRoutes.js");
 const pharmReturnStockRouter = require("./routes/pharmReturnStockRoutes.js");
 const pharmPurchaseOrderRouter = require("./routes/pharmPurchaseOrderRoutes.js");
 const storeClosingRouter = require("./routes/storeClosingRoutes.js");
-
-
-
-
+const branchRouter = require("./routes/branchRoutes.js");
+const roleRouter = require("./routes/roleRoutes.js");
 app.use("/apis/pharmReturnStock", pharmReturnStockRouter);
 app.use("/apis/pharmPurchaseOrder", pharmPurchaseOrderRouter);
 app.use("/apis/pharmMissedSale", pharmMissedSaleRouter);
@@ -83,6 +83,8 @@ app.use("/apis/appointment", appointmentRouter);
 app.use("/apis/token", tokenRouter);
 app.use("/apis/user", userRouter);
 app.use("/apis/patient", patientRouter);
+app.use("/apis/patients", patientsRouter);
+app.use("/apis/visits", visitRouter);
 app.use("/apis/department", departmentRouter);
 app.use("/apis/ward", wardRouter);
 app.use("/apis/room", roomRouter);
@@ -94,6 +96,8 @@ app.use("/apis/dischargePatient", dischargePatientRouter);
 app.use("/apis/roomDetail", roomDetailRouter);
 app.use("/apis/login", loginRouter);
 app.use("/apis/storeClosing", storeClosingRouter);
+app.use("/apis/branch", branchRouter);
+app.use("/apis/role", roleRouter);
 
 
 

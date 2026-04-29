@@ -8,6 +8,7 @@ import { Dayjs } from 'dayjs';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 import * as XLSX from 'xlsx';
 import { useReactToPrint } from 'react-to-print';
+import { Link, useNavigate } from 'react-router-dom';
 
 const { Search } = Input;
 const { Option } = Select;
@@ -68,6 +69,7 @@ const PharmacyStocks: React.FC = () => {
   const [netPurchase, setNetPurchase] = useState(0);
   const [printPreviewVisible, setPrintPreviewVisible] = useState(false);
   const printRef = useRef<HTMLDivElement>(null);
+  const navigate = useNavigate();
 
   // Table row selection
   const onSelectChange = (newSelectedRowKeys: React.Key[]) => {
@@ -103,7 +105,7 @@ const PharmacyStocks: React.FC = () => {
   // Table columns for stock documents
   const columns = [
     {
-      title: 'Document #',
+      title: 'Invoice #',
       dataIndex: 'documentNumber',
       key: 'documentNumber',
       width: 120,
@@ -280,11 +282,11 @@ const PharmacyStocks: React.FC = () => {
 
   const handleView = (record: PharmacyStock) => {
     Swal.fire({
-      title: 'Stock Document Details',
+      title: 'Stock Invoice Details',
       html: `
         <div class="text-left" style="font-size: 14px;">
           <div style="background: #f3f4f6; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
-            <p style="margin: 8px 0;"><strong>Document #:</strong> ${record.documentNumber}</p>
+            <p style="margin: 8px 0;"><strong>Invoice #:</strong> ${record.documentNumber}</p>
             <p style="margin: 8px 0;"><strong>Supplier:</strong> ${record.supplierId?.name}</p>
             <p style="margin: 8px 0;"><strong>Phone:</strong> ${record.supplierId?.phone}</p>
             <p style="margin: 8px 0;"><strong>Created:</strong> ${new Date(record.createdAt).toLocaleDateString()}</p>
@@ -332,15 +334,14 @@ const PharmacyStocks: React.FC = () => {
   };
 
   const handleEdit = (record: PharmacyStock) => {
-    // Navigate to edit page or open edit modal
-    console.log('Edit stock:', record);
+    navigate(`/admin/pharmacy/stocks/edit/${record._id}`);
   };
 
   const handleDelete = async (record: PharmacyStock) => {
     try {
       const result = await Swal.fire({
-        title: 'Delete Stock Document?',
-        text: `Are you sure you want to delete document ${record.documentNumber}?`,
+        title: 'Delete Stock Invoice?',
+        text: `Are you sure you want to delete invoice ${record.documentNumber}?`,
         icon: 'warning',
         showCancelButton: true,
         confirmButtonText: 'Yes, Delete',
@@ -369,7 +370,7 @@ const PharmacyStocks: React.FC = () => {
 
       // Prepare data for export
       const exportData = stocks.map((stock) => ({
-        'Document #': stock.documentNumber || '',
+        'Invoice #': stock.documentNumber || '',
         'Supplier': stock.supplierId?.name || '',
         'Supplier Phone': stock.supplierId?.phone || '',
         'SKUs': stock.items?.length || 0,
@@ -466,14 +467,17 @@ const PharmacyStocks: React.FC = () => {
               >
                 Print
               </Button>
+              <Link to="/admin/pharmacy/stocks/new">
               <Button
                 type="primary"
                 icon={<PlusOutlined />}
-                onClick={handleAddStock}
+                
                 className="bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 border-none rounded-lg flex items-center gap-2 shadow-md"
               >
-                + Add New Stock
+                + Add New Stock 
               </Button>
+              </Link>
+             
             </div>
           </div>
         </div>

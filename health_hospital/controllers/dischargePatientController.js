@@ -1,21 +1,24 @@
 const { baseUrl } = require("../config/env.config");
 const DischargePatient = require("../models/dischargePatientModel");
 const AdmitPatient = require("../models/admitPatientModel");
-const BedDetail = require("../models/dischargePatientModel");
-const RoomDetail = require("../models/dischargePatientModel");
+const BedDetail = require("../models/bedDetailModel");
+const RoomDetail = require("../models/roomDetailModel");
+const { getScopedAdmitPatientIds, patientVisibleForRequest } = require("../utils/branchScope");
 
 // 1. Create dischargePatient
 const adddischargePatient = async (req, res) => {
   try {
 
-
+    const admitPatient = await AdmitPatient.findById(req.body.admitPatientId);
+    if (admitPatient?.patientId && !(await patientVisibleForRequest(req, admitPatient.patientId))) {
+      return res.status(403).json({ status: "fail", message: "Admit record not allowed for this branch" });
+    }
 
       const dischargePatient = await DischargePatient.create({ ...req.body,document:req.files.document.length==0?'': req.files?.document?.map(i=>baseUrl+i?.filename)});
 
 
       
       
-          const admitPatient = await AdmitPatient.findById(req.body.admitPatientId);
       
           if (admitPatient?.allocationType === 'ward') {
             await BedDetail.findByIdAndUpdate(admitPatient?.bedDetailId, {
@@ -73,6 +76,45 @@ const getdischargePatients = async (req, res) => {
       ];
     }
 
+    const scopedAdmitIds = await getScopedAdmitPatientIds(req);
+    if (scopedAdmitIds !== null) {
+      if (scopedAdmitIds.length === 0) {
+        return res.status(200).json({
+          status: "ok",
+          data: [],
+          search,
+          page,
+          count: 0,
+          totalPages: 0,
+          currentPage: page,
+          limit
+        });
+      }
+      if (req.query.patientId) {
+        const rows = await AdmitPatient.find({
+          _id: { $in: scopedAdmitIds },
+          patientId: req.query.patientId,
+        })
+          .select("_id")
+          .lean();
+        if (rows.length === 0) {
+          return res.status(200).json({
+            status: "ok",
+            data: [],
+            search,
+            page,
+            count: 0,
+            totalPages: 0,
+            currentPage: page,
+            limit
+          });
+        }
+        query.admitPatientId = { $in: rows.map((r) => r._id) };
+      } else {
+        query.admitPatientId = { $in: scopedAdmitIds };
+      }
+    }
+
     const dischargePatients = await DischargePatient.find(query).sort({createdAt:-1})
       .populate([
         {
@@ -97,13 +139,8 @@ const getdischargePatients = async (req, res) => {
 
     const filteredDischargePatients = dischargePatients.filter(dp => dp.admitPatientId !== null);
 
-    let countQuery = {};
-    if (req.query.patientId) {
-     
-      const admitPatients = await AdmitPatient.find({ patientId: req.query.patientId }).select('_id');
-      const admitPatientIds = admitPatients.map(ap => ap._id);
-      countQuery = { admitPatientId: { $in: admitPatientIds } };
-    }
+    const countQuery = { ...query };
+    delete countQuery.$or;
 
     const count = await DischargePatient.countDocuments(countQuery);
 
@@ -125,7 +162,14 @@ const getdischargePatients = async (req, res) => {
 const getdischargePatientById = async (req, res) => {
   try {
     const id = req.params.id;
-    const dischargePatient = await DischargePatient.findById(id);
+    const dischargePatient = await DischargePatient.findById(id).populate({ path: "admitPatientId", select: "patientId" }).lean();
+    if (!dischargePatient) {
+      return res.status(404).json({ status: "fail", message: "Discharge record not found" });
+    }
+    const pid = dischargePatient.admitPatientId?.patientId;
+    if (pid && !(await patientVisibleForRequest(req, pid))) {
+      return res.status(404).json({ status: "fail", message: "Discharge record not found" });
+    }
     return res.status(200).json({ status: "ok", data: dischargePatient });
   } catch (err) {
     res.status(500).json({ error: err.message });

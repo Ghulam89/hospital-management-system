@@ -4,6 +4,7 @@ import { MdClose } from 'react-icons/md';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 import * as XLSX from 'xlsx';
+import { Base_url } from '../../utils/Base_url';
 
 const UploadExcel = ({ isModalOpen, setIsModalOpen, fetchProcedureData,selectedProcedure }) => {
   const [file, setFile] = useState(null);
@@ -168,7 +169,7 @@ const handleSubmit = async (e) => {
     // Send each procedure individually
     const results = await Promise.all(
       procedures.map(proc => 
-        axios.post('https://api.holisticare.pk/apis/procedure/createExcel', {
+        axios.post(`${Base_url}/apis/procedure/createExcel`, {
           name: proc.name,
           amount: proc.amount,
           departmentName: proc.departmentName,

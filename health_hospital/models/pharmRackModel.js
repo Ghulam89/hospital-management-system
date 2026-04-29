@@ -9,6 +9,10 @@ const pharmRackSchema = new mongoose.Schema({
             type: mongoose.Schema.Types.ObjectId,
             ref: 'PharmItem',
         }],
+    branchId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Branch',
+    },
 },{timestamps:true});
 
 

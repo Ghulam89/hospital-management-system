@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { Table, message, Input, Button, Pagination, Col, Row, Card, Select, Tag, Spin } from 'antd';
+import { Table, message, Input, Button, Pagination, Col, Row, Card, Select, Tag, Spin, Modal } from 'antd';
 import { Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import moment from 'moment';
@@ -190,14 +190,23 @@ const [selectedAppointment, setSelectedAppointment] = useState<Appointment | nul
 };
 
   const handleDelete = (id) => {
-    axios.delete(`${Base_url}/apis/appointment/delete/${id}`)
-      .then((res) => {
-        message.success('Appointment deleted successfully');
-        fetchAppointments();
-      })
-      .catch(err => {
-        message.error('Failed to delete appointment');
-      });
+    Modal.confirm({
+      title: 'Delete Confirmation',
+      content: 'Are you sure you want to delete this appointment?',
+      okText: 'Yes, Delete',
+      cancelText: 'Cancel',
+      okButtonProps: { danger: true },
+      centered: true,
+      onOk: async () => {
+        try {
+          await axios.delete(`${Base_url}/apis/appointment/delete/${id}`);
+          message.success('Appointment deleted successfully');
+          fetchAppointments();
+        } catch (err) {
+          message.error('Failed to delete appointment');
+        }
+      },
+    });
   };
 
   const handleFilterChange = (key, value) => {

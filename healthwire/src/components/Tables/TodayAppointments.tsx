@@ -1,10 +1,11 @@
-import React, { useEffect, useState } from 'react';
-import { Table, message } from 'antd';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Table, message, Modal } from 'antd';
 import { Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import moment from 'moment';
 import { RiDeleteBin5Line } from 'react-icons/ri';
 import { Base_url } from '../../utils/Base_url';
+import { BRANCH_CHANGED_EVENT } from '../../utils/branchScope';
 
 const TodayAppointments = () => {
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
@@ -44,36 +45,51 @@ const TodayAppointments = () => {
     ],
   };
 
-  const fetchAppointments = () => {
+  const fetchAppointments = useCallback(() => {
     setLoading(true);
-    axios.get(`${Base_url}/apis/appointment/dashboard`)
+    axios
+      .get(`${Base_url}/apis/appointment/dashboard`)
       .then((res) => {
         setAppointments(res?.data?.data?.todayAppointments || []);
-        setLoading(false);
       })
-      .catch(err => {
+      .catch(() => {
         message.error('Failed to fetch appointments');
-        setLoading(false);
-      });
-  };
+      })
+      .finally(() => setLoading(false));
+  }, []);
 
   useEffect(() => {
     fetchAppointments();
-  }, []);
+  }, [fetchAppointments]);
+
+  useEffect(() => {
+    const onBranchChange = () => fetchAppointments();
+    window.addEventListener(BRANCH_CHANGED_EVENT, onBranchChange);
+    return () => window.removeEventListener(BRANCH_CHANGED_EVENT, onBranchChange);
+  }, [fetchAppointments]);
 
   const handleEdit = (record) => {
     navigate(`/admin/edit_appointment/${record._id}`);
   };
 
   const handleDelete = (id) => {
-    axios.delete(`${Base_url}/apis/appointment/delete/${id}`)
-      .then((res) => {
-        message.success('Appointment deleted successfully');
-        fetchAppointments();
-      })
-      .catch(err => {
-        message.error('Failed to delete appointment');
-      });
+    Modal.confirm({
+      title: 'Delete Confirmation',
+      content: 'Are you sure you want to delete this appointment?',
+      okText: 'Yes, Delete',
+      cancelText: 'Cancel',
+      okButtonProps: { danger: true },
+      centered: true,
+      onOk: async () => {
+        try {
+          await axios.delete(`${Base_url}/apis/appointment/delete/${id}`);
+          message.success('Appointment deleted successfully');
+          fetchAppointments();
+        } catch (err) {
+          message.error('Failed to delete appointment');
+        }
+      },
+    });
   };
 
   const columns = [

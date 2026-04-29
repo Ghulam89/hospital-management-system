@@ -1,11 +1,12 @@
 const Department = require("../models/departmentModel");
+const { getScopedDepartmentIds, idInList } = require("../utils/branchScope");
 
 // 1. Create department
 const adddepartment = async (req, res) => {
   try {
 
 
-    const checkName = await Department.findOne({ phone: req.body.name });
+    const checkName = await Department.findOne({ name: req.body.name });
 
 
     if (req.body.name && checkName) {
@@ -14,7 +15,7 @@ const adddepartment = async (req, res) => {
         .json({ status: "fail", message: "Name already exist!" });
     }
     else {
-
+      /** Only super admin may create (route-enforced); optional branchId for org-specific catalogs. */
       const department = await Department.create({ ...req.body });
       return res.status(200).json({ status: "ok", data: department });
     }
@@ -34,7 +35,13 @@ const getdepartments = async (req, res) => {
 
 
 
-    const departments = await Department.find({}).sort({createdAt:-1})
+    const allowedIds = await getScopedDepartmentIds(req);
+    const filter = {};
+    if (allowedIds !== null) {
+      filter._id = { $in: allowedIds };
+    }
+
+    const departments = await Department.find(filter).sort({ createdAt: -1 });
 
 
 
@@ -52,6 +59,10 @@ const getdepartments = async (req, res) => {
 const getdepartmentById = async (req, res) => {
   try {
     const id = req.params.id;
+    const allowedIds = await getScopedDepartmentIds(req);
+    if (allowedIds !== null && !idInList(id, allowedIds)) {
+      return res.status(404).json({ status: "fail", message: "Department not found" });
+    }
     const department = await Department.findById(id);
     return res.status(200).json({ status: "ok", data: department });
   } catch (err) {
@@ -63,6 +74,11 @@ const getdepartmentById = async (req, res) => {
 const updatedepartment = async (req, res) => {
   try {
     let id = req.params.id;
+
+    const allowedIds = await getScopedDepartmentIds(req);
+    if (allowedIds !== null && !idInList(id, allowedIds)) {
+      return res.status(404).json({ status: "fail", message: "Department not found" });
+    }
 
     const updateddepartment = await Department.findByIdAndUpdate(
       id,
@@ -79,6 +95,10 @@ const updatedepartment = async (req, res) => {
 const deletedepartment = async (req, res) => {
   try {
     const id = req.params.id;
+    const allowedIds = await getScopedDepartmentIds(req);
+    if (allowedIds !== null && !idInList(id, allowedIds)) {
+      return res.status(404).json({ status: "fail", message: "Department not found" });
+    }
     await Department.findByIdAndDelete(id);
     return res
       .status(200)

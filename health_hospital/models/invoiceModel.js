@@ -22,12 +22,56 @@ const invoiceSchema = new mongoose.Schema({
                 type: mongoose.Schema.Types.ObjectId,
                 ref: 'User',
             },
+            expenses: [
+                {
+                    expenseCategoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'ExpenseCategory' },
+                    categoryName: { type: String, allowNull: true },
+                    description: { type: String, allowNull: true },
+                    amount: { type: Number, allowNull: true },
+                    deductBeforeDoctorShare: { type: Boolean, default: false },
+                    showInPrint: { type: Boolean, default: false },
+                }
+            ],
+            doctorShares: [
+                {
+                    doctorId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+                    shareType: { type: String, enum: ['value', 'percentage'], default: 'value' },
+                    shareValue: { type: Number, allowNull: true },
+                    amount: { type: Number, allowNull: true },
+                }
+            ],
+            consumptions: [
+                {
+                    pharmItemId: { type: mongoose.Schema.Types.ObjectId, ref: 'PharmItem' },
+                    itemName: { type: String, allowNull: true },
+                    qty: { type: Number, allowNull: true },
+                    batchNumber: { type: String, allowNull: true },
+                }
+            ],
         }
     ],
     invoiceNo: {
         type: String,
         allowNull: true,
     },
+    invoiceExpenses: [
+        {
+            expenseCategoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'ExpenseCategory' },
+            categoryName: { type: String, allowNull: true },
+            description: { type: String, allowNull: true },
+            amount: { type: Number, allowNull: true },
+            deductBeforeDoctorShare: { type: Boolean, default: false },
+            showInPrint: { type: Boolean, default: false },
+        }
+    ],
+    invoiceConsumptions: [
+        {
+            pharmItemId: { type: mongoose.Schema.Types.ObjectId, ref: 'PharmItem' },
+            itemName: { type: String, allowNull: true },
+            qty: { type: Number, allowNull: true },
+            batchNumber: { type: String, allowNull: true },
+        }
+    ],
     subTotalBill: { type: Number, allowNull: true },
     discountBill: { type: Number, allowNull: true },
     taxBill: { type: Number, allowNull: true },
@@ -65,9 +109,18 @@ const invoiceSchema = new mongoose.Schema({
         {
             method: { type: String, allowNull: true },
             payDate: { type: Date, allowNull: true },
-            paid: { type: Number, allowNull: true }
+            paid: { type: Number, allowNull: true },
+            reference: { type: String, allowNull: true },
+            chequeNo: { type: String, allowNull: true },
+            bankName: { type: String, allowNull: true },
+            chequeDate: { type: Date, allowNull: true },
+            notes: { type: String, allowNull: true }
         }
-    ]
+    ],
+    branchId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Branch',
+    },
 }, { timestamps: true });
 
 

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Table, message } from 'antd';
+import { Table, message, Modal } from 'antd';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import axios from 'axios';
 import moment from 'moment';
@@ -85,14 +85,23 @@ const PatientAppointments = () => {
   };
 
   const handleDelete = (id) => {
-    axios.delete(`${Base_url}/apis/appointment/delete/${id}`)
-      .then((res) => {
-        message.success('Appointment deleted successfully');
-        fetchAppointments();
-      })
-      .catch(err => {
-        message.error('Failed to delete appointment');
-      });
+    Modal.confirm({
+      title: 'Are you sure delete this appointment?',
+      content: 'This action cannot be undone.',
+      okText: 'Yes',
+      okType: 'danger',
+      cancelText: 'No',
+      onOk() {
+        axios.delete(`${Base_url}/apis/appointment/delete/${id}`)
+          .then((res) => {
+            message.success('Appointment deleted successfully');
+            fetchAppointments();
+          })
+          .catch(err => {
+            message.error('Failed to delete appointment');
+          });
+      },
+    });
   };
 
   const columns = [

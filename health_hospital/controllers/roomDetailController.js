@@ -1,11 +1,21 @@
 const RoomDetail = require("../models/roomDetailModel");
+const { getScopedRoomIds, idInList } = require("../utils/branchScope");
 
 // 1. Create roomDetail
 const addroomDetail = async (req, res) => {
   try {
 
+    const allowedRoomIds = await getScopedRoomIds(req);
+    if (allowedRoomIds !== null && allowedRoomIds.length === 0) {
+      return res.status(403).json({ status: "fail", message: "No rooms for this branch" });
+    }
+    if (allowedRoomIds !== null && req.body.roomId && !idInList(req.body.roomId, allowedRoomIds)) {
+      return res.status(403).json({ status: "fail", message: "Room not allowed for this branch" });
+    }
 
-    const checkroomNo = await RoomDetail.findOne({ roomNo: req.body.roomNo });
+    const dupQuery = { roomNo: req.body.roomNo };
+    if (req.body.roomId) dupQuery.roomId = req.body.roomId;
+    const checkroomNo = await RoomDetail.findOne(dupQuery);
 
     if (req.body.roomNo && checkroomNo) {
       return res
@@ -55,6 +65,38 @@ const getroomDetails = async (req, res) => {
       query.status= req.query.status
     }
 
+    const allowedRoomIds = await getScopedRoomIds(req);
+    if (allowedRoomIds !== null) {
+      if (allowedRoomIds.length === 0) {
+        return res.status(200).json({
+          status: "ok",
+          data: [],
+          search,
+          page,
+          count: 0,
+          totalPages: 0,
+          currentPage: page,
+          limit
+        });
+      }
+      if (query.roomId) {
+        if (!idInList(query.roomId, allowedRoomIds)) {
+          return res.status(200).json({
+            status: "ok",
+            data: [],
+            search,
+            page,
+            count: 0,
+            totalPages: 0,
+            currentPage: page,
+            limit
+          });
+        }
+      } else {
+        query.roomId = { $in: allowedRoomIds };
+      }
+    }
+
 
     const roomDetails = await RoomDetail.find(query).sort({createdAt:-1})
     .populate(['roomId'])
@@ -90,7 +132,14 @@ const getroomDetails = async (req, res) => {
 const getroomDetailById = async (req, res) => {
   try {
     const id = req.params.id;
-    const roomDetail = await RoomDetail.findById(id);
+    const roomDetail = await RoomDetail.findById(id).lean();
+    if (!roomDetail) {
+      return res.status(404).json({ status: "fail", message: "Room detail not found" });
+    }
+    const allowedRoomIds = await getScopedRoomIds(req);
+    if (allowedRoomIds !== null && !idInList(roomDetail.roomId, allowedRoomIds)) {
+      return res.status(404).json({ status: "fail", message: "Room detail not found" });
+    }
     return res.status(200).json({ status: "ok", data: roomDetail });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -101,6 +150,17 @@ const getroomDetailById = async (req, res) => {
 const updateroomDetail = async (req, res) => {
   try {
     let id = req.params.id;
+    const existing = await RoomDetail.findById(id).lean();
+    if (!existing) {
+      return res.status(404).json({ status: "fail", message: "Room detail not found" });
+    }
+    const allowedRoomIds = await getScopedRoomIds(req);
+    if (allowedRoomIds !== null && !idInList(existing.roomId, allowedRoomIds)) {
+      return res.status(404).json({ status: "fail", message: "Room detail not found" });
+    }
+    if (allowedRoomIds !== null && req.body.roomId && !idInList(req.body.roomId, allowedRoomIds)) {
+      return res.status(403).json({ status: "fail", message: "Room not allowed for this branch" });
+    }
     let getImage = await RoomDetail.findById(id);
 
     const updatedroomDetail = await RoomDetail.findByIdAndUpdate(
@@ -118,6 +178,14 @@ const updateroomDetail = async (req, res) => {
 const deleteroomDetail = async (req, res) => {
   try {
     const id = req.params.id;
+    const existing = await RoomDetail.findById(id).lean();
+    if (!existing) {
+      return res.status(404).json({ status: "fail", message: "Room detail not found" });
+    }
+    const allowedRoomIds = await getScopedRoomIds(req);
+    if (allowedRoomIds !== null && !idInList(existing.roomId, allowedRoomIds)) {
+      return res.status(404).json({ status: "fail", message: "Room detail not found" });
+    }
     await RoomDetail.findByIdAndDelete(id);
     return res
       .status(200)

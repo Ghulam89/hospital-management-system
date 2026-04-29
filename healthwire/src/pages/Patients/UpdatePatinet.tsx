@@ -24,8 +24,6 @@ const UpdatePatient = ({
   const [doctors, setDoctors] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [cnicError, setCnicError] = useState('');
-  const [phoneExists, setPhoneExists] = useState(false);
-  const [allowDuplicatePhone, setAllowDuplicatePhone] = useState(false);
   // Update selectedImage type to handle string | File | null
   const [selectedImage, setSelectedImage] = useState<string | File | null>(null);
   const [selectedImages, setSelectedImages] = useState(null);
@@ -49,9 +47,7 @@ console.log(selectedImage);
 
   const fetchDoctors = async () => {
     try {
-      const response = await axios.get(
-        'https://api.holisticare.pk/apis/user/get',
-      );
+      const response = await axios.get(`${Base_url}/apis/user/get`);
       if (response.data.status === 'ok') {
         const doctors = response.data.data.filter(
           (user) => user.role === 'doctor',
@@ -129,30 +125,6 @@ console.log(selectedImage);
     return;
   } else {
     try {
-      // Check for existing phone when duplicate has not been explicitly allowed
-      if (!allowDuplicatePhone && phone) {
-        const checkRes = await axios.get(
-          `${Base_url}/apis/patient/get`,
-          {
-            params: {
-              phone,
-              limit: 2,
-            },
-          },
-        );
-        const existing = checkRes?.data?.data || [];
-        const others = Array.isArray(existing)
-          ? existing.filter((p: any) => p._id !== patientData._id)
-          : [];
-        if (others.length > 0) {
-          setPhoneExists(true);
-          toast.warn(
-            'This phone number is already used by another patient. Tick the checkbox below if you still want to use it.',
-          );
-          return;
-        }
-      }
-
     setIsLoading(true);
     const updatedPatient = new FormData();
     
@@ -167,7 +139,7 @@ console.log(selectedImage);
     if (selectedImages) updatedPatient.append('image', selectedImages);
 
       const res = await axios.put(
-        `https://api.holisticare.pk/apis/patient/update/${patientData._id}`,
+        `${Base_url}/apis/patient/update/${patientData._id}`,
         updatedPatient,
       );
       if (res.data.status === 'ok') {
@@ -183,7 +155,10 @@ console.log(selectedImage);
     } catch (error) {
       setIsLoading(false);
       console.log(error);
-      toast.error(error.response?.data?.message);
+      toast.error(
+        (error as { response?: { data?: { message?: string } } })?.response?.data
+          ?.message || 'Error updating patient',
+      );
     }
   }
 };
@@ -197,8 +172,6 @@ console.log(selectedImage);
     setDoctor('');
     setCnic('');
     setCnicError('');
-    setPhoneExists(false);
-    setAllowDuplicatePhone(false);
     setSelectedImage(null);
     setSelectedImages(null);
     setTimeout(() => {
@@ -302,23 +275,6 @@ console.log(selectedImage);
                     placeholder=""
                     className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                   />
-                  {phoneExists && (
-                    <div className="mt-2 flex items-center gap-2 text-sm">
-                      <span className="text-gray-700">
-                        This phone number is already used by another patient. Allow duplicate?
-                      </span>
-                      <label className="inline-flex items-center gap-1">
-                        <input
-                          type="checkbox"
-                          checked={allowDuplicatePhone}
-                          onChange={(e) =>
-                            setAllowDuplicatePhone(e.target.checked)
-                          }
-                        />
-                        <span>Yes</span>
-                      </label>
-                    </div>
-                  )}
                 </div>
 
                 <div>

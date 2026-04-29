@@ -70,6 +70,11 @@ const tokenSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Procedure',
       }],
+    branchId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Branch',
+        index: true,
+    },
 },{timestamps:true});
 
 

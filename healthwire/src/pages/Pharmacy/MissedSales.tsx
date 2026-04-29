@@ -5,6 +5,7 @@ import { Base_url } from '../../utils/Base_url';
 import axios from 'axios';
 import Swal from 'sweetalert2';
 import { type Dayjs } from 'dayjs';
+import { AsyncPaginate } from 'react-select-async-paginate';
 
 const { Search } = Input;
 const { Option } = Select;
@@ -72,11 +73,50 @@ const MissedSales: React.FC = () => {
   };
 
   const fetchPharmItems = async () => {
+    // This function is no longer needed for loading all items at once for the dropdown, 
+    // but might be used for loss calculation if we want to preload some.
+    // However, with AsyncPaginate, we fetch on demand.
+    // We can remove or simplify this if it's not used elsewhere.
+    // It is used in handleModalSubmit to find selected item price.
+    // We should probably fetch the single item details in submit if not found in cache.
     try {
       const response = await axios.get(`${Base_url}/apis/pharmItem/get`);
       setPharmItems(response.data.data || []);
     } catch (error) {
       console.error('Error fetching pharmacy items:', error);
+    }
+  };
+
+  const loadItemOptions = async (search: string, loadedOptions: any, { page }: any) => {
+    try {
+      const response = await axios.get(`${Base_url}/apis/pharmItem/get`, {
+        params: {
+          search: search || '',
+          page: page || 1,
+          limit: 20
+        }
+      });
+      
+      const data = response.data.data || [];
+      const hasMore = response.data.totalPages > page;
+      
+      return {
+        options: data.map((item: any) => ({
+          value: item._id,
+          label: `${item.name} (Stock: ${item.availableQuantity || 0})`,
+          item: item
+        })),
+        hasMore,
+        additional: {
+          page: page + 1
+        }
+      };
+    } catch (error) {
+      console.error('Error loading items:', error);
+      return {
+        options: [],
+        hasMore: false
+      };
     }
   };
 
@@ -150,12 +190,12 @@ const MissedSales: React.FC = () => {
       key: 'actions',
       render: (_: any, record: MissedSale) => (
         <Space size="small">
-          <Button
+          {/* <Button
             type="text"
             icon={<EyeOutlined className="text-blue-500" />}
             onClick={() => handleView(record)}
             title="View"
-          />
+          /> */}
           <Button
             type="text"
             icon={<EditOutlined className="text-green-500" />}
@@ -192,39 +232,45 @@ const MissedSales: React.FC = () => {
   };
 
   const handleEdit = (record: MissedSale) => {
+    // Reset fields first to clear any previous errors or values
+    form.resetFields();
+    
+    // Set form values
     form.setFieldsValue({
       _id: record._id,
-      pharmItemId: record.pharmItemId?._id,
+      pharmItemId: { 
+        value: record.pharmItemId?._id, 
+        label: record.pharmItemId?.name 
+      },
       quantity: record.quantity,
       reason: record.reason,
-      missedDate: record.missedDate ? new Date(record.missedDate) : new Date(),
+      missedDate: record.missedDate ? dayjs(record.missedDate) : dayjs(),
       status: record.status || 'Pending',
       notes: record.notes,
     });
+    
+    // Open modal
     setIsModalOpen(true);
   };
 
-  const handleDelete = async (record: MissedSale) => {
-    try {
-      const result = await Swal.fire({
-        title: 'Delete Missed Sale?',
-        text: `Are you sure you want to delete this missed sale record?`,
-        icon: 'warning',
-        showCancelButton: true,
-        confirmButtonText: 'Yes, Delete',
-        cancelButtonText: 'Cancel',
-        confirmButtonColor: '#ef4444',
-      });
-
-      if (result.isConfirmed) {
-        await axios.delete(`${Base_url}/apis/pharmMissedSale/delete/${record._id}`);
-        Swal.fire('Deleted!', 'Missed sale record has been deleted.', 'success');
-        fetchMissedSales();
-      }
-    } catch (error) {
-      console.error('Error deleting missed sale:', error);
-      Swal.fire('Error!', 'Failed to delete missed sale record.', 'error');
-    }
+  const handleDelete = (record: MissedSale) => {
+    Modal.confirm({
+      title: 'Delete Missed Sale?',
+      content: `Are you sure you want to delete this missed sale record for "${record.pharmItemId?.name}"?`,
+      okText: 'Yes, Delete',
+      okType: 'danger',
+      cancelText: 'Cancel',
+      onOk: async () => {
+        try {
+          await axios.delete(`${Base_url}/apis/pharmMissedSale/delete/${record._id}`);
+          Swal.fire('Deleted!', 'Missed sale record has been deleted.', 'success');
+          fetchMissedSales();
+        } catch (error) {
+          console.error('Error deleting missed sale:', error);
+          Swal.fire('Error!', 'Failed to delete missed sale record.', 'error');
+        }
+      },
+    });
   };
 
   const handleAddMissedSale = () => {
@@ -251,9 +297,36 @@ const MissedSales: React.FC = () => {
       }
 
       // Get the selected item to calculate estimated loss
-      const selectedItem = pharmItems.find(item => item._id === values.pharmItemId);
+      let selectedItem = null;
+      let pharmItemId = values.pharmItemId;
+      
+      // Handle AsyncPaginate value (object or string)
+      if (typeof values.pharmItemId === 'object' && values.pharmItemId !== null) {
+        pharmItemId = values.pharmItemId.value;
+        // Try to find in cache or use the item data if available in the selected option
+        // The AsyncPaginate selected option might not be directly accessible here easily if we didn't store it.
+        // But we can try to find it in pharmItems which might have some loaded.
+        // Better: Fetch item details if needed.
+        selectedItem = pharmItems.find(item => item._id === pharmItemId);
+        if (!selectedItem && values.pharmItemId.item) {
+             selectedItem = values.pharmItemId.item;
+        }
+      } else {
+        selectedItem = pharmItems.find(item => item._id === values.pharmItemId);
+      }
+
       if (!selectedItem) {
-        Swal.fire('Error!', 'Selected item not found.', 'error');
+         // If still not found (e.g. searched and selected, but not in initial fetchPharmItems list), fetch it
+         try {
+             const res = await axios.get(`${Base_url}/apis/pharmItem/get/${pharmItemId}`);
+             selectedItem = res.data.data;
+         } catch (e) {
+             console.error("Failed to fetch item details", e);
+         }
+      }
+
+      if (!selectedItem) {
+        Swal.fire('Error!', 'Selected item details could not be found.', 'error');
         return;
       }
 
@@ -261,7 +334,7 @@ const MissedSales: React.FC = () => {
       const estimatedLoss = Number(values.quantity) * (selectedItem.retailPrice || selectedItem.unitCost || 0);
 
       const data = {
-        pharmItemId: values.pharmItemId,
+        pharmItemId: pharmItemId,
         quantity: Number(values.quantity),
         reason: values.reason,
         missedDate: values.missedDate?.format('YYYY-MM-DD') || new Date().toISOString().split('T')[0],
@@ -502,20 +575,21 @@ const MissedSales: React.FC = () => {
               }
               rules={[{ required: true, message: 'Please select an item' }]}
             >
-              <Select
+              <AsyncPaginate
+                loadOptions={loadItemOptions}
                 placeholder="Search and select pharmacy item"
-                showSearch
+                debounceTimeout={300}
+                isClearable
+                additional={{
+                  page: 1,
+                }}
                 className="pharmacy-select"
-              >
-                {pharmItems.map(item => (
-                  <Option key={item._id} value={item._id}>
-                    <div className="flex justify-between items-center">
-                      <span>{item.name}</span>
-                      <span className="text-xs text-gray-500">Stock: {item.availableQuantity || 0}</span>
-                    </div>
-                  </Option>
-                ))}
-              </Select>
+                styles={{
+                  menuPortal: (base) => ({ ...base, zIndex: 9999 }),
+                  control: (base) => ({ ...base, minHeight: '38px' })
+                }}
+                menuPortalTarget={document.body}
+              />
             </Form.Item>
 
             <Form.Item

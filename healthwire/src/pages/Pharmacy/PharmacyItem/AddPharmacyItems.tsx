@@ -1,11 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import Modal from '../../../components/modal';
 import { MdClose } from 'react-icons/md';
+import { ScanBarcode } from 'lucide-react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 import { Base_url } from '../../../utils/Base_url';
-import Select from 'react-select';
 import 'react-datepicker/dist/react-datepicker.css';
+import BarcodeScanner from '../../../components/BarcodeScanner';
 
 const AddPharmacyItems = ({ 
   isModalOpen, 
@@ -21,6 +22,7 @@ const AddPharmacyItems = ({
     name: '',
     pharmRackId: null,
     barcode: '',
+    alternateBarcodes: [],
     pharmManufacturerId: null,
     pharmSupplierId: null,
     pharmCategoryId: null,
@@ -41,6 +43,10 @@ const AddPharmacyItems = ({
   
   const [isLoading, setIsLoading] = useState(false);
   const [newDrugInteraction, setNewDrugInteraction] = useState('');
+  const [showBarcodeScanner, setShowBarcodeScanner] = useState(false);
+  const [newAlternateBarcode, setNewAlternateBarcode] = useState('');
+  const [nameSuggestions, setNameSuggestions] = useState<any[]>([]);
+  const [isNameSuggestionsLoading, setIsNameSuggestionsLoading] = useState(false);
 
   useEffect(() => {
     if (selectedItem) {
@@ -48,6 +54,7 @@ const AddPharmacyItems = ({
         name: selectedItem.name || '',
         pharmRackId: selectedItem.pharmRackId || null,
         barcode: selectedItem.barcode || '',
+        alternateBarcodes: selectedItem.alternateBarcodes || [],
         pharmManufacturerId: selectedItem.pharmManufacturerId || null,
         pharmSupplierId: selectedItem.pharmSupplierId || null,
         pharmCategoryId: selectedItem.pharmCategoryId || null,
@@ -70,6 +77,7 @@ const AddPharmacyItems = ({
         name: '',
         pharmRackId: null,
         barcode: '',
+        alternateBarcodes: [],
         pharmManufacturerId: null,
         pharmSupplierId: null,
         pharmCategoryId: null,
@@ -90,6 +98,43 @@ const AddPharmacyItems = ({
     }
   }, [selectedItem, isModalOpen]);
 
+  useEffect(() => {
+    let active = true;
+    const query = String(formData.name || '').trim();
+
+    if (!isModalOpen || selectedItem || query.length < 2) {
+      setNameSuggestions([]);
+      setIsNameSuggestionsLoading(false);
+      return;
+    }
+
+    const timeout = setTimeout(async () => {
+      try {
+        setIsNameSuggestionsLoading(true);
+        const res = await axios.get(`${Base_url}/apis/pharmItem/get`, {
+          params: { search: query, page: 1, limit: 10 },
+        });
+        const list = res?.data?.data || [];
+        if (active) {
+          setNameSuggestions(Array.isArray(list) ? list : []);
+        }
+      } catch {
+        if (active) {
+          setNameSuggestions([]);
+        }
+      } finally {
+        if (active) {
+          setIsNameSuggestionsLoading(false);
+        }
+      }
+    }, 250);
+
+    return () => {
+      active = false;
+      clearTimeout(timeout);
+    };
+  }, [formData.name, isModalOpen, selectedItem]);
+
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
     setFormData(prev => ({
@@ -100,7 +145,9 @@ const AddPharmacyItems = ({
 
   const handleNumberChange = (e) => {
     const { name, value } = e.target;
-    if (value === '' || /^[0-9]*\.?[0-9]*$/.test(value)) {
+    const allowNegative = name === 'openingStock' && !!selectedItem;
+    const pattern = allowNegative ? /^-?[0-9]*\.?[0-9]*$/ : /^[0-9]*\.?[0-9]*$/;
+    if (value === '' || pattern.test(value)) {
       const numValue = value === '' ? 0 : parseFloat(value);
       
       setFormData(prev => {
@@ -123,8 +170,16 @@ const AddPharmacyItems = ({
           } else if (prev.pieceCost > 0) {
             updated.unitCost = (prev.pieceCost * numValue).toFixed(2);
           }
+          if (!selectedItem && Number(prev.openingStock) > 0) {
+            updated.availableQuantity = (Number(prev.openingStock) * numValue).toString();
+          }
         }
         
+        if (name === 'openingStock' && !selectedItem) {
+          const conv = Number(prev.conversionUnit) || 1;
+          updated.availableQuantity = (numValue * conv).toString();
+        }
+
         // Validate Retail Price should not be below Cost Price
         if (name === 'retailPrice' && numValue > 0 && prev.unitCost > 0 && numValue < prev.unitCost) {
           toast.warning('Retail Price should not be below Unit Cost (Pack)');
@@ -159,6 +214,31 @@ const AddPharmacyItems = ({
     }));
   };
 
+  const addAlternateBarcode = () => {
+    const value = newAlternateBarcode.trim();
+    if (!value) {
+      return;
+    }
+    setFormData(prev => {
+      const existing = prev.alternateBarcodes || [];
+      if (existing.length >= 8 || existing.includes(value)) {
+        return prev;
+      }
+      return {
+        ...prev,
+        alternateBarcodes: [...existing, value]
+      };
+    });
+    setNewAlternateBarcode('');
+  };
+
+  const removeAlternateBarcode = (code) => {
+    setFormData(prev => ({
+      ...prev,
+      alternateBarcodes: (prev.alternateBarcodes || []).filter(item => item !== code)
+    }));
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
 
@@ -173,12 +253,12 @@ const AddPharmacyItems = ({
     try {
       // Convert object IDs to just IDs if they're objects
       // Also clean the data - remove empty strings and convert to proper types
-      const payload = {
+      const payload: any = {
         name: formData.name.trim(),
         pharmRackId: formData.pharmRackId?._id || formData.pharmRackId || null,
         barcode: formData.barcode || null,
+        alternateBarcodes: formData.alternateBarcodes || [],
         pharmManufacturerId: formData.pharmManufacturerId?._id || formData.pharmManufacturerId || null,
-        pharmSupplierId: formData.pharmSupplierId?._id || formData.pharmSupplierId || null,
         pharmCategoryId: formData.pharmCategoryId?._id || formData.pharmCategoryId || null,
         unit: formData.unit || null,
         conversionUnit: Number(formData.conversionUnit) || 1,
@@ -189,11 +269,19 @@ const AddPharmacyItems = ({
         genericName: formData.genericName || null,
         unitCost: Number(formData.unitCost) || 0,
         pieceCost: Number(formData.pieceCost) || 0,
-        availableQuantity: Number(formData.availableQuantity) || 0,
         expiredQuantity: Number(formData.expiredQuantity) || 0,
         narcotic: Boolean(formData.narcotic),
         active: Boolean(formData.active)
       };
+
+      // Only include availableQuantity when user has explicitly changed it
+      const aq = Number(formData.availableQuantity) || 0;
+      const origAq = Number(selectedItem?.availableQuantity) || 0;
+      if (!selectedItem) {
+        if (aq > 0) payload.availableQuantity = aq;
+      } else {
+        if (aq !== origAq) payload.availableQuantity = aq;
+      }
 
       console.log('Submitting payload:', payload);
 
@@ -220,6 +308,7 @@ const AddPharmacyItems = ({
   };
 
   return (
+    <>
     <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} width="800px">
       <div className="p-4 flex justify-between items-center bg-gray-50 dark:bg-gray-800">
         <h1 className="text-xl font-semibold text-gray-800 dark:text-white">
@@ -253,6 +342,30 @@ const AddPharmacyItems = ({
                   className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                   required
                 />
+                {isNameSuggestionsLoading && (
+                  <div className="mt-1 text-xs text-gray-500">Searching matching items...</div>
+                )}
+                {!isNameSuggestionsLoading && nameSuggestions.length > 0 && !selectedItem && (
+                  <div className="mt-2 border rounded bg-white dark:bg-gray-800 max-h-40 overflow-auto shadow-sm">
+                    {nameSuggestions.map((item: any) => (
+                      <button
+                        key={item?._id || item?.name}
+                        type="button"
+                        onClick={() => {
+                          setFormData(prev => ({ ...prev, name: item?.name || prev.name }));
+                        }}
+                        className="w-full text-left px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700"
+                      >
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm text-gray-800 dark:text-gray-100">{item?.name}</span>
+                          <span className="text-xs text-gray-500">
+                            {(item?.pharmManufacturerId?.name || item?.pharmManufacturerId) ? (item?.pharmManufacturerId?.name || item?.pharmManufacturerId) : ''}
+                          </span>
+                        </div>
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
               
               <div className="bg-blue-50 dark:bg-blue-900 border-l-4 border-blue-500 p-3 rounded">
@@ -266,14 +379,24 @@ const AddPharmacyItems = ({
                   <label className="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
                     Barcode
                   </label>
-                  <input
-                    type="text"
-                    name="barcode"
-                    value={formData.barcode}
-                    onChange={handleChange}
-                    placeholder="Barcode..."
-                    className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
-                  />
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      name="barcode"
+                      value={formData.barcode}
+                      onChange={handleChange}
+                      placeholder="Barcode or scan..."
+                      className="flex-1 rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowBarcodeScanner(true)}
+                      className="inline-flex items-center justify-center rounded border-[1.5px] border-stroke bg-gray-50 dark:bg-gray-800 px-4 py-3 text-primary hover:bg-primary hover:text-white transition-colors"
+                      title="Scan barcode"
+                    >
+                      <ScanBarcode size={22} />
+                    </button>
+                  </div>
                 </div>
                 <div>
                   <label className="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -288,6 +411,47 @@ const AddPharmacyItems = ({
                     className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                   />
                 </div>
+              </div>
+              <div>
+                <label className="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Alternate Barcodes (up to 8)
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newAlternateBarcode}
+                    onChange={(e) => setNewAlternateBarcode(e.target.value)}
+                    placeholder="Add alternate barcode"
+                    className="flex-1 rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                  />
+                  <button
+                    type="button"
+                    onClick={addAlternateBarcode}
+                    disabled={!newAlternateBarcode.trim() || (formData.alternateBarcodes || []).length >= 8}
+                    className="inline-flex items-center justify-center rounded border-[1.5px] border-stroke bg-gray-50 dark:bg-gray-800 px-4 py-3 text-primary hover:bg-primary hover:text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    Add
+                  </button>
+                </div>
+                {formData.alternateBarcodes && formData.alternateBarcodes.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-2">
+                    {formData.alternateBarcodes.map((code) => (
+                      <span
+                        key={code}
+                        className="inline-flex items-center gap-2 rounded-full bg-gray-100 dark:bg-gray-700 px-3 py-1 text-xs text-gray-800 dark:text-gray-100"
+                      >
+                        <span>{code}</span>
+                        <button
+                          type="button"
+                          onClick={() => removeAlternateBarcode(code)}
+                          className="text-red-500 hover:text-red-700"
+                        >
+                          ×
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -325,22 +489,6 @@ const AddPharmacyItems = ({
                   <option value="">Select Manufacturer</option>
                   {manufacturers.map(mfg => (
                     <option key={mfg._id} value={mfg._id}>{mfg.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
-                  Supplier
-                </label>
-                <select
-                  name="pharmSupplierId"
-                  value={formData.pharmSupplierId?._id || formData.pharmSupplierId || ''}
-                  onChange={(e) => handleSelectChange('pharmSupplierId', e.target.value)}
-                  className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
-                >
-                  <option value="">Select Supplier</option>
-                  {suppliers.map(supplier => (
-                    <option key={supplier._id} value={supplier._id}>{supplier.name}</option>
                   ))}
                 </select>
               </div>
@@ -404,7 +552,7 @@ const AddPharmacyItems = ({
                     value={formData.retailPrice}
                     onChange={handleNumberChange}
                     placeholder="Retail price"
-                    min={formData.unitCost || 0}
+                    min={0}
                     onWheel={(e) => e.currentTarget.blur()}
                     className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                   />
@@ -439,10 +587,7 @@ const AddPharmacyItems = ({
                     className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                   />
                 </div>
-              </div>
-              
-              <div className="grid grid-cols-2 gap-4">
-                <div>
+                 <div>
                   <label className="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
                     Piece Cost
                   </label>
@@ -473,6 +618,8 @@ const AddPharmacyItems = ({
                   />
                 </div>
               </div>
+              
+            
               
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -598,6 +745,18 @@ const AddPharmacyItems = ({
         </div>
       </form>
     </Modal>
+    <BarcodeScanner
+      isOpen={showBarcodeScanner}
+      onClose={() => setShowBarcodeScanner(false)}
+      onScan={(code) => {
+        setFormData(prev => ({
+          ...prev,
+          barcode: code
+        }));
+      }}
+      title="Scan Item Barcode"
+    />
+    </>
   );
 };
 

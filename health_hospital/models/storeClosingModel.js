@@ -44,6 +44,10 @@ const storeClosingSchema = new mongoose.Schema({
     type: String,
     default: 'Closed',
   },
+  branchId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Branch',
+  },
 }, { timestamps: true });
 
 // Pre-save middleware to calculate expectedCash and difference

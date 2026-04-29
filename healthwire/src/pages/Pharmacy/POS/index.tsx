@@ -1,10 +1,11 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { Base_url } from '../../../utils/Base_url';
 import { toast } from 'react-toastify';
 import { useParams, useNavigate } from 'react-router-dom';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 import { AsyncPaginate, LoadOptions } from 'react-select-async-paginate';
+import Modal from '../../../components/modal';
 
 // Enhanced type definitions
 // Custom option types for AsyncPaginate
@@ -34,11 +35,21 @@ type PharmItem = {
   conversionUnit: number;
   availableQuantity: number;
   costPrice: number;
-  unitCost: number; // Add this line to match backend and usage
+  unitCost: number;
   retailPrice: number;
   batches: Batch[];
   taxRate: number;
   discountAllowed: boolean;
+  barcode?: string;
+  pieceCost?: number;
+  /** Branch inventory row used for checkout when merged with global catalog */
+  sellablePharmItemId?: string | null;
+  catalogMasterOnly?: boolean;
+  catalogMasterId?: string | null;
+  pharmManufacturerId?: {
+    _id: string;
+    name: string;
+  } | string | null;
   pharmCategoryId?: {
     _id: string;
     name: string;
@@ -69,7 +80,9 @@ type PosItem = {
   rate: number;
   quantity: number;
   returnQuantity: number;
+  discountMode: 'value' | 'percentage';
   discount: number;
+  taxMode: 'percentage' | 'value';
   tax: number;
   netAmount: number;
   totalAmount: number;
@@ -97,10 +110,23 @@ export default function PharmacyPOS() {
   const [manualDoctorName, setManualDoctorName] = useState('');
   const [useManualDoctor, setUseManualDoctor] = useState(false);
   const [itemsList, setItemsList] = useState<PharmItem[]>([]);
-  const [doctorsList, setDoctorsList] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [remarks, setRemarks] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [allowNegativeInventory, setAllowNegativeInventory] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem('pharmAllowNegativeInventory');
+      return v === 'true';
+    } catch {
+      return false;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem('pharmAllowNegativeInventory', allowNegativeInventory ? 'true' : 'false');
+    } catch {}
+  }, [allowNegativeInventory]);
+  const [editingInvoiceNumber, setEditingInvoiceNumber] = useState<string>('');
 
   const [posItems, setPosItems] = useState<PosItem[]>([
     {
@@ -115,7 +141,9 @@ export default function PharmacyPOS() {
       rate: 0,
       quantity: 1,
       returnQuantity: 0,
+      discountMode: 'value',
       discount: 0,
+      taxMode: 'percentage',
       tax: 0,
       netAmount: 0,
       totalAmount: 0,
@@ -134,28 +162,419 @@ export default function PharmacyPOS() {
     }
   ]);
 
+  const [isProductSearchOpen, setIsProductSearchOpen] = useState(false);
+  const [productSearchQuery, setProductSearchQuery] = useState('');
+  const [productSearchMinCost, setProductSearchMinCost] = useState('');
+  const [productSearchMaxCost, setProductSearchMaxCost] = useState('');
+  const [productSearchCategoryId, setProductSearchCategoryId] = useState('');
+  const [productSearchManufacturerId, setProductSearchManufacturerId] = useState('');
+  const [productSearchMinStock, setProductSearchMinStock] = useState('');
+  const [productSearchPage, setProductSearchPage] = useState(1);
+  const [productSearchPageSize, setProductSearchPageSize] = useState(20);
+  const [productSearchResults, setProductSearchResults] = useState<PharmItem[]>([]);
+  const [productSearchTotal, setProductSearchTotal] = useState(0);
+  const [productSearchTotalPages, setProductSearchTotalPages] = useState(1);
+  const [productSearchLoading, setProductSearchLoading] = useState(false);
+  const [productSearchCategories, setProductSearchCategories] = useState<
+    Array<{ id: string; name: string }>
+  >([]);
+  const [productSearchManufacturers, setProductSearchManufacturers] = useState<
+    Array<{ id: string; name: string }>
+  >([]);
+  const [debouncedProductSearchQuery, setDebouncedProductSearchQuery] = useState('');
+  const [posItemSearchInputByRowId, setPosItemSearchInputByRowId] = useState<
+    Record<number, string>
+  >({});
+  const [activeSearchRowId, setActiveSearchRowId] = useState<number | null>(null);
+  const productSearchInputRef = useRef<HTMLInputElement | null>(null);
+
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        setIsLoading(true);
-        
-        const [itemsRes, doctorsRes] = await Promise.all([
-          axios.get(`${Base_url}/apis/pharmItem/get?active=true`),
-          axios.get(`${Base_url}/apis/user/get?role=doctor&active=true`)
+    if (!isProductSearchOpen) return;
+    setTimeout(() => {
+      productSearchInputRef.current?.focus();
+    }, 0);
+  }, [isProductSearchOpen]);
+
+  useEffect(() => {
+    if (!isProductSearchOpen) return;
+    setProductSearchPage(1);
+  }, [
+    isProductSearchOpen,
+    productSearchQuery,
+    productSearchMinCost,
+    productSearchMaxCost,
+    productSearchCategoryId,
+    productSearchManufacturerId,
+    productSearchMinStock,
+    productSearchPageSize,
+  ]);
+
+  useEffect(() => {
+    if (!id) {
+      setIsLoading(false);
+    }
+  }, [id]);
+
+  useEffect(() => {
+    if (!id) return;
+    setIsLoading(true);
+    axios
+      .get(`${Base_url}/apis/pharmPos/get/${id}`)
+      .then((res) => {
+        const inv = res?.data?.data;
+        if (!inv) return;
+        setEditingInvoiceNumber(String(inv.invoiceNumber || ''));
+
+        // Patient
+        if (inv.patientId && typeof inv.patientId === 'object' && inv.patientId._id) {
+          setUseManualPatient(false);
+          setPatientInfo({
+            _id: String(inv.patientId._id),
+            mr: String(inv.patientId.mr || ''),
+            name: String(inv.patientId.name || ''),
+          });
+          setManualPatientName('');
+        } else {
+          setUseManualPatient(true);
+          setPatientInfo(null);
+          setManualPatientName(String(inv.patientName || ''));
+        }
+
+        // Doctor
+        if (inv.referId && typeof inv.referId === 'object' && inv.referId._id) {
+          setUseManualDoctor(false);
+          setReferDoctor({
+            _id: String(inv.referId._id),
+            name: String(inv.referId.name || ''),
+            role: 'doctor',
+          });
+          setManualDoctorName('');
+        } else {
+          setUseManualDoctor(true);
+          setReferDoctor(null);
+          setManualDoctorName(String(inv.doctorName || ''));
+        }
+
+        setRemarks(String(inv.note || ''));
+
+        const items = Array.isArray(inv.allItem) ? inv.allItem : [];
+        const mappedItems: PosItem[] = items.map((it: any, idx: number) => {
+          const rate = Number(it?.rate || 0);
+          const qty = Number(it?.quantity || 0);
+          const discount = Number(it?.discount || 0);
+          const convUnit = Number(it?.conversionUnit || 1);
+          const unit = String(it?.unit || 'pack');
+          const computedUnitQty =
+            unit === 'pack'
+              ? (convUnit > 0 ? qty * convUnit : qty)
+              : qty;
+          const unitQuantity = Number(it?.unitQuantity || 0) > 0 ? Number(it?.unitQuantity) : computedUnitQty;
+          const netAmount = Number(it?.netAmount ?? rate * qty);
+          const totalAmount = Number(it?.totalAmount ?? netAmount - discount);
+          return {
+            id: idx + 1,
+            pharmItemId:
+              typeof it?.pharmItemId === 'object' && it?.pharmItemId?._id
+                ? String(it.pharmItemId._id)
+                : String(it?.pharmItemId || ''),
+            itemName:
+              typeof it?.pharmItemId === 'object' && it?.pharmItemId?.name
+                ? String(it.pharmItemId.name)
+                : String(it?.itemName || ''),
+            unit,
+            unitQuantity,
+            conversionUnit: convUnit,
+            batchNumber: String(it?.batchNumber || ''),
+            unitCost: Number(it?.unitCost || 0),
+            rate,
+            quantity: qty,
+            returnQuantity: Number(it?.returnQuantity || 0),
+            discountMode: 'value',
+            discount,
+            taxMode: 'percentage',
+            tax: 0,
+            netAmount,
+            totalAmount,
+            isReturn: Boolean(it?.isReturn),
+            originalInvoiceNumber: String(it?.originalInvoiceNumber || (it?.isReturn ? inv.invoiceNumber || '' : '')),
+          };
+        });
+        setPosItems(mappedItems.length ? mappedItems : [
+          {
+            id: 1,
+            pharmItemId: '',
+            itemName: '',
+            unit: 'pack',
+            unitQuantity: 1,
+            conversionUnit: 1,
+            batchNumber: '',
+            unitCost: 0,
+            rate: 0,
+            quantity: 1,
+            returnQuantity: 0,
+            discountMode: 'value',
+            discount: 0,
+            taxMode: 'percentage',
+            tax: 0,
+            netAmount: 0,
+            totalAmount: 0,
+            isReturn: false,
+            originalInvoiceNumber: '',
+          },
         ]);
-        
-        setItemsList(itemsRes?.data?.data || []);
-        setDoctorsList(doctorsRes?.data?.data || []);
-      } catch (error: any) {
-        console.error('Error fetching data:', error);
-        toast.error('Failed to load required data. Please try again.');
-      } finally {
+
+        const payments = Array.isArray(inv.payment) ? inv.payment : [];
+        const mappedPayments: PaymentInstallment[] = payments.map((p: any, idx: number) => ({
+          id: idx + 1,
+          date: String((p?.payDate || new Date().toISOString()).split('T')[0]),
+          method: String(p?.method || 'Cash') as PaymentMethod,
+          amount: Number(p?.paid || 0),
+          reference: String(p?.reference || ''),
+        }));
+        setPaymentInstallments(mappedPayments.length ? mappedPayments : [{
+          id: 1,
+          date: new Date().toISOString().split('T')[0],
+          method: 'Cash',
+          amount: 0,
+          reference: '',
+        }]);
+        const uniqueItemIds: string[] = Array.from(
+          new Set(
+            (Array.isArray(items) ? items : [])
+              .map((it: any) =>
+                typeof it?.pharmItemId === 'object' && it?.pharmItemId?._id
+                  ? String(it.pharmItemId._id)
+                  : String(it?.pharmItemId || '')
+              )
+              .filter((pid: string) => pid && pid.trim().length > 0)
+          )
+        );
+        const missingIds = uniqueItemIds.filter(
+          (pid) => !itemsList.some((i) => i._id === pid)
+        );
+        if (missingIds.length) {
+          Promise.all(
+            missingIds.map((pid) =>
+              axios
+                .get(`${Base_url}/apis/pharmItem/get/${pid}`)
+                .then((r) => r?.data?.data || null)
+                .catch(() => null)
+            )
+          )
+            .then((fetched) => {
+              const valid = fetched.filter(Boolean) as PharmItem[];
+              if (valid.length) {
+                setItemsList((prev) => {
+                  const merged = [...prev];
+                  valid.forEach((it) => {
+                    if (!merged.some((m) => m._id === it._id)) merged.push(it);
+                  });
+                  return merged;
+                });
+              }
+            })
+            .catch(() => {});
+        }
+      })
+      .catch(() => {
+        toast.error('Failed to load invoice');
+      })
+      .finally(() => {
         setIsLoading(false);
+      });
+  }, [id]);
+
+  useEffect(() => {
+    if (!isProductSearchOpen) return;
+    const t = setTimeout(() => {
+      setDebouncedProductSearchQuery(productSearchQuery);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [isProductSearchOpen, productSearchQuery]);
+
+  useEffect(() => {
+    if (!isProductSearchOpen) return;
+    if (productSearchCategories.length > 0) return;
+
+    axios
+      .get(`${Base_url}/apis/pharmCategory/get`, {
+        params: { limit: 1000, sort: 'name' },
+      })
+      .then((res) => {
+        const list = res?.data?.data || [];
+        setProductSearchCategories(
+          list
+            .map((c: any) => ({
+              id: String(c?._id || '').trim(),
+              name: String(c?.name || '').trim(),
+            }))
+            .filter((c: any) => c.id && c.name)
+        );
+      })
+      .catch(() => {
+        setProductSearchCategories([]);
+      });
+  }, [isProductSearchOpen, productSearchCategories.length]);
+
+  useEffect(() => {
+    if (!isProductSearchOpen) return;
+    if (productSearchManufacturers.length > 0) return;
+
+    axios
+      .get(`${Base_url}/apis/pharmManufacturer/get`, {
+        params: { limit: 1000, sort: 'name' },
+      })
+      .then((res) => {
+        const list = res?.data?.data || [];
+        setProductSearchManufacturers(
+          list
+            .map((m: any) => ({
+              id: String(m?._id || '').trim(),
+              name: String(m?.name || '').trim(),
+            }))
+            .filter((m: any) => m.id && m.name)
+        );
+      })
+      .catch(() => {
+        setProductSearchManufacturers([]);
+      });
+  }, [isProductSearchOpen, productSearchManufacturers.length]);
+
+  useEffect(() => {
+    if (!isProductSearchOpen) return;
+    const fetchProducts = async () => {
+      setProductSearchLoading(true);
+      try {
+        const params: Record<string, any> = {
+          page: productSearchPage,
+          limit: productSearchPageSize,
+          active: true,
+          sort: 'name',
+          catalog: '1',
+        };
+
+        const query = String(debouncedProductSearchQuery || '').trim();
+        if (query) {
+          params.search = query;
+          params.searchFields = 'name,barcode,genericName';
+        }
+
+        const catId = String(productSearchCategoryId || '').trim();
+        if (catId) {
+          params.pharmCategoryId = catId;
+        }
+
+        const manufacturerId = String(productSearchManufacturerId || '').trim();
+        if (manufacturerId) {
+          params.pharmManufacturerId = manufacturerId;
+        }
+
+        const minStock =
+          productSearchMinStock.trim() === '' ? null : Number(productSearchMinStock);
+        if (minStock !== null && !Number.isNaN(minStock)) {
+          params.minStock = minStock;
+        }
+
+        const minCost =
+          productSearchMinCost.trim() === '' ? null : Number(productSearchMinCost);
+        if (minCost !== null && !Number.isNaN(minCost)) {
+          params.minCost = minCost;
+        }
+
+        const maxCost =
+          productSearchMaxCost.trim() === '' ? null : Number(productSearchMaxCost);
+        if (maxCost !== null && !Number.isNaN(maxCost)) {
+          params.maxCost = maxCost;
+        }
+
+        const res = await axios.get(`${Base_url}/apis/pharmItem/get`, { params });
+        const list = res?.data?.data || [];
+        const totalPages = Number(res?.data?.totalPages || 1);
+        const total =
+          Number(res?.data?.count) ||
+          Number(res?.data?.total) ||
+          Number(res?.data?.totalItems) ||
+          Number(res?.data?.totalCount) ||
+          Number(res?.data?.totalRecords) ||
+          0;
+
+        setProductSearchResults(list);
+        setProductSearchTotal(total || (Array.isArray(list) ? list.length : 0));
+        setProductSearchTotalPages(Number.isFinite(totalPages) && totalPages > 0 ? totalPages : 1);
+      } catch (error) {
+        setProductSearchResults([]);
+        setProductSearchTotal(0);
+        setProductSearchTotalPages(1);
+      } finally {
+        setProductSearchLoading(false);
       }
     };
-    
-    fetchData();
-  }, []);
+
+    fetchProducts();
+  }, [
+    isProductSearchOpen,
+    productSearchPage,
+    productSearchPageSize,
+    productSearchCategoryId,
+    productSearchManufacturerId,
+    productSearchMinStock,
+    productSearchMinCost,
+    productSearchMaxCost,
+    debouncedProductSearchQuery,
+  ]);
+
+  const applySelectedPharmItem = (rowId: number, selectedItem: PharmItem) => {
+    const sel = selectedItem as PharmItem & { catalogMasterOnly?: boolean; sellablePharmItemId?: string | null };
+    if (sel.catalogMasterOnly) {
+      toast.error('Pehle apni branch par stock add karein (Manage stock / purchase inbound).');
+      return;
+    }
+    const saleId = sel.sellablePharmItemId || sel._id;
+    const normalizedItem = { ...selectedItem, _id: String(saleId) };
+
+    setItemsList((prev) => {
+      if (prev.some((i) => i._id === normalizedItem._id)) return prev;
+      return [...prev, normalizedItem];
+    });
+
+    setPosItems((prev) =>
+      prev.map((row) => {
+        if (row.id !== rowId) return row;
+
+        const normalizedUnit = String(normalizedItem.unit || 'pack').toLowerCase();
+        const conversionUnit = normalizedItem.conversionUnit || 1;
+        const rate =
+          normalizedUnit === 'pack'
+            ? normalizedItem.retailPrice
+            : conversionUnit > 0
+              ? normalizedItem.retailPrice / conversionUnit
+              : normalizedItem.retailPrice;
+        const batchNumber = normalizedItem.batches?.[0]?.batchNumber || '';
+        const unitCost =
+          normalizedItem.batches?.[0]?.purchasePrice ?? normalizedItem.unitCost ?? 0;
+        const tax = 0;
+        const quantity = row.quantity || 1;
+        const unitQuantity = quantity * conversionUnit;
+        const netAmount = rate * quantity;
+        const totalAmount = netAmount - (row.discount || 0);
+
+        return {
+          ...row,
+          pharmItemId: String(saleId),
+          itemName: normalizedItem.name,
+          unit: normalizedUnit,
+          conversionUnit,
+          rate,
+          batchNumber,
+          unitCost,
+          tax,
+          unitQuantity,
+          netAmount,
+          totalAmount,
+        };
+      })
+    );
+  };
 
   const loadPatientOptions: LoadOptions<PatientOption, never, { page: number }> = async (
     searchQuery,
@@ -197,7 +616,8 @@ export default function PharmacyPOS() {
           search: searchQuery || '',
           searchFields: 'name,barcode,genericName', // Search in multiple fields
           sort: 'name',
-          active: true // Only load active items
+          active: true, // Only load active items
+          catalog: '1',
         }
       });
 
@@ -205,16 +625,18 @@ export default function PharmacyPOS() {
 
       return {
         options: data.map((item: PharmItem) => {
-          // Format quantity display properly
+          const meta = item as PharmItem & { catalogMasterOnly?: boolean };
           const packQty = Math.floor(item.availableQuantity / (item.conversionUnit || 1));
           const pieceQty = item.availableQuantity % (item.conversionUnit || 1);
           const qtyDisplay = item.conversionUnit > 1 
             ? `${packQty} ${item.unit || 'pack'} ${pieceQty > 0 ? `${pieceQty} piece` : ''}`.trim()
             : `${item.availableQuantity} ${item.unit || 'pack'}`;
+          const catalogNote = meta.catalogMasterOnly ? ' · catalog (stock add karein)' : '';
           
           return {
-            label: `${item.name} ${item.barcode ? `(${item.barcode})` : ''} (${qtyDisplay} available) - Rs.${item.retailPrice}`,
+            label: `${item.name} ${item.barcode ? `(${item.barcode})` : ''} (${qtyDisplay} available)${catalogNote} - Rs.${item.retailPrice}`,
             value: item._id,
+            isDisabled: !!meta.catalogMasterOnly,
             itemData: item,
           };
         }),
@@ -278,7 +700,9 @@ export default function PharmacyPOS() {
       rate: 0,
       quantity: 1,
       returnQuantity: 0,
+      discountMode: 'value',
       discount: 0,
+      taxMode: 'percentage',
       tax: 0,
       netAmount: 0,
       totalAmount: 0,
@@ -295,20 +719,56 @@ export default function PharmacyPOS() {
     setPosItems(posItems.filter(item => item.id !== id));
   };
 
+  const getBaseAmountForPercent = (item: PosItem) => {
+    if (item.isReturn && item.returnQuantity > 0) {
+      return Math.abs(item.rate * item.returnQuantity);
+    }
+    return item.rate * item.quantity;
+  };
+
+  const getDiscountAmount = (item: PosItem) => {
+    if (item.isReturn) {
+      return 0;
+    }
+    const base = getBaseAmountForPercent(item);
+    const discountValue = Number(item.discount) || 0;
+    if (item.discountMode === 'percentage') {
+      return (base * discountValue) / 100;
+    }
+    return discountValue;
+  };
+
+  const getTaxAmount = (_item: PosItem) => {
+    return 0;
+  };
+
+  const recalcItemTotals = (item: PosItem) => {
+    const discountAmount = getDiscountAmount(item);
+    if (item.isReturn) {
+      const netAmount = -(item.rate * (Number(item.returnQuantity) || 0));
+      const totalAmount = netAmount;
+      return { ...item, netAmount, totalAmount };
+    }
+    const netAmount = item.rate * (Number(item.quantity) || 0);
+    const totalAmount = netAmount - discountAmount;
+    return { ...item, netAmount, totalAmount };
+  };
+
   const updatePosItem = (id: number, field: keyof PosItem, value: any) => {
     const updatedItems = posItems.map(item => {
       if (item.id !== id) return item;
 
-      const updatedItem = { ...item, [field]: value };
+      let updatedItem = { ...item, [field]: value };
       
       if (field === 'pharmItemId') {
         const selectedItem = itemsList.find(i => i._id === value);
         if (selectedItem) {
           updatedItem.itemName = selectedItem.name;
-          updatedItem.unit = selectedItem.unit || 'pack';
+          const normalizedUnit = String(selectedItem.unit || 'pack').toLowerCase();
+          updatedItem.unit = normalizedUnit;
           updatedItem.conversionUnit = selectedItem.conversionUnit || 1;
           // Set rate based on selected unit
-          if (updatedItem.unit === 'pack') {
+          if (normalizedUnit === 'pack') {
             updatedItem.rate = selectedItem.retailPrice;
           } else {
             // For unit/piece, calculate rate from retail price and conversion unit
@@ -317,6 +777,7 @@ export default function PharmacyPOS() {
               : selectedItem.retailPrice;
           }
           updatedItem.unitCost = selectedItem.unitCost;
+          updatedItem.taxMode = 'percentage';
           updatedItem.tax = selectedItem.taxRate || 0;
           // Calculate unit quantity (if quantity is in packs, unitQuantity is in units)
           updatedItem.unitQuantity = updatedItem.quantity * updatedItem.conversionUnit;
@@ -324,10 +785,7 @@ export default function PharmacyPOS() {
             updatedItem.batchNumber = selectedItem.batches[0].batchNumber;
             updatedItem.unitCost = selectedItem.batches[0].purchasePrice;
           }
-          // Always recalculate amounts after selecting item
-          updatedItem.netAmount = updatedItem.rate * updatedItem.quantity;
-          const taxAmount = (updatedItem.netAmount * (updatedItem.tax / 100)) || 0;
-          updatedItem.totalAmount = updatedItem.netAmount + taxAmount - updatedItem.discount;
+          updatedItem = recalcItemTotals(updatedItem);
         }
       }
       
@@ -343,10 +801,7 @@ export default function PharmacyPOS() {
               ? selectedItem.retailPrice / selectedItem.conversionUnit 
               : selectedItem.retailPrice;
           }
-          // Recalculate amounts
-          updatedItem.netAmount = updatedItem.rate * updatedItem.quantity;
-          const taxAmount = (updatedItem.netAmount * (updatedItem.tax / 100)) || 0;
-          updatedItem.totalAmount = updatedItem.netAmount + taxAmount - updatedItem.discount;
+          updatedItem = recalcItemTotals(updatedItem);
         }
       }
       
@@ -357,33 +812,21 @@ export default function PharmacyPOS() {
           if (selectedBatch) {
             updatedItem.unitCost = selectedBatch.purchasePrice;
           }
-          // Always recalculate amounts after selecting batch
-          updatedItem.netAmount = updatedItem.rate * updatedItem.quantity;
-          const taxAmount = (updatedItem.netAmount * (updatedItem.tax / 100)) || 0;
-          updatedItem.totalAmount = updatedItem.netAmount + taxAmount - updatedItem.discount;
+          updatedItem = recalcItemTotals(updatedItem);
         }
       }
       
       // Recalculate amounts when relevant fields change
-      if (["quantity", "rate", "discount", "batchNumber", "tax", "returnQuantity"].includes(field)) {
+      if (["quantity", "rate", "discount", "discountMode", "batchNumber", "returnQuantity"].includes(field)) {
         // Update unit quantity when quantity changes
         if (field === 'quantity') {
           updatedItem.unitQuantity = updatedItem.quantity * updatedItem.conversionUnit;
         }
-        
-        // For return items with returnQuantity
-        if (updatedItem.isReturn && updatedItem.returnQuantity > 0) {
-          // Return quantity is in same unit as quantity (packs)
-          updatedItem.netAmount = -(updatedItem.rate * updatedItem.returnQuantity);
-          const taxAmount = (Math.abs(updatedItem.netAmount) * (updatedItem.tax / 100)) || 0;
-          updatedItem.totalAmount = updatedItem.netAmount - taxAmount + updatedItem.discount;
-        } else {
-          // For regular sales
-          updatedItem.netAmount = updatedItem.rate * updatedItem.quantity;
-          const taxAmount = (updatedItem.netAmount * (updatedItem.tax / 100)) || 0;
-          updatedItem.totalAmount = updatedItem.netAmount + taxAmount - updatedItem.discount;
-        }
+
+        updatedItem = recalcItemTotals(updatedItem);
       }
+      
+      
       
       // Update quantity when unit quantity changes
       if (field === 'unitQuantity') {
@@ -406,34 +849,29 @@ export default function PharmacyPOS() {
             // Reset to minimum value of 1
             updatedItem.unitQuantity = 1;
             updatedItem.quantity = updatedItem.conversionUnit > 0 ? 1 / updatedItem.conversionUnit : 1;
-            updatedItem.netAmount = updatedItem.rate * updatedItem.quantity;
-            const taxAmount = (updatedItem.netAmount * (updatedItem.tax / 100)) || 0;
-            updatedItem.totalAmount = updatedItem.netAmount + taxAmount - updatedItem.discount;
+            updatedItem = recalcItemTotals(updatedItem);
             return updatedItem;
           }
         }
         
         updatedItem.quantity = updatedItem.conversionUnit > 0 ? updatedItem.unitQuantity / updatedItem.conversionUnit : 0;
-        updatedItem.netAmount = updatedItem.rate * updatedItem.quantity;
-        const taxAmount = (updatedItem.netAmount * (updatedItem.tax / 100)) || 0;
-        updatedItem.totalAmount = updatedItem.netAmount + taxAmount - updatedItem.discount;
+        updatedItem = recalcItemTotals(updatedItem);
       }
       
       if (field === 'isReturn') {
         updatedItem.returnQuantity = 0;
-        // Clear invoice number if unchecking return
         if (!value) {
           updatedItem.originalInvoiceNumber = '';
+        } else if (!updatedItem.originalInvoiceNumber) {
+          updatedItem.originalInvoiceNumber = editingInvoiceNumber || '';
         }
+        updatedItem = recalcItemTotals(updatedItem);
       }
       
       // Calculate profit - for return items, profit should be negative (loss)
       if (field === 'isReturn' || field === 'quantity' || field === 'rate' || field === 'unitCost' || field === 'returnQuantity') {
         if (updatedItem.isReturn && updatedItem.returnQuantity > 0) {
-          // For returns, profit is negative (loss)
-          updatedItem.netAmount = -(updatedItem.rate * updatedItem.returnQuantity);
-          const taxAmount = (Math.abs(updatedItem.netAmount) * (updatedItem.tax / 100)) || 0;
-          updatedItem.totalAmount = updatedItem.netAmount - taxAmount + updatedItem.discount;
+          updatedItem = recalcItemTotals(updatedItem);
         }
       }
       
@@ -441,6 +879,63 @@ export default function PharmacyPOS() {
     });
     
     setPosItems(updatedItems);
+  };
+
+  const openProductSearch = (id: number) => {
+    setActiveSearchRowId(id);
+    const row = posItems.find((r) => r.id === id);
+    const initialQuery = String(
+      posItemSearchInputByRowId[id] || row?.itemName || ''
+    );
+    setProductSearchQuery(initialQuery);
+    setDebouncedProductSearchQuery(initialQuery);
+    setProductSearchMinCost('');
+    setProductSearchMaxCost('');
+    setProductSearchCategoryId('');
+    setProductSearchManufacturerId('');
+    setProductSearchMinStock('');
+    setProductSearchPage(1);
+    setIsProductSearchOpen(true);
+  };
+
+  const closeProductSearch = () => {
+    setIsProductSearchOpen(false);
+    setActiveSearchRowId(null);
+  };
+
+  const getProductCost = (item: PharmItem) => {
+    const primaryBatch = item.batches?.[0];
+    const raw =
+      primaryBatch?.purchasePrice ??
+      item.unitCost ??
+      item.costPrice ??
+      item.pieceCost ??
+      0;
+    return Number(raw) || 0;
+  };
+
+  const safeProductSearchPage = Math.min(
+    Math.max(1, productSearchPage),
+    Math.max(1, productSearchTotalPages)
+  );
+  const productSearchStartIndex =
+    productSearchTotal === 0 ? 0 : (safeProductSearchPage - 1) * productSearchPageSize;
+  const productSearchEndIndex = Math.min(
+    productSearchStartIndex + (productSearchResults?.length || 0),
+    productSearchTotal
+  );
+
+  const handleSelectProductFromSearch = (product: PharmItem) => {
+    if (activeSearchRowId === null) {
+      return;
+    }
+    setPosItemSearchInputByRowId((prev) => ({
+      ...prev,
+      [activeSearchRowId]: product.name,
+    }));
+    applySelectedPharmItem(activeSearchRowId, product);
+    setIsProductSearchOpen(false);
+    setActiveSearchRowId(null);
   };
 
   const addPaymentInstallment = () => {
@@ -487,15 +982,20 @@ export default function PharmacyPOS() {
   };
 
   const calculateTotalDiscount = () => {
-    return posItems.reduce((sum, item) => sum + item.discount, 0);
+    return posItems.reduce((sum, item) => sum + getDiscountAmount(item), 0);
   };
 
   const calculateTotalTax = () => {
-    return posItems.reduce((sum, item) => sum + (item.netAmount * (item.tax / 100)), 0);
+    return posItems.reduce((sum, item) => {
+      if (item.isReturn && item.returnQuantity > 0) {
+        return sum - getTaxAmount(item);
+      }
+      return sum + getTaxAmount(item);
+    }, 0);
   };
 
   const calculateGrandTotal = () => {
-    return calculateSubTotal() + calculateTotalTax() - calculateTotalDiscount();
+    return posItems.reduce((sum, item) => sum + item.totalAmount, 0);
   };
 
   const calculateTotalPaid = () => {
@@ -555,10 +1055,14 @@ export default function PharmacyPOS() {
           }
         }
         
-        if (!item.isReturn && selectedItem.availableQuantity < actualQty) {
-          toast.error(`Insufficient stock for ${selectedItem.name}. Available: ${selectedItem.availableQuantity}`);
-          setIsSubmitting(false);
-          return;
+        if (!item.isReturn) {
+          const requestedUnits = Number(item.unitQuantity || (item.quantity * (selectedItem.conversionUnit || 1)));
+          const availableUnits = Number(selectedItem.availableQuantity || 0);
+          if (requestedUnits > availableUnits && !allowNegativeInventory) {
+            toast.error(`Insufficient stock for ${selectedItem.name}. Available: ${availableUnits}`);
+            setIsSubmitting(false);
+            return;
+          }
         }
         
         if (item.isReturn && item.returnQuantity > item.quantity) {
@@ -611,13 +1115,14 @@ export default function PharmacyPOS() {
         patientName: useManualPatient ? manualPatientName : patientInfo?.name,
         referId: useManualDoctor ? null : (referDoctor?._id || null),
         doctorName: useManualDoctor ? manualDoctorName : (referDoctor?.name || null),
+        allowNegativeInventory,
         totalDiscount: calculateTotalDiscount(),
-        totalTax: calculateTotalTax(),
+        totalTax: 0,
         due: Math.max(0, calculateDue()),
         advance: Math.max(0, -calculateDue()),
         paid: calculateTotalPaid(),
         note: remarks,
-        createdBy: currentUserId, // Add the current user as creator
+        createdBy: currentUserId,
         allItem: posItems.map(item => ({
           pharmItemId: item.pharmItemId,
           unit: item.unit,
@@ -626,14 +1131,10 @@ export default function PharmacyPOS() {
           rate: item.rate,
           quantity: item.quantity,
           returnQuantity: item.isReturn ? item.returnQuantity : 0,
-          discount: item.discount,
-          tax: item.tax,
-          netAmount: item.isReturn && item.returnQuantity > 0 
-            ? -(item.rate * item.returnQuantity) 
-            : item.netAmount,
-          totalAmount: item.isReturn && item.returnQuantity > 0
-            ? -(item.rate * item.returnQuantity) + (item.rate * item.returnQuantity * (item.tax / 100)) - item.discount
-            : item.totalAmount,
+          discount: getDiscountAmount(item),
+          tax: 0,
+          netAmount: item.netAmount,
+          totalAmount: item.totalAmount,
           isReturn: item.isReturn,
           originalInvoiceNumber: item.isReturn ? item.originalInvoiceNumber : undefined
         })),
@@ -645,58 +1146,16 @@ export default function PharmacyPOS() {
         }))
       };
       
-      const response = await axios.post(`${Base_url}/apis/pharmPos/create`, posPayload);
+      const response = id
+        ? await axios.put(`${Base_url}/apis/pharmPos/update/${id}`, posPayload)
+        : await axios.post(`${Base_url}/apis/pharmPos/create`, posPayload);
       
-      console.log('POS response:', response.data);
+      // console.log('POS response:', response.data);
       
       if (response.data.status === "ok" || response.data.status === "success") {
-        toast.success('POS invoice created successfully!');
-        
-        // Store the created invoice ID for reference
-        const invoiceId = response.data.data?._id;
-        
-        // Show success message with invoice details
-        toast.success(`POS invoice created successfully! Invoice ID: ${invoiceId?.slice(-8).toUpperCase()}`);
-        
-        // Reset form state immediately
-        setPosItems([{
-          id: 1,
-          pharmItemId: '',
-          itemName: '',
-          unit: 'pack',
-          unitQuantity: 1,
-          conversionUnit: 1,
-          batchNumber: '',
-          unitCost: 0,
-          rate: 0,
-          quantity: 1,
-          returnQuantity: 0,
-          discount: 0,
-          tax: 0,
-          netAmount: 0,
-          totalAmount: 0,
-          isReturn: false,
-          originalInvoiceNumber: '',
-        }]);
-        setPaymentInstallments([{
-          id: 1,
-          date: new Date().toISOString().split('T')[0],
-          method: 'Cash',
-          amount: 0,
-          reference: ''
-        }]);
-        setPatientInfo(null);
-        setManualPatientName('');
-        setUseManualPatient(false);
-        setReferDoctor(null);
-        setManualDoctorName('');
-        setUseManualDoctor(false);
-        setRemarks('');
-        
-        // Reload page after short delay to ensure clean state
-        setTimeout(() => {
-          window.location.reload();
-        }, 1500);
+        const invoiceId = response.data.data?._id || id;
+        toast.success(id ? 'POS invoice updated successfully!' : `POS invoice created successfully! Invoice ID: ${String(invoiceId || '').slice(-8).toUpperCase()}`);
+        navigate(`/admin/pharmacy/invoices/receipt/${invoiceId}`);
       } else {
         throw new Error(response.data.message || 'Transaction failed');
       }
@@ -745,6 +1204,16 @@ export default function PharmacyPOS() {
     <div className="mx-auto max-w-[1800px] px-4 py-6">
       <Breadcrumb pageName="Pharmacy Point of Sale" />
     
+      {id && (
+        <div className="mb-4 bg-yellow-50 border border-yellow-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between">
+          <div className="text-sm font-semibold text-yellow-800">
+            Editing existing invoice
+          </div>
+          <div className="mt-2 sm:mt-0 text-xs text-yellow-700">
+            Items: <span className="font-bold">{posItems.length}</span> • Payments: <span className="font-bold">{paymentInstallments.length}</span>
+          </div>
+        </div>
+      )}
       
       {/* Patient and Doctor Selection */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
@@ -891,85 +1360,188 @@ export default function PharmacyPOS() {
                 <p className="text-xs text-gray-500 mt-0.5">{posItems.length} item(s) added</p>
               </div>
             </div>
-            <button
-              onClick={addPosItem}
-              className="bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white px-5 py-2.5 rounded-lg flex items-center shadow-md hover:shadow-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-              disabled={posItems.length >= 20}
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z" clipRule="evenodd" />
-              </svg>
-              Add New Item
-            </button>
+            <div className="flex items-center gap-4">
+              <label className="inline-flex items-center">
+                <input
+                  type="checkbox"
+                  className="rounded border-gray-300 text-purple-600 focus:ring-purple-500 w-4 h-4"
+                  checked={allowNegativeInventory}
+                  onChange={(e) => setAllowNegativeInventory(e.target.checked)}
+                />
+                <span className="ml-2 text-xs font-semibold text-gray-700">
+                  Allow Negative Inventory
+                </span>
+                <span className={`ml-2 inline-flex items-center rounded px-2 py-0.5 text-xs font-semibold ${allowNegativeInventory ? 'bg-green-100 text-green-700 border border-green-300' : 'bg-gray-100 text-gray-600 border border-gray-300'}`}>
+                  {allowNegativeInventory ? 'Enabled' : 'Disabled'}
+                </span>
+              </label>
+              <button
+                onClick={addPosItem}
+                className="bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white px-5 py-2.5 rounded-lg flex items-center shadow-md hover:shadow-lg transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={posItems.length >= 20}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z" clipRule="evenodd" />
+                </svg>
+                Add New Item
+              </button>
+            </div>
           </div>
         </div>
-        
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-3 py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Item <span className="text-red-500">*</span></th>
-                <th className="px-3 py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Unit</th>
-                <th className="px-3 py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Batch</th>
-                <th className="px-3 py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Cost</th>
-                <th className="px-3 py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Rate <span className="text-red-500">*</span></th>
-                <th className="px-3 py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Pack <span className="text-red-500">*</span></th>
-                <th className="px-3 py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Single Piece</th>
-                <th className="px-3 py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Amount</th>
-                <th className="px-3 py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Discount</th>
-                <th className="px-3 py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Tax %</th>
-                <th className="px-3 py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Total</th>
-                <th className="px-3 py-4 text-left text-xs font-bold text-gray-600 uppercase tracking-wider">Profit</th>
-                <th className="px-3 py-4 text-center text-xs font-bold text-gray-600 uppercase tracking-wider">Action</th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-100">
-              {posItems.map((item) => (
-                <tr key={item.id} className="hover:bg-blue-50 transition-colors">
-                  <td className="px-2 py-3 whitespace-nowrap">
-                    <AsyncPaginate
-                      value={item.pharmItemId ? {
-                        label: item.itemName,
-                        value: item.pharmItemId
-                      } : null}
-                      onChange={(selectedOption: any) => {
-                        if (selectedOption) {
-                          updatePosItem(item.id, 'pharmItemId', selectedOption.value || '');
+        <div className="p-4 space-y-4">
+          {posItems.map((item, index) => {
+            let profit = 0;
+            const discountAmount = getDiscountAmount(item);
+            if (item.isReturn) {
+              const qty = Number(item.returnQuantity) || 0;
+              const revenue = -(item.rate * qty);
+              profit = revenue - (item.unitCost * qty);
+            } else {
+              const qty = Number(item.quantity) || 0;
+              const revenue = (item.rate * qty) - discountAmount;
+              profit = revenue - (item.unitCost * qty);
+            }
+
+            return (
+              <div
+                key={item.id}
+                className="rounded-xl border border-gray-200 bg-white p-4 shadow-sm"
+              >
+                <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="text-sm font-bold text-gray-800">
+                    Item #{index + 1}
+                  </div>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
+                    <label className="inline-flex items-center cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 w-4 h-4"
+                        checked={item.isReturn}
+                        onChange={(e) =>
+                          updatePosItem(item.id, 'isReturn', e.target.checked)
                         }
-                      }}
-                      loadOptions={loadItemOptions as unknown as LoadOptions<any, never, { page: number }>}
-                      getOptionLabel={(option: any) => option?.label || option?.itemData?.name || ''}
-                      getOptionValue={(option: any) => option?.value || ''}
-                      placeholder="Search by name, barcode or serial..."
-                      additional={{ page: 1 }}
-                      classNamePrefix="react-select"
-                      className="w-64"
-                      required
-                      menuPortalTarget={typeof window !== 'undefined' ? document.body : null}
-                      menuPosition="fixed"
-                      styles={{ 
-                        menuPortal: base => ({ ...base, zIndex: 9999 }),
-                        singleValue: (base) => ({
-                          ...base,
-                          color: '#1f2937',
-                          fontWeight: '500'
-                        })
-                      }}
-                      formatOptionLabel={(option: any) => (
-                        <div className="text-sm">
-                          <div className="font-medium text-gray-900">{option.itemData?.name || option.label}</div>
-                          {option.itemData?.barcode && (
-                            <div className="text-xs text-gray-500">Barcode: {option.itemData.barcode}</div>
-                          )}
-                        </div>
-                      )}
-                    />
-                  </td>
-                  <td className="px-2 py-3 whitespace-nowrap">
+                      />
+                      <span className="ml-2 text-xs text-gray-600 font-medium">
+                        Return
+                      </span>
+                    </label>
+                    {item.isReturn && (
+                      <input
+                        type="text"
+                        className="w-full sm:w-56 rounded-lg border border-red-300 bg-red-50 h-11 px-3 text-sm text-gray-700 outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-200"
+                        placeholder="Original Invoice #"
+                        value={item.originalInvoiceNumber || ''}
+                        onChange={(e) =>
+                          updatePosItem(
+                            item.id,
+                            'originalInvoiceNumber',
+                            e.target.value
+                          )
+                        }
+                      />
+                    )}
+                    <button
+                      onClick={() => removePosItem(item.id)}
+                      className="bg-red-100 text-red-600 hover:bg-red-600 hover:text-white px-3 h-11 rounded-lg transition-all duration-200 disabled:opacity-30"
+                      title="Remove Item"
+                      disabled={posItems.length <= 1}
+                      type="button"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-7">
+                  <div className=' col-span-3'>
+                    <div className="mb-1 text-xs font-semibold text-gray-600">
+                      Item <span className="text-red-500">*</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <AsyncPaginate
+                        value={
+                          item.pharmItemId
+                            ? { label: item.itemName, value: item.pharmItemId }
+                            : null
+                        }
+                        onChange={(selectedOption: any) => {
+                          const selected = selectedOption?.itemData as PharmItem | undefined;
+                          if (!selected) return;
+                          applySelectedPharmItem(item.id, selected);
+                        }}
+                        onInputChange={(newValue: string) => {
+                          setPosItemSearchInputByRowId((prev) => ({
+                            ...prev,
+                            [item.id]: newValue,
+                          }));
+                          return newValue;
+                        }}
+                        loadOptions={
+                          loadItemOptions as unknown as LoadOptions<
+                            any,
+                            never,
+                            { page: number }
+                          >
+                        }
+                        getOptionLabel={(option: any) =>
+                          option?.label || option?.itemData?.name || ''
+                        }
+                        getOptionValue={(option: any) => option?.value || ''}
+                        placeholder="Search by name, barcode or serial..."
+                        additional={{ page: 1 }}
+                        classNamePrefix="react-select"
+                        className="w-full"
+                        required
+                        menuPortalTarget={
+                          typeof window !== 'undefined' ? document.body : null
+                        }
+                        menuPosition="fixed"
+                        styles={{
+                          menuPortal: (base) => ({ ...base, zIndex: 9999 }),
+                          control: (base) => ({
+                            ...base,
+                            minHeight: 44,
+                            height: 44,
+                          }),
+                          singleValue: (base) => ({
+                            ...base,
+                            color: '#1f2937',
+                            fontWeight: '500',
+                          }),
+                        }}
+                        formatOptionLabel={(option: any) => (
+                          <div className="text-sm">
+                            <div className="font-medium text-gray-900">
+                              {option.itemData?.name || option.label}
+                            </div>
+                            {option.itemData?.barcode && (
+                              <div className="text-xs text-gray-500">
+                                Barcode: {option.itemData.barcode}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => openProductSearch(item.id)}
+                        className="inline-flex h-11 items-center justify-center rounded-md border border-gray-300 bg-white px-3 text-xs font-medium text-gray-700 hover:bg-gray-100"
+                      >
+                        Search
+                      </button>
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-1 text-xs font-semibold text-gray-600">
+                      Unit
+                    </div>
                     <select
-                      className="w-28 rounded-lg border border-gray-300 bg-white py-2 px-3 text-sm text-gray-700 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+                      className="w-full h-11 rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-700 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
                       value={item.unit}
-                      onChange={(e) => updatePosItem(item.id, 'unit', e.target.value)}
+                      onChange={(e) =>
+                        updatePosItem(item.id, 'unit', e.target.value)
+                      }
                       disabled={!item.pharmItemId}
                     >
                       <option value="pack">Pack</option>
@@ -979,169 +1551,253 @@ export default function PharmacyPOS() {
                       <option value="ml">ML</option>
                       <option value="g">Gram</option>
                     </select>
-                  </td>
-                  <td className="px-2 py-3 whitespace-nowrap">
+                  </div>
+
+                  <div>
+                    <div className="mb-1 text-xs font-semibold text-gray-600">
+                      Batch
+                    </div>
                     <select
-                      className="w-40 rounded-lg border border-gray-300 bg-white py-2 px-3 text-sm text-gray-700 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+                      className="w-full h-11 rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-700 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
                       value={item.batchNumber}
-                      onChange={(e) => updatePosItem(item.id, 'batchNumber', e.target.value)}
-                      disabled={!item.pharmItemId || !itemsList.find(i => i._id === item.pharmItemId)?.batches?.length}
+                      onChange={(e) =>
+                        updatePosItem(item.id, 'batchNumber', e.target.value)
+                      }
+                      disabled={
+                        !item.pharmItemId ||
+                        !itemsList.find((i) => i._id === item.pharmItemId)
+                          ?.batches?.length
+                      }
                     >
                       <option value="">No Batch</option>
-                      {itemsList.find(i => i._id === item.pharmItemId)?.batches?.map(batch => (
-                        <option key={batch.batchNumber} value={batch.batchNumber}>
-                          {batch.batchNumber} (Exp: {new Date(batch.expiryDate).toLocaleDateString()})
-                        </option>
-                      ))}
+                      {itemsList
+                        .find((i) => i._id === item.pharmItemId)
+                        ?.batches?.map((batch) => (
+                          <option key={batch.batchNumber} value={batch.batchNumber}>
+                            {batch.batchNumber} (Exp:{' '}
+                            {new Date(batch.expiryDate).toLocaleDateString()})
+                          </option>
+                        ))}
                     </select>
-                  </td>
-                  <td className="px-2 py-3 whitespace-nowrap">
+                  </div>
+
+                  <div>
+                    <div className="mb-1 text-xs font-semibold text-gray-600">
+                      Cost
+                    </div>
                     <input
                       type="number"
-                      className="w-20 rounded-lg border border-gray-300 bg-gray-50 py-2 px-3 text-sm text-gray-600 font-medium"
+                      className="w-full h-11 rounded-lg border border-gray-300 bg-gray-50 px-3 text-sm text-gray-600 font-medium"
                       value={item.unitCost}
                       disabled
                     />
-                  </td>
-                  <td className="px-2 py-3 whitespace-nowrap">
+                  </div>
+
+                  <div>
+                    <div className="mb-1 text-xs font-semibold text-gray-600">
+                      Rate <span className="text-red-500">*</span>
+                    </div>
                     <input
                       type="number"
-                      className="w-24 rounded-lg border border-gray-300 bg-white py-2 px-3 text-sm text-gray-700 outline-none transition focus:border-green-500 focus:ring-2 focus:ring-green-200"
+                      className="w-full h-11 rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-700 outline-none transition focus:border-green-500 focus:ring-2 focus:ring-green-200"
                       value={item.rate}
-                      onChange={(e) => updatePosItem(item.id, 'rate', parseFloat(e.target.value))}
+                      onChange={(e) =>
+                        updatePosItem(
+                          item.id,
+                          'rate',
+                          parseFloat(e.target.value)
+                        )
+                      }
                       onWheel={(e) => e.currentTarget.blur()}
                       min="0"
                       step="0.01"
                       required
                     />
-                  </td>
-                  <td className="px-2 py-3 whitespace-nowrap">
+                  </div>
+
+                  <div>
+                    {(() => {
+                      const selected = itemsList.find((i) => i._id === item.pharmItemId);
+                      const conv = selected?.conversionUnit || item.conversionUnit || 1;
+                      const availableUnits = Number(selected?.availableQuantity || 0);
+                      const requestedUnits = Number(item.unitQuantity || (item.quantity * conv));
+                      const exceeds = !item.isReturn && requestedUnits > availableUnits;
+                      const availablePacks = Math.floor(availableUnits / conv);
+                      const availableRem = availableUnits % conv;
+                      const availableText = `Available: ${availablePacks} ${(selected?.unit || 'pack')}${availableRem ? ` + ${availableRem}` : ''} (${availableUnits} units)`;
+                      const infoText = exceeds ? ' — Exceeds available stock' : (availableUnits === 0 ? ' — Out of stock' : '');
+                      const packInputClass = `w-full h-11 rounded-lg border px-3 text-sm outline-none transition ${exceeds ? 'border-red-500 bg-red-50 text-red-700 focus:border-red-500 focus:ring-2 focus:ring-red-200' : 'border-gray-300 bg-white text-gray-700 focus:border-blue-500 focus:ring-2 focus:ring-blue-200'}`;
+                      return (
+                        <>
+                    <div className="mb-1 text-xs font-semibold text-gray-600">
+                      Pack <span className="text-red-500">*</span>
+                    </div>
                     <input
                       type="number"
-                      className="w-20 rounded-lg border border-gray-300 bg-white py-2 px-3 text-sm text-gray-700 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+                          className={packInputClass}
                       value={item.quantity}
-                      onChange={(e) => updatePosItem(item.id, 'quantity', parseInt(e.target.value))}
+                      onChange={(e) =>
+                        updatePosItem(
+                          item.id,
+                          'quantity',
+                          parseInt(e.target.value)
+                        )
+                      }
                       onWheel={(e) => e.currentTarget.blur()}
                       min="1"
                       disabled={item.isReturn}
                       required
                     />
+                        {selected && (
+                          <div className={`mt-1 text-xs ${exceeds || availableUnits === 0 ? 'text-red-600' : 'text-gray-500'}`}>
+                            {availableText}{infoText}
+                          </div>
+                        )}
+                        </>
+                      );
+                    })()}
                     {item.isReturn && (
                       <input
                         type="number"
-                        className="w-20 rounded-lg border border-red-300 bg-red-50 py-2 px-3 text-sm text-gray-700 outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-200 mt-1"
+                        className="w-full h-11 mt-2 rounded-lg border border-red-300 bg-red-50 px-3 text-sm text-gray-700 outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-200"
                         value={item.returnQuantity}
-                        onChange={(e) => updatePosItem(item.id, 'returnQuantity', parseInt(e.target.value))}
+                        onChange={(e) =>
+                          updatePosItem(
+                            item.id,
+                            'returnQuantity',
+                            parseInt(e.target.value)
+                          )
+                        }
                         onWheel={(e) => e.currentTarget.blur()}
                         min="0"
                         max={item.quantity}
                         placeholder="Return Qty"
                       />
                     )}
-                  </td>
-                  <td className="px-2 py-3 whitespace-nowrap">
-                    <input
-                      type="number"
-                      className="w-20 rounded-lg border border-gray-300 bg-blue-50 py-2 px-3 text-sm text-gray-700 outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
-                      value={item.unitQuantity}
-                      onChange={(e) => updatePosItem(item.id, 'unitQuantity', parseInt(e.target.value))}
-                      onWheel={(e) => e.currentTarget.blur()}
-                      min="1"
-                      disabled={!item.pharmItemId || item.conversionUnit <= 1}
-                      title={`Conversion: 1 ${item.unit} = ${item.conversionUnit} units`}
-                    />
-                  </td>
-                  <td className="px-2 py-3 whitespace-nowrap">
-                    <div className="w-24 rounded-lg border border-gray-300 bg-gray-50 py-2 px-3 text-sm text-gray-700 font-semibold">
-                      {item.netAmount.toFixed(2)}
-                    </div>
-                  </td>
-                  <td className="px-2 py-3 whitespace-nowrap">
-                    <input
-                      type="number"
-                      className="w-24 rounded-lg border border-gray-300 bg-white py-2 px-3 text-sm text-gray-700 outline-none transition focus:border-orange-500 focus:ring-2 focus:ring-orange-200"
-                      value={item.discount}
-                      onChange={(e) => updatePosItem(item.id, 'discount', parseFloat(e.target.value))}
-                      onWheel={(e) => e.currentTarget.blur()}
-                      min="0"
-                      max={item.netAmount}
-                      step="0.01"
-                    />
-                  </td>
-                  <td className="px-2 py-3 whitespace-nowrap">
-                    <input
-                      type="number"
-                      className="w-20 rounded-lg border border-gray-300 bg-white py-2 px-3 text-sm text-gray-700 outline-none transition focus:border-purple-500 focus:ring-2 focus:ring-purple-200"
-                      value={item.tax}
-                      onChange={(e) => updatePosItem(item.id, 'tax', parseFloat(e.target.value))}
-                      onWheel={(e) => e.currentTarget.blur()}
-                      min="0"
-                      step="0.01"
-                    />
-                  </td>
-                  <td className="px-2 py-3 whitespace-nowrap">
-                    <div className="w-28 rounded-lg border-2 border-blue-300 bg-blue-50 py-2 px-3 text-sm text-blue-700 font-bold">
-                      Rs. {item.totalAmount.toFixed(2)}
-                    </div>
-                  </td>
-                  <td className="px-2 py-3 whitespace-nowrap">
-                    {/* Profit/Loss column */}
-                    {(() => {
-                      let profit = 0;
-                      if (item.isReturn && item.returnQuantity > 0) {
-                        // For returns, profit is negative (loss)
-                        profit = -((item.rate - item.unitCost) * item.returnQuantity);
-                      } else {
-                        // For regular sales
-                        profit = (item.rate - item.unitCost) * item.quantity;
-                      }
+                    {item.isReturn && (() => {
+                      const selected = itemsList.find((i) => i._id === item.pharmItemId);
+                      const conv = selected?.conversionUnit || item.conversionUnit || 1;
+                      const availableUnits = Number(selected?.availableQuantity || 0);
+                      const returningUnits = (Number(item.returnQuantity) || 0) * conv;
+                      const willBeUnits = availableUnits + returningUnits;
+                      const unitName = String(selected?.unit || 'pack');
+                      const willBePacks = conv > 0 ? Math.floor(willBeUnits / conv) : willBeUnits;
                       return (
-                        <div className={`w-24 rounded-lg border-2 py-2 px-3 text-sm font-bold ${
-                          profit >= 0 
-                            ? 'bg-green-50 border-green-300 text-green-700' 
-                            : 'bg-red-50 border-red-300 text-red-700'
-                        }`}>
-                          {profit.toFixed(2)}
+                        <div className="mt-1 text-xs text-green-600">
+                          Returning: {Number(item.returnQuantity) || 0} {unitName} ({returningUnits} units) — After return: {willBePacks} {unitName} ({willBeUnits} units)
                         </div>
                       );
                     })()}
-                  </td>
-                  <td className="px-2 py-3 whitespace-nowrap">
-                    <div className="flex flex-col items-center space-y-2">
-                      <label className="inline-flex items-center cursor-pointer">
-                        <input
-                          type="checkbox"
-                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 w-4 h-4"
-                          checked={item.isReturn}
-                          onChange={(e) => updatePosItem(item.id, 'isReturn', e.target.checked)}
-                        />
-                        <span className="ml-2 text-xs text-gray-600 font-medium">Return</span>
-                      </label>
-                      {item.isReturn && (
-                        <input
-                          type="text"
-                          className="w-full mt-1 rounded-lg border border-red-300 bg-red-50 py-1.5 px-2 text-xs text-gray-700 outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-200"
-                          placeholder="Original Invoice #"
-                          value={item.originalInvoiceNumber || ''}
-                          onChange={(e) => updatePosItem(item.id, 'originalInvoiceNumber', e.target.value)}
-                        />
-                      )}
-                      <button
-                        onClick={() => removePosItem(item.id)}
-                        className="bg-red-100 text-red-600 hover:bg-red-600 hover:text-white p-2 rounded-lg transition-all duration-200 disabled:opacity-30"
-                        title="Remove Item"
-                        disabled={posItems.length <= 1}
-                      >
-                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                          <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
-                        </svg>
-                      </button>
+                  </div>
+
+                  <div>
+                    {(() => {
+                      const selected = itemsList.find((i) => i._id === item.pharmItemId);
+                      const conv = selected?.conversionUnit || item.conversionUnit || 1;
+                      const availableUnits = Number(selected?.availableQuantity || 0);
+                      const requestedUnits = Number(item.unitQuantity || (item.quantity * conv));
+                      const exceeds = !item.isReturn && requestedUnits > availableUnits;
+                      const unitInputClass = `w-full h-11 rounded-lg border px-3 text-sm outline-none transition ${exceeds ? 'border-red-500 bg-red-50 text-red-700 focus:border-red-500 focus:ring-2 focus:ring-red-200' : 'border-gray-300 bg-blue-50 text-gray-700 focus:border-blue-500 focus:ring-2 focus:ring-blue-200'}`;
+                      return (
+                        <>
+                    <div className="mb-1 text-xs font-semibold text-gray-600">
+                      Single Piece
                     </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                    <input
+                      type="number"
+                          className={unitInputClass}
+                      value={item.unitQuantity}
+                      onChange={(e) =>
+                        updatePosItem(
+                          item.id,
+                          'unitQuantity',
+                          parseInt(e.target.value)
+                        )
+                      }
+                      onWheel={(e) => e.currentTarget.blur()}
+                      min="1"
+                      disabled={item.isReturn || !item.pharmItemId || item.conversionUnit <= 1}
+                      title={`Conversion: 1 ${item.unit} = ${item.conversionUnit} units`}
+                    />
+                        </>
+                      );
+                    })()}
+                  </div>
+
+                  <div>
+                    <div className="mb-1 text-xs font-semibold text-gray-600">
+                      Discount
+                    </div>
+                    <div className="flex gap-2">
+                      <select
+                        className="h-11 w-24 rounded-lg border border-gray-300 bg-white px-2 text-sm text-gray-700 outline-none transition focus:border-orange-500 focus:ring-2 focus:ring-orange-200"
+                        value={item.discountMode}
+                        onChange={(e) =>
+                          updatePosItem(item.id, 'discountMode', e.target.value)
+                        }
+                        disabled={!item.pharmItemId}
+                      >
+                        <option value="value">Value</option>
+                        <option value="percentage">%</option>
+                      </select>
+                      <input
+                        type="number"
+                        className="w-full h-11 rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-700 outline-none transition focus:border-orange-500 focus:ring-2 focus:ring-orange-200"
+                        value={item.discount}
+                        onChange={(e) =>
+                          updatePosItem(item.id, 'discount', parseFloat(e.target.value))
+                        }
+                        onWheel={(e) => e.currentTarget.blur()}
+                        min="0"
+                        max={
+                          item.discountMode === 'percentage'
+                            ? 100
+                            : Math.abs(item.netAmount || 0)
+                        }
+                        step="0.01"
+                        disabled={!item.pharmItemId || item.isReturn}
+                      />
+                    </div>
+                  </div>
+
+                  
+
+                  <div>
+                    <div className="mb-1 text-xs font-semibold text-gray-600">
+                      Amount
+                    </div>
+                    <div className="w-full h-11 flex items-center rounded-lg border border-gray-300 bg-gray-50 px-3 text-sm text-gray-700 font-semibold">
+                      {item.netAmount.toFixed(2)}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-1 text-xs font-semibold text-gray-600">
+                      Total
+                    </div>
+                    <div className="w-full h-11 flex items-center rounded-lg border-2 border-blue-300 bg-blue-50 px-3 text-sm text-blue-700 font-bold">
+                      Rs. {item.totalAmount.toFixed(2)}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="mb-1 text-xs font-semibold text-gray-600">
+                      Profit
+                    </div>
+                    <div
+                      className={`w-full h-11 flex items-center rounded-lg border-2 px-3 text-sm font-bold ${
+                        profit >= 0
+                          ? 'bg-green-50 border-green-300 text-green-700'
+                          : 'bg-red-50 border-red-300 text-red-700'
+                      }`}
+                    >
+                      {profit.toFixed(2)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 
@@ -1275,20 +1931,17 @@ export default function PharmacyPOS() {
           </div>
           <div className="p-6 space-y-3">
             <div className="flex justify-between items-center py-2 border-b border-blue-200">
-              <span className="text-gray-700 font-medium">Sub Total:</span>
+              <span className="text-gray-700 font-medium">Gross Total:</span>
               <span className="text-lg font-bold text-gray-800">Rs. {calculateSubTotal().toFixed(2)}</span>
             </div>
             <div className="flex justify-between items-center py-2 border-b border-blue-200">
               <span className="text-gray-700 font-medium">Discount:</span>
               <span className="text-lg font-bold text-red-600">- Rs. {calculateTotalDiscount().toFixed(2)}</span>
             </div>
-            <div className="flex justify-between items-center py-2 border-b border-blue-200">
-              <span className="text-gray-700 font-medium">Tax:</span>
-              <span className="text-lg font-bold text-orange-600">+ Rs. {calculateTotalTax().toFixed(2)}</span>
-            </div>
+            
             <div className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-lg px-4 py-3 mt-4">
               <div className="flex justify-between items-center">
-                <span className="text-white font-bold text-base">Grand Total:</span>
+                <span className="text-white font-bold text-base">Net Total:</span>
                 <span className="text-white font-bold text-2xl">Rs. {calculateGrandTotal().toFixed(2)}</span>
               </div>
             </div>
@@ -1354,20 +2007,299 @@ export default function PharmacyPOS() {
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                   </svg>
-                  Processing Transaction...
+                  Processing...
                 </>
               ) : (
                 <>
                   <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
                     <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
                   </svg>
-                  Complete Transaction
+                  {id ? 'Update Invoice' : 'Complete Transaction'}
                 </>
               )}
             </button>
           </div>
         </div>
       </div>
-    </div>
+
+      <Modal isOpen={isProductSearchOpen} onClose={closeProductSearch} className="max-w-5xl">
+      <div className="flex items-center justify-between px-4 py-3 border-b bg-gray-50">
+        <h2 className="text-lg font-semibold text-gray-800">POS Product Search</h2>
+        <button
+          type="button"
+          onClick={closeProductSearch}
+          className="text-gray-500 hover:text-gray-700 rounded-full p-1"
+        >
+          <span className="text-xl leading-none">&times;</span>
+        </button>
+      </div>
+      <div className="p-4">
+        <div className="mb-4 grid grid-cols-1 gap-3 sm:grid-cols-12">
+          <div className="sm:col-span-6">
+            <div className="mb-1 text-xs font-semibold text-gray-600">Search</div>
+            <input
+              type="text"
+              ref={productSearchInputRef}
+              value={productSearchQuery}
+              onChange={(e) => setProductSearchQuery(e.target.value)}
+              placeholder="Name / Barcode / Generic..."
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-700 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            />
+          </div>
+
+          <div className="sm:col-span-3">
+            <div className="mb-1 text-xs font-semibold text-gray-600">Category</div>
+            <select
+              value={productSearchCategoryId}
+              onChange={(e) => setProductSearchCategoryId(e.target.value)}
+              className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            >
+              <option value="">All Categories</option>
+              {productSearchCategories.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="sm:col-span-3">
+            <div className="mb-1 text-xs font-semibold text-gray-600">Manufacturer</div>
+            <select
+              value={productSearchManufacturerId}
+              onChange={(e) => setProductSearchManufacturerId(e.target.value)}
+              className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            >
+              <option value="">All Manufacturers</option>
+              {productSearchManufacturers.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="sm:col-span-2">
+            <div className="mb-1 text-xs font-semibold text-gray-600">Min Cost</div>
+            <input
+              type="number"
+              value={productSearchMinCost}
+              onChange={(e) => setProductSearchMinCost(e.target.value)}
+              placeholder="0"
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-700 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            />
+          </div>
+
+          <div className="sm:col-span-2">
+            <div className="mb-1 text-xs font-semibold text-gray-600">Max Cost</div>
+            <input
+              type="number"
+              value={productSearchMaxCost}
+              onChange={(e) => setProductSearchMaxCost(e.target.value)}
+              placeholder="0"
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-700 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            />
+          </div>
+
+          <div className="sm:col-span-2">
+            <div className="mb-1 text-xs font-semibold text-gray-600">Min Stock</div>
+            <input
+              type="number"
+              value={productSearchMinStock}
+              onChange={(e) => setProductSearchMinStock(e.target.value)}
+              placeholder="0"
+              className="w-full rounded-md border border-gray-300 px-3 py-2 text-sm text-gray-700 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            />
+          </div>
+
+          <div className="sm:col-span-2">
+            <div className="mb-1 text-xs font-semibold text-gray-600">Page Size</div>
+            <select
+              value={productSearchPageSize}
+              onChange={(e) => setProductSearchPageSize(Number(e.target.value))}
+              className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-700 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            >
+              <option value={10}>10 / page</option>
+              <option value={20}>20 / page</option>
+              <option value={50}>50 / page</option>
+            </select>
+          </div>
+
+          <div className="sm:col-span-2 flex items-end">
+            <button
+              type="button"
+              onClick={() => {
+                setProductSearchQuery('');
+                setDebouncedProductSearchQuery('');
+                setProductSearchMinCost('');
+                setProductSearchMaxCost('');
+                setProductSearchCategoryId('');
+                setProductSearchManufacturerId('');
+                setProductSearchMinStock('');
+                setProductSearchPage(1);
+              }}
+              className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm font-medium text-gray-700 hover:bg-gray-50"
+            >
+              Reset
+            </button>
+          </div>
+        </div>
+        <div className="overflow-auto max-h-[60vh]">
+          <div className="mb-3 flex items-center justify-between text-xs text-gray-600">
+            <div>
+              Showing{' '}
+              <span className="font-semibold text-gray-800">
+                {productSearchTotal === 0 ? 0 : productSearchStartIndex + 1}-{productSearchEndIndex}
+              </span>{' '}
+              of <span className="font-semibold text-gray-800">{productSearchTotal}</span>
+            </div>
+            <div className="text-gray-500">Click any item to select</div>
+          </div>
+
+          <div className="mb-3 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="text-xs text-gray-600">
+              Page <span className="font-semibold text-gray-800">{safeProductSearchPage}</span> /{' '}
+              <span className="font-semibold text-gray-800">{productSearchTotalPages}</span>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setProductSearchPage(1)}
+                disabled={safeProductSearchPage === 1}
+                className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                First
+              </button>
+              <button
+                type="button"
+                onClick={() => setProductSearchPage((p) => Math.max(1, p - 1))}
+                disabled={safeProductSearchPage === 1}
+                className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Prev
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setProductSearchPage((p) => Math.min(productSearchTotalPages, p + 1))
+                }
+                disabled={safeProductSearchPage === productSearchTotalPages}
+                className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Next
+              </button>
+              <button
+                type="button"
+                onClick={() => setProductSearchPage(productSearchTotalPages)}
+                disabled={safeProductSearchPage === productSearchTotalPages}
+                className="rounded-md border border-gray-300 bg-white px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Last
+              </button>
+            </div>
+          </div>
+
+          <div className="grid gap-2">
+            {productSearchResults.map((item) => {
+              const packQty = item.conversionUnit || 1;
+              const stockPack =
+                packQty > 0 ? Math.floor(item.availableQuantity / packQty) : 0;
+              const stockPiece = packQty > 0 ? item.availableQuantity % packQty : 0;
+              const packPrice = item.retailPrice || 0;
+              const unitRetailPrice = packQty > 1 ? packPrice / packQty : packPrice;
+              const primaryBatch = item.batches?.[0];
+              const cost =
+                primaryBatch?.purchasePrice ?? item.unitCost ?? item.costPrice ?? 0;
+              const manufacturerName =
+                typeof item.pharmManufacturerId === 'object' &&
+                item.pharmManufacturerId !== null
+                  ? (item.pharmManufacturerId as any).name || ''
+                  : '';
+              const categoryName =
+                typeof item.pharmCategoryId === 'object' && item.pharmCategoryId !== null
+                  ? (item.pharmCategoryId as any).name || ''
+                  : '';
+              const stockLabel =
+                packQty > 1
+                  ? `${stockPack} ${item.unit || 'pack'}${stockPiece ? ` + ${stockPiece}` : ''}`
+                  : `${item.availableQuantity} ${item.unit || 'pack'}`;
+
+              return (
+                <button
+                  key={item._id}
+                  type="button"
+                  onClick={() => handleSelectProductFromSearch(item)}
+                  className="w-full rounded-lg border border-gray-200 bg-white p-3 text-left transition hover:border-blue-300 hover:bg-blue-50"
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-gray-900">
+                        {item.name}
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs text-gray-600">
+                        <div>
+                          Code:{' '}
+                          <span className="font-medium text-gray-800">
+                            {item.barcode || '-'}
+                          </span>
+                        </div>
+                        <div>
+                          Manufacturer:{' '}
+                          <span className="font-medium text-gray-800">
+                            {manufacturerName || '-'}
+                          </span>
+                        </div>
+                        <div>
+                          Category:{' '}
+                          <span className="font-medium text-gray-800">
+                            {categoryName || '-'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="shrink-0 text-right">
+                      <div className="text-sm font-bold text-gray-900">
+                        Rs. {unitRetailPrice.toFixed(2)}
+                      </div>
+                      <div className="text-xs text-gray-600">
+                        Pack Rs. {packPrice.toFixed(2)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-3 grid grid-cols-2 gap-3 text-xs text-gray-700 sm:grid-cols-4">
+                    <div className="rounded-md bg-gray-50 px-2 py-2">
+                      <div className="text-[11px] text-gray-500">Cost</div>
+                      <div className="font-semibold text-gray-900">
+                        Rs. {Number(cost || 0).toFixed(2)}
+                      </div>
+                    </div>
+                    <div className="rounded-md bg-gray-50 px-2 py-2">
+                      <div className="text-[11px] text-gray-500">Pack Qty</div>
+                      <div className="font-semibold text-gray-900">{packQty}</div>
+                    </div>
+                    <div className="rounded-md bg-gray-50 px-2 py-2">
+                      <div className="text-[11px] text-gray-500">Stock</div>
+                      <div className="font-semibold text-gray-900">{stockLabel}</div>
+                    </div>
+                    
+                  </div>
+                </button>
+              );
+            })}
+
+            {(productSearchLoading || productSearchTotal === 0) && (
+              <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 p-6 text-center text-sm text-gray-600">
+                {productSearchLoading ? 'Loading products...' : 'No products found'}
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </Modal>
+    
+    
+  </div>
   );
 }

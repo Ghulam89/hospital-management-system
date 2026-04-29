@@ -1,13 +1,18 @@
 const AdmitPatient = require("../models/admitPatientModel");
 const BedDetail = require("../models/bedDetailModel");
 const RoomDetail = require("../models/roomDetailModel");
+const {
+  getScopedPatientIds,
+  patientVisibleForRequest,
+} = require("../utils/branchScope");
 
 // 1. Create admitPatient
 const addadmitPatient = async (req, res) => {
   try {
 
-
-
+    if (req.body.patientId && !(await patientVisibleForRequest(req, req.body.patientId))) {
+      return res.status(403).json({ status: "fail", message: "Patient not allowed for this branch" });
+    }
 
     const admitPatient = await AdmitPatient.create({ ...req.body });
 
@@ -82,6 +87,38 @@ const getadmitPatients = async (req, res) => {
       query.status = req.query.status
     }
 
+    const scopedPids = await getScopedPatientIds(req);
+    if (scopedPids !== null) {
+      if (scopedPids.length === 0) {
+        return res.status(200).json({
+          status: "ok",
+          data: [],
+          search,
+          page,
+          count: 0,
+          totalPages: 0,
+          currentPage: page,
+          limit
+        });
+      }
+      if (query.patientId) {
+        if (!scopedPids.some((x) => String(x) === String(query.patientId))) {
+          return res.status(200).json({
+            status: "ok",
+            data: [],
+            search,
+            page,
+            count: 0,
+            totalPages: 0,
+            currentPage: page,
+            limit
+          });
+        }
+      } else {
+        query.patientId = { $in: scopedPids };
+      }
+    }
+
     console.log(query);
 
 
@@ -119,7 +156,13 @@ const getadmitPatients = async (req, res) => {
 const getadmitPatientById = async (req, res) => {
   try {
     const id = req.params.id;
-    const admitPatient = await AdmitPatient.findById(id);
+    const admitPatient = await AdmitPatient.findById(id).lean();
+    if (!admitPatient) {
+      return res.status(404).json({ status: "fail", message: "Admit patient not found" });
+    }
+    if (admitPatient.patientId && !(await patientVisibleForRequest(req, admitPatient.patientId))) {
+      return res.status(404).json({ status: "fail", message: "Admit patient not found" });
+    }
     return res.status(200).json({ status: "ok", data: admitPatient });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -131,6 +174,15 @@ const updateadmitPatient = async (req, res) => {
   try {
     let id = req.params.id;
     let getImage = await AdmitPatient.findById(id);
+    if (!getImage) {
+      return res.status(404).json({ status: "fail", message: "Admit patient not found" });
+    }
+    if (getImage.patientId && !(await patientVisibleForRequest(req, getImage.patientId))) {
+      return res.status(404).json({ status: "fail", message: "Admit patient not found" });
+    }
+    if (req.body.patientId && !(await patientVisibleForRequest(req, req.body.patientId))) {
+      return res.status(403).json({ status: "fail", message: "Patient not allowed for this branch" });
+    }
 
 
 
@@ -201,6 +253,12 @@ const deleteadmitPatient = async (req, res) => {
     const id = req.params.id;
 
     let admitPatientData = await AdmitPatient.findById(id)
+    if (!admitPatientData) {
+      return res.status(404).json({ status: "fail", message: "Admit patient not found" });
+    }
+    if (admitPatientData.patientId && !(await patientVisibleForRequest(req, admitPatientData.patientId))) {
+      return res.status(404).json({ status: "fail", message: "Admit patient not found" });
+    }
 
 
 

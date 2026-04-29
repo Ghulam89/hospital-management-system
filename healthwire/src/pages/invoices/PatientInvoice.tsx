@@ -1,10 +1,12 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Table, message, Select, DatePicker, Card, Row, Col, Input, Button } from 'antd';
+import { Table, message, Select, DatePicker, Card, Row, Col, Input, Button, Modal } from 'antd';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import axios from 'axios';
 import moment from 'moment';
 import { RiDeleteBin5Line, RiEdit2Fill, RiFile2Line, RiPenNibFill, RiPrinterLine } from 'react-icons/ri';
 import { Base_url } from '../../utils/Base_url';
+import { getInvoiceHeaderForPdf } from '../../utils/branchPdfHeader';
+import { enrichInvoiceForPdf } from '../../utils/enrichInvoiceForPdf';
 import logoDataUrl from '../../images/logo-icon.png';
 import Breadcrumb from '../../components/Breadcrumbs/Breadcrumb';
 
@@ -150,15 +152,17 @@ const styles = StyleSheet.create({
   },
 });
 
-const InvoicePdf = ({ invoice, patient }) => (
+const InvoicePdf = ({ invoice, patient }) => {
+  const header = getInvoiceHeaderForPdf(invoice);
+  return (
   <Document>
     <Page size="A4" style={styles.page}>
       <View style={styles.header}>
         <Image src={logoDataUrl} style={styles.logo} />
         <View style={styles.clinicInfo}>
-          <Text style={styles.clinicName}>HOLISTIC CARE CLINIC</Text>
-          <Text style={styles.clinicAddress}>188-Y Block Phase III, DHA, Lahore, Punjab, Pakistan</Text>
-          <Text style={styles.clinicAddress}>Phone: 0342-4211888 | Email: info@holisticcare.com</Text>
+          <Text style={styles.clinicName}>{header.clinicName}</Text>
+          {header.addressLine ? <Text style={styles.clinicAddress}>{header.addressLine}</Text> : null}
+          <Text style={styles.clinicAddress}>{header.contactLine}</Text>
         </View>
       </View>
 
@@ -169,7 +173,7 @@ const InvoicePdf = ({ invoice, patient }) => (
       <View style={styles.patientInfo}>
         <View style={styles.infoRow}>
           <Text style={styles.infoLabel}>Invoice #:</Text>
-          <Text>{invoice._id.substring(0, 6).toUpperCase()}</Text>
+          <Text>{invoice.invoiceNo || invoice.invoiceNumber || invoice._id?.substring?.(0, 6)?.toUpperCase?.() || 'N/A'}</Text>
         </View>
         <View style={styles.infoRow}>
           <Text style={styles.infoLabel}>Date:</Text>
@@ -207,32 +211,87 @@ const InvoicePdf = ({ invoice, patient }) => (
         </View>
       ))}
 
-      <View style={styles.totalsContainer}>
-        <View style={styles.totalRow}>
-          <Text style={{fontSize:12}}>Sub Total:</Text>
-          <Text style={{fontSize:12}}>Rs. {invoice.subTotalBill?.toFixed(2)}</Text>
+      {invoice.item && invoice.item.map((item, index) => {
+        const printableExpenses = (item.expenses || []).filter((exp: any) => exp?.showInPrint);
+        if (printableExpenses.length === 0) return null;
+        return (
+          <View key={`exp-${index}`} style={{ marginBottom: 6 }}>
+            <Text style={{ fontSize: 10, marginBottom: 2, textAlign: 'center', borderTopWidth: 1, borderTopColor: '#000', paddingTop: 3 }}>Breakdown Expense</Text>
+            {printableExpenses.map((exp: any, i: number) => (
+              <View key={`exp-row-${index}-${i}`} style={styles.tableRow}>
+                <Text style={styles.descriptionColumn}>
+                  {exp.description || exp.categoryName || 'Expense'}
+                </Text>
+                <Text style={styles.rateColumn}></Text>
+                <Text style={styles.quantityColumn}></Text>
+                <Text style={styles.amountColumn}>{(Number(exp.amount) || 0).toFixed(2)}</Text>
+                <Text style={styles.discountColumn}></Text>
+              </View>
+            ))}
+          </View>
+        );
+      })}
+
+      {Array.isArray(invoice.invoiceExpenses) && invoice.invoiceExpenses.filter((e: any) => e?.showInPrint).length > 0 && (
+        <View style={{ marginTop: 10, marginBottom: 6 }}>
+          <Text style={{ fontSize: 10, marginBottom: 2, textAlign: 'center', borderTopWidth: 1, borderTopColor: '#000', paddingTop: 3 }}>Additional Expenses</Text>
+          {invoice.invoiceExpenses.filter((e: any) => e?.showInPrint).map((exp: any, i: number) => (
+            <View key={`inv-exp-${i}`} style={styles.tableRow}>
+              <Text style={styles.descriptionColumn}>
+                {exp.description || exp.categoryName || 'Expense'}
+              </Text>
+              <Text style={styles.rateColumn}></Text>
+              <Text style={styles.quantityColumn}></Text>
+              <Text style={styles.amountColumn}>{(Number(exp.amount) || 0).toFixed(2)}</Text>
+              <Text style={styles.discountColumn}></Text>
+            </View>
+          ))}
         </View>
-        <View style={styles.totalRow}>
-          <Text style={{fontSize:12}}>Discount:</Text>
-          <Text style={{fontSize:12}}>Rs. {invoice.discountBill?.toFixed(2)}</Text>
-        </View>
-        <View style={[styles.totalRow, styles.grandTotal]}>
-          <Text style={{fontSize:12}}>Grand Total:</Text>
-          <Text style={{fontSize:12}}>Rs. {invoice.totalBill?.toFixed(2)}</Text>
-        </View>
-        <View style={styles.totalRow}>
-          <Text style={{fontSize:12}}>Amount Paid:</Text>
-          <Text style={{fontSize:12}}>Rs. {invoice.totalPay?.toFixed(2)}</Text>
-        </View>
-        <View style={[styles.totalRow, {marginTop: 5}]}>
-          <Text style={{fontSize:12}}>Balance Due:</Text>
-          <Text style={{fontSize:12}}>Rs. {invoice.duePay?.toFixed(2)}</Text>
-        </View>
-      </View>
+      )}
+
+      {(() => {
+        const itemExpenses = (invoice.item || [])
+          .flatMap((it: any) => (it.expenses || []).filter((e: any) => e?.showInPrint))
+          .reduce((sum: number, e: any) => sum + (Number(e?.amount) || 0), 0);
+        const invoiceLevelExpenses = (invoice.invoiceExpenses || [])
+          .filter((e: any) => e?.showInPrint)
+          .reduce((sum: number, e: any) => sum + (Number(e?.amount) || 0), 0);
+        const expensesTotal = itemExpenses + invoiceLevelExpenses;
+        return (
+          <View style={styles.totalsContainer}>
+            <View style={styles.totalRow}>
+              <Text style={{fontSize:12}}>Sub Total:</Text>
+              <Text style={{fontSize:12}}>Rs. {Number(invoice.subTotalBill || 0).toFixed(2)}</Text>
+            </View>
+            <View style={styles.totalRow}>
+              <Text style={{fontSize:12}}>Discount:</Text>
+              <Text style={{fontSize:12}}>Rs. {Number(invoice.discountBill || 0).toFixed(2)}</Text>
+            </View>
+            {expensesTotal > 0 && (
+              <View style={styles.totalRow}>
+                <Text style={{fontSize:12}}>Additional Expenses:</Text>
+                <Text style={{fontSize:12}}>Rs. {expensesTotal.toFixed(2)}</Text>
+              </View>
+            )}
+            <View style={[styles.totalRow, styles.grandTotal]}>
+              <Text style={{fontSize:12}}>Grand Total:</Text>
+              <Text style={{fontSize:12}}>Rs. {Number(invoice.totalBill || 0).toFixed(2)}</Text>
+            </View>
+            <View style={styles.totalRow}>
+              <Text style={{fontSize:12}}>Amount Paid:</Text>
+              <Text style={{fontSize:12}}>Rs. {Number(invoice.totalPay || 0).toFixed(2)}</Text>
+            </View>
+            <View style={[styles.totalRow, {marginTop: 5}]}>
+              <Text style={{fontSize:12}}>Balance Due:</Text>
+              <Text style={{fontSize:12}}>Rs. {Number(invoice.duePay || 0).toFixed(2)}</Text>
+            </View>
+          </View>
+        );
+      })()}
 
       <View style={styles.notes}>
         <Text>* Procedures & Medicines once purchased are non-refundable.</Text>
-        <Text>* Purchased Packages Are Valid for 80m (CW).</Text>
+        <Text>* Purchased Packages Are Valid For 06 Months Only.</Text>
       </View>
 
       <View style={styles.signature}>
@@ -243,20 +302,23 @@ const InvoicePdf = ({ invoice, patient }) => (
       </View>
 
       <View style={styles.footer}>
-        <Text>Thank you for choosing Holistic Care Clinic</Text>
-        <Text>For any queries, please contact: 0342-4211888</Text>
+        <Text>{header.footerThanks}</Text>
+        <Text>{header.footerContactLine}</Text>
       </View>
     </Page>
   </Document>
-);
+  );
+};
 
 const PatientInvoice = () => {
   const { id } = useParams();
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [filteredInvoices, setFilteredInvoices] = useState([]);
+  const [pharmacyInvoices, setPharmacyInvoices] = useState([]);
   const [patient, setPatient] = useState({});
   const [loading, setLoading] = useState(false);
+  const [pharmacyLoading, setPharmacyLoading] = useState(false);
   const [departments, setDepartments] = useState([]);
   const [doctors, setDoctors] = useState([]);
   const [procedures, setProcedures] = useState([]);
@@ -534,6 +596,7 @@ const PatientInvoice = () => {
             invoiceNo: invoice.invoiceNo,
             date: invoice.createdAt,
             patientId: invoice.patientId,
+            branchId: invoice.branchId,
             patientMR: invoice.patientId?.mr || 'N/A',
             patientName: invoice.patientId?.name || 'N/A',
             patientPhone: invoice.patientId?.phone || 'N/A',
@@ -583,6 +646,75 @@ const PatientInvoice = () => {
     }
   };
 
+  const fetchPharmacyInvoices = async () => {
+    if (!id) return;
+
+    setPharmacyLoading(true);
+    try {
+      const params: Record<string, any> = {
+        patientId: id,
+        page: 1,
+        limit: 1000,
+        sort: '-createdAt',
+      };
+
+      if (filters.search) params.search = filters.search;
+
+      if (filters.startDate && filters.endDate) {
+        params.from = filters.startDate.clone().startOf('day').format('YYYY-MM-DD');
+        params.to = filters.endDate.clone().endOf('day').format('YYYY-MM-DD');
+      }
+
+      const res = await axios.get(`${Base_url}/apis/pharmPos/get`, { params });
+      const list = res?.data?.data || [];
+
+      const transformed = (list || [])
+        .filter((pos) => {
+          const posPatientId = pos.patientId?._id || pos.patientId;
+          return String(posPatientId || '').trim() === String(id || '').trim();
+        })
+        .map((pos) => {
+          const items = Array.isArray(pos.allItem) ? pos.allItem : [];
+          const soldItems = items.filter((i) => !i.isReturn);
+          const itemText = soldItems
+            .map((i) => i?.pharmItemId?.name || i?.pharmItemId?.itemName || i?.pharmItemId || 'Item')
+            .join(', ');
+
+          const paid = Number(pos.paid) || 0;
+          const due = Number(pos.due) || 0;
+          const total = paid + due;
+
+          return {
+            key: pos._id,
+            _id: pos._id,
+            invoiceNo: pos.invoiceNumber || pos._id,
+            date: pos.createdAt,
+            patientId: pos.patientId,
+            patientMR: pos.patientId?.mr || 'N/A',
+            patientName: pos.patientId?.name || pos.patientName || 'N/A',
+            patientPhone: pos.patientId?.phone || 'N/A',
+            items: itemText || 'N/A',
+            subTotal: total,
+            discount: Number(pos.totalDiscount) || 0,
+            tax: Number(pos.totalTax) || 0,
+            total,
+            paid,
+            due,
+            paymentMode: pos.payment?.[0]?.method || 'N/A',
+            status: due > 0 ? 'Pending' : 'Paid',
+          };
+        });
+
+      setPharmacyInvoices(transformed);
+    } catch (err) {
+      console.error('Pharmacy invoice fetch error:', err);
+      message.error('Failed to fetch pharmacy invoices');
+      setPharmacyInvoices([]);
+    } finally {
+      setPharmacyLoading(false);
+    }
+  };
+
   const fetchPatients = () => {
     setLoading(true);
     axios
@@ -602,14 +734,27 @@ const PatientInvoice = () => {
   };
 
   const handleDelete = (id) => {
-    axios.delete(`${Base_url}/apis/invoice/delete/${id}`)
-      .then((res) => {
-        message.success('Invoice deleted successfully');
-        fetchInvoices(pagination.current, pagination.pageSize);
-      })
-      .catch(err => {
-        message.error('Failed to delete invoice');
-      });
+    Modal.confirm({
+      title: 'Delete Invoice?',
+      content: 'Are you sure you want to delete this invoice? This action cannot be undone.',
+      okText: 'Delete',
+      okType: 'danger',
+      cancelText: 'Cancel',
+      onOk: async () => {
+        try {
+          await axios.delete(`${Base_url}/apis/invoice/delete/${id}`);
+          message.success('Invoice deleted successfully');
+          fetchInvoices(pagination.current, pagination.pageSize);
+        } catch (err) {
+          const anyErr = err as { response?: { data?: { message?: string; error?: string } } };
+          const detail =
+            anyErr?.response?.data?.message ||
+            anyErr?.response?.data?.error ||
+            (err instanceof Error ? err.message : null);
+          message.error(detail ? `Failed to delete invoice: ${detail}` : 'Failed to delete invoice');
+        }
+      },
+    });
   };
 
   const handleDateChange = (date, index) => {
@@ -627,8 +772,9 @@ const PatientInvoice = () => {
     console.log(invoice);
     
     try {
+      const inv = await enrichInvoiceForPdf(invoice);
       // Create the PDF blob
-      const blob = await pdf(<InvoicePdf invoice={invoice} patient={patient} />).toBlob();
+      const blob = await pdf(<InvoicePdf invoice={inv} patient={inv?.patientId || patient} />).toBlob();
       
       // Create object URL
       const pdfUrl = URL.createObjectURL(blob);
@@ -662,15 +808,16 @@ const PatientInvoice = () => {
 
   const summary = calculateSummary();
 
-  // Handle pagination change
-  const handleTableChange = (paginationInfo) => {
-    const { current, pageSize } = paginationInfo;
+  // Handle pagination change (Ant Design Table passes pagination as first arg)
+  const handleTableChange = (paginationInfo, _filters, _sorter) => {
+    const { current = 1, pageSize = 20 } = paginationInfo || {};
+    const newCurrent = (pageSize !== pagination.pageSize) ? 1 : (current || 1);
     setPagination(prev => ({
       ...prev,
-      current,
-      pageSize
+      current: newCurrent,
+      pageSize: pageSize || prev.pageSize
     }));
-    fetchInvoices(current, pageSize);
+    fetchInvoices(newCurrent, pageSize || pagination.pageSize);
   };
 
   useEffect(() => {
@@ -685,6 +832,12 @@ const PatientInvoice = () => {
       fetchInvoices(1, pagination.pageSize);
     }
   }, [id, filters, departments, doctors, procedures]);
+
+  useEffect(() => {
+    if (id) {
+      fetchPharmacyInvoices();
+    }
+  }, [id, filters.startDate, filters.endDate, filters.search]);
 
   // Reset to first page when filters change
   useEffect(() => {
@@ -852,6 +1005,80 @@ const PatientInvoice = () => {
           />
         </div>
       ),
+      width: 120,
+    },
+  ];
+
+  const pharmacyColumns = [
+    {
+      title: 'INVOICE #',
+      dataIndex: 'invoiceNo',
+      key: 'invoiceNo',
+      width: 140,
+      fixed: 'left',
+    },
+    {
+      title: 'DATE',
+      dataIndex: 'date',
+      key: 'date',
+      render: (date) => moment(date).format('DD/MM/YYYY HH:mm'),
+      width: 170,
+    },
+    {
+      title: 'ITEMS',
+      dataIndex: 'items',
+      key: 'items',
+      ellipsis: true,
+      width: 300,
+    },
+    {
+      title: 'TOTAL',
+      dataIndex: 'total',
+      key: 'total',
+      width: 120,
+      render: (value) => value.toLocaleString(),
+    },
+    {
+      title: 'PAID',
+      dataIndex: 'paid',
+      key: 'paid',
+      width: 120,
+      render: (value) => value.toLocaleString(),
+    },
+    {
+      title: 'DUE',
+      dataIndex: 'due',
+      key: 'due',
+      width: 120,
+      render: (value) => value.toLocaleString(),
+    },
+    {
+      title: 'PAYMENT MODE',
+      dataIndex: 'paymentMode',
+      key: 'paymentMode',
+      width: 140,
+    },
+    {
+      title: 'Status',
+      dataIndex: 'status',
+      key: 'status',
+      render: (_, record) => {
+        const status = record.due > 0 ? 'Pending' : 'Paid';
+        return (
+          <span
+            style={{
+              color: status === 'Paid' ? '#52c41a' : '#f5222d',
+              backgroundColor: status === 'Paid' ? '#f6ffed' : '#fff1f0',
+              padding: '4px 8px',
+              borderRadius: '4px',
+              display: 'inline-block',
+              border: `1px solid ${status === 'Paid' ? '#b7eb8f' : '#ffa39e'}`,
+            }}
+          >
+            {status}
+          </span>
+        );
+      },
       width: 120,
     },
   ];
@@ -1034,7 +1261,10 @@ const PatientInvoice = () => {
             <Col xs={24} className="flex justify-end gap-2">
               <Button
                 type="default"
-                onClick={() => fetchInvoices(1, pagination.pageSize)}
+                onClick={() => {
+                  fetchInvoices(1, pagination.pageSize);
+                  fetchPharmacyInvoices();
+                }}
                 loading={loading}
               >
                 Search
@@ -1064,6 +1294,7 @@ const PatientInvoice = () => {
                     total: 0,
                     totalPages: 0
                   });
+                  setPharmacyInvoices([]);
                 }}
               >
                 Reset
@@ -1092,6 +1323,21 @@ const PatientInvoice = () => {
               onChange={handleTableChange}
               bordered
             />
+          </div>
+
+          <div className="mt-8">
+            <h2 className="text-lg font-semibold text-black mb-3">Pharmacy Invoices</h2>
+            <div className="overflow-x-auto">
+              <Table
+                rowKey="_id"
+                columns={pharmacyColumns}
+                dataSource={pharmacyInvoices}
+                loading={pharmacyLoading}
+                scroll={{ x: 1200 }}
+                pagination={false}
+                bordered
+              />
+            </div>
           </div>
         </div>
       </div>

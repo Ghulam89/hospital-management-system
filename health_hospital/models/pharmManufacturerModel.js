@@ -5,6 +5,10 @@ const pharmManufacturerSchema = new mongoose.Schema({
         type: String,
         allowNull: true,
     },
+    branchId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Branch',
+    },
 },{timestamps:true});
 
 

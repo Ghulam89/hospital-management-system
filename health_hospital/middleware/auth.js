@@ -1,0 +1,84 @@
+const jwt = require('jsonwebtoken');
+const User = require('../models/userModel');
+
+const normalizeRole = (role) =>
+  String(role || '')
+    .toLowerCase()
+    .replace(/\s+/g, '');
+
+const auth = async (req, res, next) => {
+  try {
+    const header = req.headers.authorization || '';
+    const tokenFromHeader = header.startsWith('Bearer ') ? header.slice(7) : null;
+    const token = tokenFromHeader || req.headers['x-access-token'] || req.query.token;
+
+    if (!token) {
+      return res.status(401).json({ status: 'fail', message: 'Unauthorized' });
+    }
+
+    const decoded = jwt.verify(token, 'health');
+    const user = await User.findById(decoded?.id).lean();
+
+    if (!user) {
+      return res.status(401).json({ status: 'fail', message: 'Unauthorized' });
+    }
+
+    req.user = user;
+    req.userRole = normalizeRole(user.role);
+    next();
+  } catch (err) {
+    return res.status(401).json({ status: 'fail', message: 'Unauthorized' });
+  }
+};
+
+const requireRole = (...roles) => {
+  const allowed = roles.map(normalizeRole);
+  return (req, res, next) => {
+    const role = req.userRole || normalizeRole(req.user?.role);
+    if (!role || !allowed.includes(role)) {
+      return res.status(403).json({ status: 'fail', message: 'Forbidden' });
+    }
+    next();
+  };
+};
+
+/** Synced catalogs & restricted mutations: only super admin (adjust message per route if needed). */
+const requireSuperAdmin = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ status: 'fail', message: 'Unauthorized' });
+  }
+  const role = req.userRole || normalizeRole(req.user?.role);
+  if (role !== 'superadmin' && role !== 'super admin') {
+    return res.status(403).json({
+      status: 'fail',
+      message: 'Only super admin can perform this action',
+    });
+  }
+  next();
+};
+
+/** Same verification as auth, but continues without req.user if there is no / invalid token. */
+const optionalAuth = async (req, res, next) => {
+  try {
+    const header = req.headers.authorization || '';
+    const tokenFromHeader = header.startsWith('Bearer ') ? header.slice(7) : null;
+    const token = tokenFromHeader || req.headers['x-access-token'] || req.query.token;
+
+    if (!token) {
+      return next();
+    }
+
+    const decoded = jwt.verify(token, 'health');
+    const user = await User.findById(decoded?.id).lean();
+
+    if (user) {
+      req.user = user;
+      req.userRole = normalizeRole(user.role);
+    }
+    next();
+  } catch {
+    next();
+  }
+};
+
+module.exports = { auth, requireRole, requireSuperAdmin, normalizeRole, optionalAuth };

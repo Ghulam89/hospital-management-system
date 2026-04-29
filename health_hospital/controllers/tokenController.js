@@ -1,9 +1,52 @@
+const mongoose = require("mongoose");
 const Token = require("../models/tokenModel");
 const User = require("../models/userModel");
+const Patient = require("../models/patientModel");
+const Visit = require("../models/visitModel");
+const { normalizeRole } = require("../middleware/auth");
+const {
+  applyPatientIdScopeToQuery,
+  patientVisibleForRequest,
+  resolveBranchIdForNonSuperAdmin,
+} = require("../utils/branchScope");
 
 // 1. Create Detail
 const addDetail = async (req, res) => {
   try {
+    let allowed = await patientVisibleForRequest(req, req.body.patientId);
+    if (!allowed && req.body.patientId && req.user) {
+      const p = await Patient.findById(req.body.patientId).select("_id").lean();
+      const role = normalizeRole(req.user.role);
+      let bid = null;
+      if (role === "superadmin") {
+        const raw = req.body.branchId || req.query?.branchId;
+        if (raw != null && raw !== "" && mongoose.Types.ObjectId.isValid(String(raw))) {
+          bid = new mongoose.Types.ObjectId(String(raw));
+        }
+      } else {
+        bid = await resolveBranchIdForNonSuperAdmin(req);
+      }
+      if (p && bid) {
+        const has = await Visit.findOne({ patientId: p._id, branchId: bid }).select("_id").lean();
+        if (!has) {
+          await Visit.create({
+            patientId: p._id,
+            branchId: bid,
+            visitType: "OPD",
+            status: "open",
+            createdById: req.user._id,
+          });
+        }
+        allowed = true;
+      }
+    }
+
+    if (!allowed) {
+      return res
+        .status(403)
+        .json({ status: "fail", message: "Patient not allowed for this branch" });
+    }
+
 
     if(!req.body.doctorId){
       return res
@@ -41,9 +84,20 @@ const addDetail = async (req, res) => {
         .json({ status: "fail", message: "Token number already register!" });
     }
     else {
+      const role = normalizeRole(req.user?.role);
+      let branchId = req.body.branchId;
+      if (role === "superadmin") {
+        const raw = branchId || req.query?.branchId;
+        if (raw != null && raw !== "" && mongoose.Types.ObjectId.isValid(String(raw))) {
+          branchId = new mongoose.Types.ObjectId(String(raw));
+        } else {
+          branchId = undefined;
+        }
+      } else {
+        branchId = await resolveBranchIdForNonSuperAdmin(req);
+      }
 
-
-      const Detail = await Token.create({ ...req.body, });
+      const Detail = await Token.create({ ...req.body, branchId });
       return res.status(200).json({ status: "ok", data: Detail });
     }
   } catch (err) {
@@ -92,6 +146,20 @@ const getDetails = async (req, res) => {
         $gte: new Date(new Date(fromDate).setHours(0, 0, 0, 0)),
         $lte: new Date(new Date(toDate).setHours(23, 59, 59, 999)),
       };
+    }
+
+    const scopeResult = await applyPatientIdScopeToQuery(req, query);
+    if (scopeResult === "empty") {
+      return res.status(200).json({
+        status: "ok",
+        data: [],
+        search,
+        page,
+        count: 0,
+        totalPages: 0,
+        currentPage: page,
+        limit
+      });
     }
 
     const Details = await Token.find(query).sort({createdAt:-1})
@@ -146,6 +214,19 @@ const getTokensOpdReport = async (req, res) => {
       filter.tokenDate = {};
       if (startDate) filter.tokenDate.$gte = new Date(startDate);
       if (endDate) filter.tokenDate.$lte = new Date(endDate);
+    }
+
+    const scopeResult = await applyPatientIdScopeToQuery(req, filter);
+    if (scopeResult === "empty") {
+      return res.status(200).json({
+        status: 'ok',
+        page,
+        limit,
+        totalAppointments: 0,
+        totalPages: 0,
+        topDoctor: null,
+        data: [],
+      });
     }
 
     // Count total filtered appointments (Total OPD card)
@@ -241,6 +322,18 @@ const getDoctorsWithTokenCount = async (req, res) => {
       if (endDate) appointmentFilter.tokenDate.$lte = new Date(endDate);
     }
 
+    const scopeResult = await applyPatientIdScopeToQuery(req, appointmentFilter);
+    if (scopeResult === "empty") {
+      return res.status(200).json({
+        status: 'ok',
+        page,
+        limit,
+        totalDoctors: 0,
+        totalPages: 0,
+        data: [],
+      });
+    }
+
     // Aggregate appointments to count per doctor
     const appointmentCounts = await Token.aggregate([
       { $match: appointmentFilter },
@@ -329,6 +422,12 @@ const getDetailById = async (req, res) => {
   try {
     const id = req.params.id;
     const Detail = await Token.findById(id);
+    if (!Detail) {
+      return res.status(404).json({ status: "fail", message: "Detail not found" });
+    }
+    if (Detail.patientId && !(await patientVisibleForRequest(req, Detail.patientId))) {
+      return res.status(404).json({ status: "fail", message: "Detail not found" });
+    }
     return res.status(200).json({ status: "ok", data: Detail });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -340,6 +439,15 @@ const updateDetail = async (req, res) => {
   try {
     let id = req.params.id;
     let getImage = await Token.findById(id);
+    if (!getImage) {
+      return res.status(404).json({ status: "fail", message: "Detail not found" });
+    }
+    if (getImage.patientId && !(await patientVisibleForRequest(req, getImage.patientId))) {
+      return res.status(404).json({ status: "fail", message: "Detail not found" });
+    }
+    if (req.body.patientId && !(await patientVisibleForRequest(req, req.body.patientId))) {
+      return res.status(403).json({ status: "fail", message: "Patient not allowed for this branch" });
+    }
 
     const updatedDetail = await Token.findByIdAndUpdate(
       id,
@@ -356,6 +464,13 @@ const updateDetail = async (req, res) => {
 const deleteDetail = async (req, res) => {
   try {
     const id = req.params.id;
+    const row = await Token.findById(id);
+    if (!row) {
+      return res.status(404).json({ status: "fail", message: "Detail not found" });
+    }
+    if (row.patientId && !(await patientVisibleForRequest(req, row.patientId))) {
+      return res.status(404).json({ status: "fail", message: "Detail not found" });
+    }
     await Token.findByIdAndDelete(id);
     return res
       .status(200)

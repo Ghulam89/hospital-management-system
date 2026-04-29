@@ -27,6 +27,8 @@ import 'react-toastify/dist/ReactToastify.css';
 import AddAdmin from '../pages/users/Admin/Add_admin';
 import DischargedPatients from '../pages/IndoorManagement/dischargedPatients';
 import Department from '../pages/Preferences/Departments';
+import Branches from '../pages/Branches';
+import RolesAndPermissions from '../pages/Admin/RolesAndPermissions';
 import AddRoomDetails from '../pages/IndoorManagement/roomDetails/AddRoomDetails';
 import Edit_accountant from '../pages/users/Accountant/Edit_accountant';
 import AddmittedPatients from '../pages/IndoorPatients/addmittedPatients';
@@ -37,6 +39,8 @@ import GeneralConsultations from '../pages/Appointments/generalConsultations';
 import AllAppointments from '../pages/AllAppointments/Appointments';
 import Procedure from '../pages/Preferences/Procedures';
 import Invoice from '../pages/invoices';
+import CustomerLedger from '../pages/invoices/CustomerLedger';
+import SupplierLedger from '../pages/Pharmacy/SupplierLedger';
 import InvoiceCreation from '../pages/invoices/InvoiceCreation';
 import DetailsPatients from '../pages/Patients/DetailsPatients';
 import PatientInvoice from '../pages/invoices/PatientInvoice';
@@ -74,16 +78,23 @@ import PharmacySupplier from '../pages/Pharmacy/PharmacySupplier';
 import PharmacyItems from '../pages/Pharmacy/PharmacyItem';
 import PharmacyRack from '../pages/Pharmacy/PharmacyRack';
 import POSInvoice from '../pages/Pharmacy/POS';
+import POSReceipt from '../pages/Pharmacy/POSReceipt';
+import EditPOSInvoice from '../pages/Pharmacy/EditPOSInvoice';
 import PharmacySales from '../pages/Pharmacy/PharmacySales';
 import StockReturn from '../pages/Pharmacy/StockReturn';
 import Stocks from '../pages/Pharmacy/ManageStock';
 import AddNewStocks from '../pages/Pharmacy/ManageStock/AddNewStock';
 import PurchaseOrders from '../pages/Pharmacy/PurchaseOrders';
 import AddPurchaseOrder from '../pages/Pharmacy/PurchaseOrders/AddPurchaseOrder';
+import PurchaseOrderDetails from '../pages/Pharmacy/PurchaseOrders/PurchaseOrderDetails';
 import MissedSales from '../pages/Pharmacy/MissedSales';
 import ConsumeStocks from '../pages/Pharmacy/PharmacyConsumptions';
 import StoreClosings from '../pages/Pharmacy/StoreClosings/index';
 import PharmacyReports from '../pages/Pharmacy/PharmacyReports';
+import StockReturnAddPage from '../pages/Pharmacy/StockReturn/StockReturnAddPage';
+import ProductDetails from '../pages/Pharmacy/PharmacyItem/ProductDetails';
+import AddStaff from '../pages/users/Staff/Add_staff';
+import EditStaff from '../pages/users/Staff/Edit_staff';
 
 function Routing() {
   const [loading, setLoading] = useState<boolean>(true);
@@ -109,23 +120,21 @@ function Routing() {
             path="admin-login"
             element={
               <Public>
-                <PageTitle title="CEET User Portal" />
+                <PageTitle title="Holistic Care Hospital Management System" />
                 <SignIn />
               </Public>
             }
           />
         </Route>
 
-                <Route element={<Private><DefaultLayout children={undefined}/>
-                
-                </Private>}>
+                <Route element={<Private><DefaultLayout /></Private>}>
 
         <Route
           path="/dashboard"
           element={
             <>
               <Private>
-                <PageTitle title="Dashboard" />
+                <PageTitle title="Dashboard | Holistic Care Hospital Management System" />
                 <ECommerce />
               </Private>
             </>
@@ -136,7 +145,7 @@ function Routing() {
           path="/ward"
           element={
             <>
-              <PageTitle title="Signin | Hospital Management" />
+              <PageTitle title="Signin | Holistic Care Hospital Management System" />
               <Ward />
             </>
           }
@@ -146,7 +155,7 @@ function Routing() {
           path="/procedures"
           element={
             <>
-              <PageTitle title="Signin | Hospital Management" />
+              <PageTitle title="Signin | Holistic Care Hospital Management System" />
               <Procedure />
             </>
           }
@@ -156,8 +165,17 @@ function Routing() {
           path="/invoice"
           element={
             <>
-              <PageTitle title="Signin | Hospital Management" />
+              <PageTitle title="Signin | Holistic Care Hospital Management System" />
               <Invoice />
+            </>
+          }
+        />
+        <Route
+          path="/invoice/customer-ledger"
+          element={
+            <>
+              <PageTitle title="Customer Ledger | Holistic Care Hospital Management System" />
+              <CustomerLedger />
             </>
           }
         />
@@ -166,7 +184,7 @@ function Routing() {
           path="/expense-categories"
           element={
             <>
-              <PageTitle title="Signin | Hospital Management" />
+              <PageTitle title="Signin | Holistic Care Hospital Management System" />
               <ExpenseCategories />
             </>
           }
@@ -175,7 +193,7 @@ function Routing() {
           path="/expense"
           element={
             <>
-              <PageTitle title="Signin | Hospital Management" />
+              <PageTitle title="Signin | Holistic Care Hospital Management System" />
               <ExpenseList />
             </>
           }
@@ -356,6 +374,42 @@ function Routing() {
             </>
           }
         />
+        <Route
+          path="/admin/pharmacy/invoices/edit/:id"
+          element={
+            <>
+              <PageTitle title="Edit POS Invoice" />
+              <EditPOSInvoice />
+            </>
+          }
+        />
+        <Route
+          path="/admin/pharmacy/invoices/receipt/:id"
+          element={
+            <>
+              <PageTitle title="Pharmacy Receipt" />
+              <POSReceipt />
+            </>
+          }
+        />
+        <Route
+          path="/admin/pharmacy/customer-ledger"
+          element={
+            <>
+              <PageTitle title="Customer Ledger | Pharmacy" />
+              <CustomerLedger />
+            </>
+          }
+        />
+        <Route
+          path="/admin/pharmacy/supplier-ledger"
+          element={
+            <>
+              <PageTitle title="Supplier Ledger | Pharmacy" />
+              <SupplierLedger />
+            </>
+          }
+        />
 
         <Route
           path="/admin/pharmacy/sales"
@@ -373,6 +427,16 @@ function Routing() {
             <>
               <PageTitle title="Signin | Hospital Management" />
               <PharmacyItems />
+            </>
+          }
+        />
+
+        <Route
+          path="/admin/items/pharmacy/details/:id"
+          element={
+            <>
+              <PageTitle title="Product Details | Hospital Management" />
+              <ProductDetails />
             </>
           }
         />
@@ -396,6 +460,15 @@ function Routing() {
           }
         />
         <Route
+          path="/admin/pharmacy/stock_returns/add"
+          element={
+            <>
+              <PageTitle title="Add Stock Return | Hospital Management" />
+              <StockReturnAddPage />
+            </>
+          }
+        />
+        <Route
           path="/admin/pharmacy/stocks"
           element={
             <>
@@ -406,6 +479,15 @@ function Routing() {
         />
         <Route
           path="/admin/pharmacy/stocks/new"
+          element={
+            <>
+              <PageTitle title="Signin | Hospital Management" />
+              <AddNewStocks />
+            </>
+          }
+        />
+        <Route
+          path="/admin/pharmacy/stocks/edit/:id"
           element={
             <>
               <PageTitle title="Signin | Hospital Management" />
@@ -445,6 +527,16 @@ function Routing() {
         />
 
         <Route
+          path="/admin/pharmacy/purchase-orders/view/:id"
+          element={
+            <>
+              <PageTitle title="Purchase Order Details | Hospital Management" />
+              <PurchaseOrderDetails />
+            </>
+          }
+        />
+
+        <Route
           path="/admin/pharmacy/missed-sales"
           element={
             <>
@@ -470,6 +562,16 @@ function Routing() {
             <>
               <PageTitle title="Store Closings | Hospital Management" />
               <StoreClosings />
+            </>
+          }
+        />
+
+        <Route
+          path="/admin/pharmacy/expenses"
+          element={
+            <>
+              <PageTitle title="Pharmacy Expenses | Hospital Management" />
+              <ExpenseList module="pharmacy" pageName="Pharmacy Expenses" />
             </>
           }
         />
@@ -641,6 +743,16 @@ function Routing() {
         />
 
         <Route
+          path="/admin/branches"
+          element={
+            <>
+              <PageTitle title="Signin | Hospital Management" />
+              <Branches />
+            </>
+          }
+        />
+
+        <Route
           path="/bed-details/new"
           element={
             <>
@@ -773,6 +885,15 @@ function Routing() {
           }
         />
         <Route
+          path="/admin/roles"
+          element={
+            <>
+              <PageTitle title="Roles &amp; permissions | Holistic Care Hospital Management System" />
+              <RolesAndPermissions />
+            </>
+          }
+        />
+        <Route
           path="/accountant/new_user"
           element={
             <>
@@ -826,6 +947,24 @@ function Routing() {
             <>
               <PageTitle title="Nurse | Hospital Management" />
               <EditNurse />
+            </>
+          }
+        />
+        <Route
+          path="/staff/new_user"
+          element={
+            <>
+              <PageTitle title="Staff | Hospital Management" />
+              <AddStaff />
+            </>
+          }
+        />
+        <Route
+          path="/staff/edit_user/:id"
+          element={
+            <>
+              <PageTitle title="Staff | Hospital Management" />
+              <EditStaff />
             </>
           }
         />

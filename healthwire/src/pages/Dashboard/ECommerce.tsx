@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useCallback, useEffect } from 'react';
 import CardDataStats from '../../components/CardDataStats';
 import ChartOne from '../../components/Charts/ChartOne';
 import ChartThree from '../../components/Charts/ChartThree';
@@ -8,29 +8,32 @@ import { Base_url } from '../../utils/Base_url';
 import TodayAppointments from '../../components/Tables/TodayAppointments';
 import { Link } from 'react-router-dom';
 import Breadcrumb from '../../components/Breadcrumbs/Breadcrumb';
+import { BRANCH_CHANGED_EVENT } from '../../utils/branchScope';
 
 const ECommerce: React.FC = () => {
 
 const [todayAppointments, setTodayAppointments] = React.useState({});
-const [loading, setLoading] = React.useState(true);
- 
 
-  const TodayAppointment = ()=>{
-    axios.get(`${Base_url}/apis/appointment/dashboard`)
-    .then((response) => {
-      console.log(response.data);
-      setTodayAppointments(response.data.data);
-    }
-    )
-    .catch((error) => {
-      console.error('Error fetching data:', error);
-    }
-    );
-  }
+  const loadDashboard = useCallback(() => {
+    axios
+      .get(`${Base_url}/apis/appointment/dashboard`)
+      .then((response) => {
+        setTodayAppointments(response.data?.data || {});
+      })
+      .catch((error) => {
+        console.error('Error fetching data:', error);
+      });
+  }, []);
 
-  useEffect(()=>{
-    TodayAppointment();
-  },[])
+  useEffect(() => {
+    loadDashboard();
+  }, [loadDashboard]);
+
+  useEffect(() => {
+    const onBranchChange = () => loadDashboard();
+    window.addEventListener(BRANCH_CHANGED_EVENT, onBranchChange);
+    return () => window.removeEventListener(BRANCH_CHANGED_EVENT, onBranchChange);
+  }, [loadDashboard]);
   
   return (
     <>

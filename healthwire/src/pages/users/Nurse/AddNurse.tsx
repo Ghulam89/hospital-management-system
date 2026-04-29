@@ -11,36 +11,6 @@ const AddNurse = () => {
 const [loading, setLoading] = useState(false);
   console.log(gender);
   
-  const [roleRights, setRoleRights] = useState({
-    
-    editInvoice: '',
-    editExpenses: '',
-    viewLaboratoryReports: '',
-    refundPayment: '',
-    viewPharmacyReports: '',
-    viewIPDReports: '',
-    deleteInvoice: '',
-    editChargersList: '',
-    viewInventoryReports: '',
-    viewFinancialReports: '',
-    viewRadiologyReports: '',
-    nurse: ''
-  });
-
-
-
-
-
-  console.log(roleRights);
-  
-
-  const handleRoleRightChange = (right) => {
-    setRoleRights((prevRights) => ({
-      ...prevRights,
-      [right]: prevRights[right] ? '' : right,
-    }));
-  };
-  
 
   const handleGenderChange = (gender) => {
     setGender(gender);
@@ -89,10 +59,6 @@ const [loading, setLoading] = useState(false);
         toast("Must enter shift!") 
       }
       
-      else if (!roleRights.nurse){
-        toast("Please checked role") 
-      }
-      
       else {
 
         setLoading(true)
@@ -103,13 +69,8 @@ const [loading, setLoading] = useState(false);
           email:state.email,
           password:state.password,
           shift:state.shift,
-          role:roleRights.nurse,
-          tabs: [
-            roleRights.editInvoice,
-            roleRights.editExpenses,
-            roleRights.viewLaboratoryReports,
-            roleRights.refundPayment
-          ].filter(tab => tab !== '' && tab !== ' '),
+          role: 'nurse',
+          tabs: [],
     
     
         }
@@ -131,7 +92,9 @@ const [loading, setLoading] = useState(false);
     
         console.log(error);
           setLoading(false)
-          toast.error(error.response.data.message)
+          toast.error(
+            error?.response?.data?.message || error?.message || 'Request failed',
+          )
           
         })
       }

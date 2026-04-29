@@ -12,6 +12,7 @@ import {
   Statistic,
   Spin,
   Tabs,
+  Modal,
 } from 'antd';
 import axios from 'axios';
 import moment from 'moment';
@@ -165,15 +166,22 @@ const FinancialProfitLossDetails = () => {
   };
 
   const handleDelete = (id) => {
-    axios
-      .delete(`${Base_url}/apis/expense/delete/${id}`)
-      .then((res) => {
-        message.success('Expense deleted successfully');
-        fetchData();
-      })
-      .catch((err) => {
-        message.error('Failed to delete expense');
-      });
+    Modal.confirm({
+      title: 'Delete Expense?',
+      content: 'Are you sure you want to delete this expense? This action cannot be undone.',
+      okText: 'Delete',
+      okType: 'danger',
+      cancelText: 'Cancel',
+      onOk: async () => {
+        try {
+          await axios.delete(`${Base_url}/apis/expense/delete/${id}`);
+          message.success('Expense deleted successfully');
+          fetchData();
+        } catch (err) {
+          message.error('Failed to delete expense');
+        }
+      },
+    });
   };
 
   useEffect(() => {

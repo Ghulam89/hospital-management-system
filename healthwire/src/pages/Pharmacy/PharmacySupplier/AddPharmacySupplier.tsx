@@ -19,7 +19,10 @@ const AddPharmacySupplier = ({ isModalOpen, setIsModalOpen, selectedSupplier, fe
     slaDate: new Date(),
     ntn: '',
     stn: '',
-    pharmManufacturerId: []
+    pharmManufacturerId: [],
+    paymentTerms: '',
+    creditDays: 0,
+    defaultPaymentMethod: ''
   });
   
   const [isLoading, setIsLoading] = useState(false);
@@ -46,7 +49,10 @@ const AddPharmacySupplier = ({ isModalOpen, setIsModalOpen, selectedSupplier, fe
         slaDate: selectedSupplier.slaDate ? new Date(selectedSupplier.slaDate) : new Date(),
         ntn: selectedSupplier.ntn || '',
         stn: selectedSupplier.stn || '',
-        pharmManufacturerId: selectedSupplier.pharmManufacturerId || []
+        pharmManufacturerId: selectedSupplier.pharmManufacturerId || [],
+        paymentTerms: selectedSupplier.paymentTerms || '',
+        creditDays: selectedSupplier.creditDays || 0,
+        defaultPaymentMethod: selectedSupplier.defaultPaymentMethod || ''
       });
     } else {
       setFormData({
@@ -59,7 +65,10 @@ const AddPharmacySupplier = ({ isModalOpen, setIsModalOpen, selectedSupplier, fe
         slaDate: new Date(),
         ntn: '',
         stn: '',
-        pharmManufacturerId: []
+        pharmManufacturerId: [],
+        paymentTerms: '',
+        creditDays: 0,
+        defaultPaymentMethod: ''
       });
     }
   }, [selectedSupplier, isModalOpen]);
@@ -257,6 +266,38 @@ const AddPharmacySupplier = ({ isModalOpen, setIsModalOpen, selectedSupplier, fe
                   className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                 />
               </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Credit Days
+                  </label>
+                  <input
+                    type="number"
+                    name="creditDays"
+                    value={formData.creditDays}
+                    onChange={handleNumberChange}
+                    placeholder="e.g., 30"
+                    className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                  />
+                </div>
+                <div>
+                  <label className="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Default Payment Method
+                  </label>
+                  <select
+                    name="defaultPaymentMethod"
+                    value={formData.defaultPaymentMethod}
+                    onChange={handleChange}
+                    className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                  >
+                    <option value="">Select method</option>
+                    <option value="Cash">Cash</option>
+                    <option value="Cheque">Cheque</option>
+                    <option value="Bank Transfer">Bank Transfer</option>
+                    <option value="Online">Online</option>
+                  </select>
+                </div>
+              </div>
               <div>
                 <label className="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
                   SLA Date
@@ -265,6 +306,19 @@ const AddPharmacySupplier = ({ isModalOpen, setIsModalOpen, selectedSupplier, fe
                   selected={formData.slaDate}
                   onChange={handleDateChange}
                   className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                />
+              </div>
+              <div>
+                <label className="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Payment Terms
+                </label>
+                <textarea
+                  name="paymentTerms"
+                  value={formData.paymentTerms}
+                  onChange={handleChange}
+                  placeholder="Write agreed payment terms..."
+                  className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                  rows={3}
                 />
               </div>
               <div className="grid grid-cols-2 gap-4">

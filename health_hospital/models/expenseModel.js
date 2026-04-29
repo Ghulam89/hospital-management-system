@@ -1,6 +1,10 @@
 const mongoose = require('mongoose');
 
 const expenseSchema = new mongoose.Schema({
+    module: {
+        type: String,
+        default: 'general',
+    },
     image: {
         type: String,
         allowNull: true,
@@ -24,6 +28,10 @@ const expenseSchema = new mongoose.Schema({
     invoiceId: {
         type: mongoose.Schema.Types.ObjectId,
         ref:'Invoice',
+    },
+    branchId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Branch',
     },
 },{timestamps:true});
 

@@ -1,4 +1,5 @@
 const DeathCertificate = require("../models/deathCertificateModel");
+const { getScopedPatientIds } = require("../utils/branchScope");
 
 // 1. Create deathCertificate
 const adddeathCertificate = async (req, res) => {
@@ -36,23 +37,20 @@ const getdeathCertificates = async (req, res) => {
 
     const limit = "20";
 
-    const deathCertificates = await DeathCertificate.find({
-      // $or: [
-      //   { patientId: { $regex: ".*" + search + ".*", $options: "i" } },
-      //   { doctorId: { $regex: ".*" + search + ".*", $options: "i" } },
-      // ],
-    }).sort({createdAt:-1})
+    const scoped = await getScopedPatientIds(req);
+    const certQuery = {};
+    if (scoped !== null) {
+      if (scoped.length === 0) certQuery._id = { $in: [] };
+      else certQuery.patientId = { $in: scoped };
+    }
+
+    const deathCertificates = await DeathCertificate.find(certQuery).sort({createdAt:-1})
     .populate(['patientId','doctorId'])
       .limit(limit * 1)
       .skip((page - 1) * limit)
       .exec();
 
-    const count = await DeathCertificate.find({
-      // $or: [
-      //   { patientId: { $regex: ".*" + search + ".*", $options: "i" } },
-      //   { doctorId: { $regex: ".*" + search + ".*", $options: "i" } },
-      // ],
-    })
+    const count = await DeathCertificate.find(certQuery)
     .populate(['patientId','doctorId'])
       .countDocuments();
 

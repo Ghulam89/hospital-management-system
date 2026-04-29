@@ -5,6 +5,7 @@ import { FaTrashAlt } from 'react-icons/fa';
 import React, { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
+import { Base_url } from '../../../utils/Base_url';
 
 const AddDoctor = () => {
   // Form state management
@@ -34,33 +35,6 @@ const AddDoctor = () => {
     followUpCharges: "0.0",
     sharePrice: "0.0",
     shareType: "Rupees"  
-  });
-
-  // Role rights state
-  const [roleRights, setRoleRights] = useState({
-    doctor: '',
-    patientCareOrder: '',
-    reports: '',
-    pharmacyOrders: '',
-    files: '',
-    bloodBank: '',
-    doctorRecommendation: '',
-    vitals: '',
-    labOrder: '',
-    IntakeOutput: '',
-    operationRequests: '',
-    doctorConsultationRequest: '',
-    admissionForm: '',
-    proceduresadmissionForm: '',
-    radiologyOrder: '',
-    laboratory: '',
-    healthRecords: '',
-    healthandPhysical: '',
-    nutrition: '',
-    nursingForms: '',
-    radiology: '',
-    rehabilation: '',
-    nursingNotes: '',
   });
 
   // Qualification state
@@ -230,7 +204,7 @@ const AddDoctor = () => {
 
   // Fetch departments
   const fetchDepartments = useCallback(() => {
-    axios.get('https://api.holisticare.pk/apis/department/get')
+    axios.get(`${Base_url}/apis/department/get`)
       .then((res) => {
         setAllDepartment(res.data.data);
       })
@@ -247,7 +221,6 @@ const AddDoctor = () => {
   // Form submission with validation
   const handleSubmit = async (e) => {
     e.preventDefault();
-
     // Basic validation
     if (!state.name) {
       toast.error("Must enter name!"); 
@@ -266,9 +239,6 @@ const AddDoctor = () => {
       return;
     } else if (!state.shift) {
       toast.error("Must select shift!");
-      return;
-    } else if (!roleRights.doctor) {
-      toast.error("Please select doctor role");
       return;
     }
 
@@ -305,14 +275,12 @@ const AddDoctor = () => {
       password: state.password,
       shift: state.shift,
       departmentId: departmentId,
-      role: roleRights.doctor,
-       consultationFee: state.consultationFee,
+      role: 'doctor',
+      tabs: [],
+      consultationFee: state.consultationFee,
     followUpCharges: state.followUpCharges,
     sharePrice: state.sharePrice,
     shareType: state.shareType,
-      tabs: Object.entries(roleRights)
-        .filter(([key, value]) => key !== 'doctor' && value)
-        .map(([key]) => key),
       OPD: state.OPD,
       IPD: state.IPD,
       awards: state.awards,
@@ -330,7 +298,7 @@ const AddDoctor = () => {
     
     try {
       setIsSubmitting(true);
-      const res = await axios.post('https://api.holisticare.pk/apis/user/create', params);
+      const res = await axios.post(`${Base_url}/apis/user/create`, params);
       if (res.data.status === 'ok') {
         setIsSubmitting(false);
         toast.success("Doctor registered successfully!");
@@ -722,55 +690,6 @@ const AddDoctor = () => {
     </div>
 </div>
 
-                  {/* Roles and Rights Section */}
-                  <div className="mt-8">
-                    <div className="w-full pb-4">
-                      <label className="mb-2.5 block text-black dark:text-white">
-                        Add Doctor Roles & Rights
-                      </label>
-                    </div>
-                    <div className=' pb-4'>
-                        <label className="flex cursor-pointer select-none ">
-                          <div>
-                          <input
-                            type="checkbox"
-                            id="roleDoctor"
-                            className="h-5 w-5 text-primary focus:ring-primary border-gray-300 rounded"
-                            checked={roleRights.doctor === 'doctor'}
-                            onChange={() => handleRoleRightChange('doctor')}
-                            required
-                          />
-                          </div>
-                          <span className="ml-2">
-                            Doctor (Access to appointments and reports of patients specific to the doctor only)
-                          </span>
-                        </label>
-                      </div>
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                      {/* Doctor Role (required) */}
-                     
-
-                      {/* Other Rights */}
-                      {Object.entries(roleRights)
-                        .filter(([key]) => key !== 'doctor')
-                        .map(([right]) => (
-                          <div key={right}>
-                            <label className="flex cursor-pointer select-none items-center">
-                              <input
-                                type="checkbox"
-                                id={right}
-                                className="h-5 w-5 text-primary focus:ring-primary border-gray-300 rounded"
-                                checked={!!roleRights[right]}
-                                onChange={() => handleRoleRightChange(right)}
-                              />
-                              <span className="ml-2 capitalize">
-                                {right.split(/(?=[A-Z])/).join(' ')}
-                              </span>
-                            </label>
-                          </div>
-                        ))}
-                    </div>
-                  </div>
                 </div>
               </div>
             </div>

@@ -9,9 +9,15 @@ import type { Dayjs } from 'dayjs';
 import AddStockReturnModal from './AddStockReturnModal';
 import * as XLSX from 'xlsx';
 import { useReactToPrint } from 'react-to-print';
+import { useNavigate } from 'react-router-dom';
 
 const { Search } = Input;
 const { Option } = Select;
+
+const getAuthHeaders = () => {
+  const token = localStorage.getItem('userToken') || '';
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
 
 interface StockReturn {
   _id: string;
@@ -43,6 +49,7 @@ interface StockReturn {
 }
 
 const StockReturn: React.FC = () => {
+  const navigate = useNavigate();
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [stockReturns, setStockReturns] = useState<StockReturn[]>([]);
   const [suppliers, setSuppliers] = useState<any[]>([]);
@@ -88,7 +95,9 @@ const StockReturn: React.FC = () => {
         })
       });
 
-      const response = await axios.get(`${Base_url}/apis/pharmReturnStock/get?${params}`);
+      const response = await axios.get(`${Base_url}/apis/pharmReturnStock/get?${params}`, {
+        headers: getAuthHeaders(),
+      });
       setStockReturns(response.data.data || []);
       setTotalPages(response.data.totalPages || 1);
       
@@ -242,36 +251,33 @@ const StockReturn: React.FC = () => {
   };
 
   const handleEdit = (record: StockReturn) => {
-    setEditingStockReturn(record);
-    setIsModalOpen(true);
+    navigate(`/admin/pharmacy/stock_returns/add?id=${record._id}`);
   };
 
   const handleDelete = async (record: StockReturn) => {
-    try {
-      const result = await Swal.fire({
-        title: 'Delete Stock Return?',
-        text: `Are you sure you want to delete this stock return record?`,
-        icon: 'warning',
-        showCancelButton: true,
-        confirmButtonText: 'Yes, Delete',
-        cancelButtonText: 'Cancel',
-        confirmButtonColor: '#ef4444',
-      });
-
-      if (result.isConfirmed) {
-        await axios.delete(`${Base_url}/apis/pharmReturnStock/delete/${record._id}`);
-        message.success('Stock return deleted successfully');
-        fetchStockReturns();
-      }
-    } catch (error) {
-      console.error('Error deleting stock return:', error);
-      message.error('Failed to delete stock return');
-    }
+    Modal.confirm({
+      title: 'Delete Stock Return?',
+      content: `Are you sure you want to delete return #${record.returnNumber}? This action cannot be undone.`,
+      okText: 'Yes, Delete',
+      okType: 'danger',
+      cancelText: 'Cancel',
+      onOk: async () => {
+        try {
+          await axios.delete(`${Base_url}/apis/pharmReturnStock/delete/${record._id}`, {
+            headers: getAuthHeaders(),
+          });
+          message.success('Stock return deleted successfully');
+          fetchStockReturns();
+        } catch (error) {
+          console.error('Error deleting stock return:', error);
+          message.error('Failed to delete stock return');
+        }
+      },
+    });
   };
 
   const handleAdd = () => {
-    setEditingStockReturn(null);
-    setIsModalOpen(true);
+    navigate('/admin/pharmacy/stock_returns/add');
   };
 
   const handleSearch = (value: string) => {
@@ -352,15 +358,6 @@ const StockReturn: React.FC = () => {
   return (
     <div className="mx-auto max-w-[1800px] px-4 py-6">
       <Breadcrumb pageName="Stock Return Management" />
-
-      {/* Add/Edit Modal */}
-      <AddStockReturnModal
-        isModalOpen={isModalOpen}
-        setIsModalOpen={setIsModalOpen}
-        fetchStockReturns={fetchStockReturns}
-        selectedStockReturn={editingStockReturn}
-        suppliers={suppliers}
-      />
 
       {/* Header Actions */}
       <div className="flex flex-col gap-4 mb-6">

@@ -4,11 +4,13 @@ import { FaRegEdit } from 'react-icons/fa';
 import { Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import moment from 'moment';
+import { Base_url } from '../../../utils/Base_url';
 
 import { RiDeleteBin5Line } from 'react-icons/ri';
 import Swal from 'sweetalert2';
+import { canCreateUsers, canDeleteUsers, canEditUsers, getStoredUserForPermissions } from '../../../utils/permissions';
 
-const columns = (handleDelete, handleEdit) => [
+const columns = (handleDelete, handleEdit, canEdit, canDelete) => [
   {
     title: 'NAME',
     dataIndex: 'name',
@@ -24,19 +26,20 @@ const columns = (handleDelete, handleEdit) => [
   {
     title: 'LAST SIGNED IN ON',
     dataIndex: 'updatedAt',
-    render: (text) => moment(text).format('DD/MM/YYYY'),
+    render: (text) =>
+      text && moment(text).isValid() ? moment(text).format('DD/MM/YYYY') : '-',
   },
-  {
+  (canEdit || canDelete) && {
     title: 'ACTION',
     dataIndex: 'action',
     render: (text, record) => (
       <div className='flex items-center gap-2'>
-        <FaRegEdit color='blue' size={20} onClick={() => handleEdit(record)} />
-        <RiDeleteBin5Line color='red' size={20} onClick={() => handleDelete(record._id)} />
+        {canEdit && <FaRegEdit color='blue' size={20} onClick={() => handleEdit(record)} />}
+        {canDelete && <RiDeleteBin5Line color='red' size={20} onClick={() => handleDelete(record._id)} />}
       </div>
     ),
   },
-];
+].filter(Boolean);
 
 const Nurse = () => {
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
@@ -44,6 +47,10 @@ const Nurse = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const navigate = useNavigate();
+  const userData = getStoredUserForPermissions();
+  const allowCreate = canCreateUsers(userData);
+  const allowEdit = canEditUsers(userData);
+  const allowDelete = canDeleteUsers(userData);
 
   const onSelectChange = (newSelectedRowKeys) => {
     setSelectedRowKeys(newSelectedRowKeys);
@@ -78,13 +85,17 @@ const Nurse = () => {
   };
 
   const fetchUsersData = (page) => {
-    axios.get(`https://api.holisticare.pk/apis/user/get?page=${page}&role=nurse`).then((res) => {
-      setUsers(res.data.data);
-      setTotalPages(res.data.totalPages);
-      const accountant = res.data.data.filter(user => user.role === "nurse");
-      setUsers(accountant);
-      setTotalPages(res.data.totalPages);
-    });
+    axios
+      .get(`${Base_url}/apis/user/get`, { params: { page, role: 'nurse', branchId: 'all' } })
+      .then((res) => {
+        const rows = Array.isArray(res.data?.data) ? res.data.data : [];
+        setUsers(rows.filter((user) => user.role === 'nurse'));
+        setTotalPages(res.data?.totalPages ?? 1);
+      })
+      .catch(() => {
+        setUsers([]);
+        setTotalPages(1);
+      });
   };
 
   useEffect(() => {
@@ -112,7 +123,7 @@ const Nurse = () => {
       confirmButtonText: "Yes, delete it!",
     }).then((result) => {
       if (result.isConfirmed) {
-        axios.delete(`https://api.holisticare.pk/apis/user/delete/${key}`)
+        axios.delete(`${Base_url}/apis/user/delete/${key}`)
           .then((res) => {
             if (res.data.status === 'ok') {
               Swal.fire("Deleted!", "Your file has been deleted.", "success");
@@ -130,7 +141,7 @@ const Nurse = () => {
     <div className="rounded-sm border border-stroke bg-white px-5 pt-6 pb-2.5 shadow-default sm:px-7.5 xl:pb-1">
       <div className="mb-5 flex justify-between items-center">
         <h1 className="text-xl font-semibold text-black">Nurse</h1>
-        <Link
+        {allowCreate && <Link
           to="/nurse/new_user"
           className="inline-flex items-center justify-center gap-2.5 rounded-md bg-primary py-3 px-10 text-center font-medium text-white hover:bg-opacity-90 lg:px-8 xl:px-10"
         >
@@ -161,11 +172,11 @@ const Nurse = () => {
             </g>
           </svg>
           Add User
-        </Link>
+        </Link>}
       </div>
       <Table
         rowSelection={rowSelection}
-        columns={columns(handleDelete, handleEdit)}
+        columns={columns(handleDelete, handleEdit, allowEdit, allowDelete)}
         dataSource={users}
         pagination={{ current: currentPage, pageSize: 10, total: totalPages * 10 }}
         onChange={handleTableChange}

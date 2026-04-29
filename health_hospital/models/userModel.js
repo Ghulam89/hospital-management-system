@@ -25,6 +25,10 @@ const userSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref:'Department',
     },
+    branchId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref:'Branch',
+    },
     password: {
         type: String,
         allowNull: true,

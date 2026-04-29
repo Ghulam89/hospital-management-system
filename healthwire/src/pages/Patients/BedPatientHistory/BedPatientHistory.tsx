@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, message, DatePicker, Space } from 'antd';
+import { Table, Button, message, DatePicker, Modal } from 'antd';
 import { Link, useParams } from 'react-router-dom';
 import axios from 'axios';
 import { RiDeleteBin5Line, RiFile2Line, RiEdit2Line } from 'react-icons/ri';
@@ -146,14 +146,23 @@ const BedPatientHistory = () => {
   }, [pagination.current, pagination.pageSize, dateRange]);
 
   const handleDelete = async (id) => {
-    try {
-      await axios.delete(`${Base_url}/apis/dischargePatient/delete/${id}`);
-      message.success('Discharge record deleted successfully');
-      fetchDischargeHistory(pagination.current, pagination.pageSize);
-    } catch (err) {
-      message.error('Failed to delete discharge record');
-      console.error(err);
-    }
+    Modal.confirm({
+      title: 'Delete Discharge Record?',
+      content: 'Are you sure you want to delete this record? This action cannot be undone.',
+      okText: 'Delete',
+      okType: 'danger',
+      cancelText: 'Cancel',
+      onOk: async () => {
+        try {
+          await axios.delete(`${Base_url}/apis/dischargePatient/delete/${id}`);
+          message.success('Discharge record deleted successfully');
+          fetchDischargeHistory(pagination.current, pagination.pageSize);
+        } catch (err) {
+          message.error('Failed to delete discharge record');
+          console.error(err);
+        }
+      },
+    });
   };
 
   const handleTableChange = (newPagination) => {

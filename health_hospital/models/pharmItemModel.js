@@ -14,6 +14,10 @@ const pharmItemSchema = new mongoose.Schema({
         type: String,
         allowNull: true,
     },
+    alternateBarcodes: [{
+        type: String,
+        allowNull: true,
+    }],
     pharmManufacturerId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'PharmManufacturer',
@@ -88,17 +92,22 @@ const pharmItemSchema = new mongoose.Schema({
         type: String,
         allowNull: true,
     },
+    branchId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Branch',
+    },
     
 }, { timestamps: true });
 
 // Pre-save hook to auto-initialize availableQuantity from openingStock
 pharmItemSchema.pre('save', async function(next) {
     try {
-        // Only initialize if this is a new document and openingStock is provided
         if (this.isNew && this.openingStock !== undefined && this.openingStock !== null && this.openingStock !== '') {
-            // If availableQuantity is not set, initialize it with openingStock value
             if (this.availableQuantity === undefined || this.availableQuantity === null || this.availableQuantity === '') {
-                this.availableQuantity = Number(this.openingStock);
+                const opening = Number(this.openingStock) || 0;
+                const conv = Number(this.conversionUnit) || 1;
+                const isPack = String(this.unit || '').toLowerCase() === 'pack';
+                this.availableQuantity = isPack ? opening * conv : opening;
             }
         }
         

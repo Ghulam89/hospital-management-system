@@ -1,13 +1,7 @@
 import { Navigate } from "react-router-dom";
-import { useSelector } from "react-redux";
-import { ReactNode, useEffect } from "react";
-
-interface RootState {
-  authReducer: {
-    userToken: string | null;
-    socialData: any;
-  };
-}
+import { ReactNode } from "react";
+import { useLocation } from "react-router-dom";
+import { canAccessPath, getStoredUserForPermissions } from "../utils/permissions";
 
 interface PrivateProps {
   children: ReactNode;
@@ -15,13 +9,14 @@ interface PrivateProps {
 
 const Private = ({ children }: PrivateProps) => {
   const userToken = localStorage.getItem('userToken');
- 
-  useEffect(() => {
-    console.log(userToken, "userToken");
-  }, [userToken]);
+  const location = useLocation();
+  const userData = getStoredUserForPermissions();
 
   if (!userToken) {
     return <Navigate to="/auth/admin-login" />;
+  }
+  if (!canAccessPath(userData, location.pathname)) {
+    return <Navigate to="/dashboard" replace />;
   }
 
   return <>{children}</>;

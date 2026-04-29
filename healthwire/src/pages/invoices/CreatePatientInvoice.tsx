@@ -7,6 +7,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { FaEye } from 'react-icons/fa';
 import { Link } from 'react-router-dom';
 import { AsyncPaginate } from 'react-select-async-paginate';
+import { RiRefund2Line } from 'react-icons/ri';
 
 type Procedure = {
   _id: string;
@@ -152,6 +153,28 @@ const [isSubmitting, setIsSubmitting] = useState(false);
     'Procedures & Medicines once purchased are non-refundable.',
     'Purchased Packages Are Valid For 06 Months Only.'
   ]);
+
+  const [refundModalOpen, setRefundModalOpen] = useState(false);
+  const [refundProcedure, setRefundProcedure] = useState<ProcedureItem | null>(null);
+  const [refundForm, setRefundForm] = useState({
+    method: 'Cash',
+    paid: '',
+    payDate: new Date().toISOString().split('T')[0],
+    reference: '',
+    notes: ''
+  });
+
+  const openProcedureRefundModal = (procedure: ProcedureItem) => {
+    setRefundProcedure(procedure);
+    setRefundForm({
+      method: 'Cash',
+      paid: String(procedure.amount || 0),
+      payDate: new Date().toISOString().split('T')[0],
+      reference: '',
+      notes: ''
+    });
+    setRefundModalOpen(true);
+  };
   const handleNumberInputWheel = (e: React.WheelEvent<HTMLInputElement>) => {
     e.preventDefault();
     e.currentTarget.blur();
@@ -455,7 +478,18 @@ const [isSubmitting, setIsSubmitting] = useState(false);
   };
 
   const calculateGrandTotal = () => {
-    return calculateSubTotal() - calculateTotalDiscount();
+    const procedureTotal = calculateSubTotal() - calculateTotalDiscount();
+    const expensesTotal =
+      localExpenses.reduce((sum, expense) => {
+        const e = expense.expenses || [];
+        return (
+          sum +
+          e
+            .filter((row: any) => !row.deductBeforeDoctorShare)
+            .reduce((s: number, row: any) => s + (Number(row.amount) || 0), 0)
+        );
+      }, 0);
+    return procedureTotal + expensesTotal;
   };
 
   const calculateTotalPaid = () => {
@@ -584,7 +618,25 @@ const [isSubmitting, setIsSubmitting] = useState(false);
       totalPay: calculateTotalPaid(),
       payment: paymentInstallments.map(payment => ({
         method: payment.method,
-        payDate: new Date(payment.date).toISOString(),
+        payDate: (() => {
+          if (!payment.date) return payment.date;
+          if (/^\d{4}-\d{2}-\d{2}$/.test(payment.date)) {
+            const [y, m, d] = payment.date.split('-').map((v) => Number(v));
+            if (!y || !m || !d) return payment.date;
+            const now = new Date();
+            return new Date(
+              y,
+              m - 1,
+              d,
+              now.getHours(),
+              now.getMinutes(),
+              now.getSeconds(),
+              now.getMilliseconds(),
+            ).toISOString();
+          }
+          const parsed = new Date(payment.date);
+          return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : payment.date;
+        })(),
         paid: payment.amount,
         reference: payment.reference
       })),
@@ -897,24 +949,33 @@ const [isSubmitting, setIsSubmitting] = useState(false);
  </div>
 </td>
                     <td className="px-1 py-3 whitespace-nowrap">
-                      <button
-                        onClick={() => removeProcedure(item.id)}
-                        className="text-red-500 float-end pr-5 hover:text-red-700"
-                        title="Remove"
-                      >
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          className="h-6 w-6"
-                          viewBox="0 0 20 20"
-                          fill="currentColor"
+                      <div className="flex items-center gap-3">
+                        <button
+                          onClick={() => removeProcedure(item.id)}
+                          className="text-red-500 hover:text-red-700"
+                          title="Remove"
                         >
-                          <path
-                            fillRule="evenodd"
-                            d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z"
-                            clipRule="evenodd"
-                          />
-                        </svg>
-                      </button>
+                          <svg
+                            xmlns="http://www.w3.org/2000/svg"
+                            className="h-6 w-6"
+                            viewBox="0 0 20 20"
+                            fill="currentColor"
+                          >
+                            <path
+                              fillRule="evenodd"
+                              d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z"
+                              clipRule="evenodd"
+                            />
+                          </svg>
+                        </button>
+                        <button
+                          onClick={() => openProcedureRefundModal(item)}
+                          className="text-orange-500 hover:text-orange-700"
+                          title="Refund Procedure"
+                        >
+                          <RiRefund2Line size={20} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1115,6 +1176,105 @@ const [isSubmitting, setIsSubmitting] = useState(false);
 </button>
         </div>
       </div>
+      {refundModalOpen && (
+        <div className="fixed inset-0 z-[1000]">
+          <div
+            className="absolute inset-0 bg-black/40"
+            onClick={() => setRefundModalOpen(false)}
+          />
+          <div className="absolute inset-0 flex items-center justify-center p-4">
+            <div className="w-full max-w-xl bg-white rounded-lg shadow-lg">
+              <div className="px-5 py-4 border-b">
+                <div className="flex items-center justify-between">
+                  <div className="font-semibold text-gray-700">
+                    Procedure Refund{refundProcedure?.description ? ` - ${refundProcedure.description}` : ''}
+                  </div>
+                  <button
+                    className="text-gray-500 hover:text-gray-700"
+                    onClick={() => setRefundModalOpen(false)}
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+              <div className="px-5 py-4">
+                <div className="text-sm text-gray-600 mb-3">
+                  Refund cannot be recorded until the invoice is created.
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <div className="mb-1 text-xs font-medium text-bodydark">Method</div>
+                    <select
+                      className="w-full rounded border border-stroke bg-transparent px-3 py-2 text-black outline-none transition focus:border-primary dark:border-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                      value={refundForm.method}
+                      onChange={(e) => setRefundForm({ ...refundForm, method: e.target.value })}
+                    >
+                      <option value="Cash">Cash</option>
+                      <option value="Card">Card</option>
+                      <option value="Bank Transfer">Bank Transfer</option>
+                      <option value="Cheque">Cheque</option>
+                      <option value="Credit">Credit</option>
+                    </select>
+                  </div>
+                  <div>
+                    <div className="mb-1 text-xs font-medium text-bodydark">Refund Amount</div>
+                    <input
+                      type="number"
+                      min={0}
+                      className="w-full rounded border border-stroke bg-transparent px-3 py-2 text-black outline-none transition focus:border-primary dark:border-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                      value={refundForm.paid}
+                      onChange={(e) => setRefundForm({ ...refundForm, paid: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <div className="mb-1 text-xs font-medium text-bodydark">Pay Date</div>
+                    <input
+                      type="date"
+                      className="w-full rounded border border-stroke bg-transparent px-3 py-2 text-black outline-none transition focus:border-primary dark:border-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                      value={refundForm.payDate}
+                      onChange={(e) => setRefundForm({ ...refundForm, payDate: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <div className="mb-1 text-xs font-medium text-bodydark">Reference</div>
+                    <input
+                      type="text"
+                      className="w-full rounded border border-stroke bg-transparent px-3 py-2 text-black outline-none transition focus:border-primary dark:border-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                      value={refundForm.reference}
+                      onChange={(e) => setRefundForm({ ...refundForm, reference: e.target.value })}
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <div className="mb-1 text-xs font-medium text-bodydark">Notes</div>
+                    <textarea
+                      className="w-full rounded border border-stroke bg-transparent px-3 py-2 text-black outline-none transition focus:border-primary dark:border-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                      rows={3}
+                      value={refundForm.notes}
+                      onChange={(e) => setRefundForm({ ...refundForm, notes: e.target.value })}
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="px-5 py-3 border-t flex justify-end gap-2">
+                <button
+                  className="bg-gray-500 hover:bg-gray-600 text-white px-4 py-2 rounded-md"
+                  onClick={() => setRefundModalOpen(false)}
+                >
+                  Close
+                </button>
+                <button
+                  className="bg-primary text-white px-4 py-2 rounded-md opacity-60 cursor-not-allowed"
+                  disabled
+                >
+                  Record Refund
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
 }

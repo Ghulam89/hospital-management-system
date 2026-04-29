@@ -45,7 +45,11 @@ const pharmMissedSaleSchema = new mongoose.Schema({
     },
     resolvedAt: {
         type: Date
-    }
+    },
+    branchId: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'Branch',
+    },
 }, { timestamps: true });
 
 // Pre-save middleware to calculate estimated loss

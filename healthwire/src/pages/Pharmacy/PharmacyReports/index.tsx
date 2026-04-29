@@ -1,11 +1,12 @@
-import React, { useState, useEffect } from 'react';
-import { Table, Button, message, Input, DatePicker, Tag, Space } from 'antd';
-import { SearchOutlined, DownloadOutlined, PrinterOutlined, EyeOutlined, DollarOutlined, ShoppingCartOutlined } from '@ant-design/icons';
+import React, { useMemo, useState, useEffect } from 'react';
+import { Table, Button, message, Input, DatePicker, Tag, Space, Select, Modal } from 'antd';
+import { SearchOutlined, DownloadOutlined, PrinterOutlined, EyeOutlined, DollarOutlined, ShoppingCartOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 import axios from 'axios';
 import { Base_url } from '../../../utils/Base_url';
 import dayjs, { Dayjs } from 'dayjs';
 import Swal from 'sweetalert2';
+import { useNavigate } from 'react-router-dom';
 
 const { Search } = Input;
 const { RangePicker } = DatePicker;
@@ -75,13 +76,23 @@ interface StockTransaction {
 }
 
 const PharmacyReports: React.FC = () => {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState('pos-sales');
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+  const [posPaymentMethod, setPosPaymentMethod] = useState<string>('');
+  const [posStatus, setPosStatus] = useState<string>('');
+  const [posPatientName, setPosPatientName] = useState('');
+  const [posPatientMr, setPosPatientMr] = useState('');
+  const [posDoctorName, setPosDoctorName] = useState('');
+  const [posMinAmount, setPosMinAmount] = useState('');
+  const [posMaxAmount, setPosMaxAmount] = useState('');
+  const [posDiscountPercent, setPosDiscountPercent] = useState('');
   const [dateRange, setDateRange] = useState<[Dayjs | null, Dayjs | null]>([
-    null,
-    null
+    dayjs().startOf('month'),
+    dayjs().endOf('day'),
   ]);
+  const [paymentDateRange, setPaymentDateRange] = useState<[Dayjs | null, Dayjs | null]>([null, null]);
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   
@@ -111,12 +122,60 @@ const PharmacyReports: React.FC = () => {
     ],
   };
 
-  // Fetch FIXED summary once on mount - doesn't change with filters
+  const dateRangePresets = useMemo(
+    () => [
+      {
+        label: 'Today',
+        value: [dayjs().startOf('day'), dayjs().endOf('day')] as [Dayjs, Dayjs],
+      },
+      {
+        label: 'Yesterday',
+        value: [
+          dayjs().subtract(1, 'day').startOf('day'),
+          dayjs().subtract(1, 'day').endOf('day'),
+        ] as [Dayjs, Dayjs],
+      },
+      {
+        label: 'Last Week',
+        value: [
+          dayjs().subtract(1, 'week').startOf('week').startOf('day'),
+          dayjs().subtract(1, 'week').endOf('week').endOf('day'),
+        ] as [Dayjs, Dayjs],
+      },
+    ],
+    [],
+  );
+
   useEffect(() => {
-    if (activeTab === 'pos-sales') {
-      fetchPOSSummary(); // Fetch FIXED summary once
+    setCurrentPage(1);
+    setSelectedRowKeys([]);
+  }, [activeTab, searchTerm, dateRange, paymentDateRange, posPaymentMethod, posStatus, posPatientName, posPatientMr, posDoctorName, posMinAmount, posMaxAmount, posDiscountPercent]);
+
+  useEffect(() => {
+    if ((!dateRange[0] || !dateRange[1]) && activeTab === 'pos-sales') {
+      setDateRange([dayjs().startOf('month'), dayjs().endOf('day')]);
     }
   }, [activeTab]);
+
+  // Fetch summary when date range or any POS list filter changes (must match fetchPOSTransactions filters)
+  useEffect(() => {
+    if (activeTab === 'pos-sales') {
+      fetchPOSSummary();
+    }
+  }, [
+    activeTab,
+    dateRange,
+    paymentDateRange,
+    searchTerm,
+    posPaymentMethod,
+    posStatus,
+    posPatientName,
+    posPatientMr,
+    posDoctorName,
+    posMinAmount,
+    posMaxAmount,
+    posDiscountPercent,
+  ]);
 
   // Fetch transactions when filters/pagination change
   useEffect(() => {
@@ -125,7 +184,7 @@ const PharmacyReports: React.FC = () => {
     } else if (activeTab === 'stock-purchases') {
       fetchStockTransactions();
     }
-  }, [activeTab, currentPage, searchTerm, dateRange]);
+  }, [activeTab, currentPage, searchTerm, dateRange, paymentDateRange, posPaymentMethod, posStatus, posPatientName, posPatientMr, posDoctorName, posMinAmount, posMaxAmount, posDiscountPercent]);
 
   // Fetch POS transactions - Only display, NO calculations here
   const fetchPOSTransactions = async () => {
@@ -144,6 +203,40 @@ const PharmacyReports: React.FC = () => {
       if (dateRange[0] && dateRange[1]) {
         params.from = dateRange[0].format('YYYY-MM-DD');
         params.to = dateRange[1].format('YYYY-MM-DD');
+      }
+      if (paymentDateRange[0] && paymentDateRange[1]) {
+        params.paymentFrom = paymentDateRange[0].format('YYYY-MM-DD');
+        params.paymentTo = paymentDateRange[1].format('YYYY-MM-DD');
+      }
+
+      if (posPaymentMethod) {
+        params.paymentMethod = posPaymentMethod;
+      }
+      if (posStatus) {
+        params.status = posStatus;
+      }
+
+      if (posPatientName.trim()) {
+        params.patientName = posPatientName.trim();
+      }
+
+      if (posPatientMr.trim()) {
+        params.patientMr = posPatientMr.trim();
+      }
+
+      if (posDoctorName.trim()) {
+        params.doctorName = posDoctorName.trim();
+      }
+
+      if (posMinAmount.trim()) {
+        params.minAmount = posMinAmount.trim();
+      }
+
+      if (posMaxAmount.trim()) {
+        params.maxAmount = posMaxAmount.trim();
+      }
+      if (posDiscountPercent.trim()) {
+        params.discountPercent = posDiscountPercent.trim();
       }
 
       console.log('📤 Fetching POS transactions - Page:', currentPage);
@@ -171,21 +264,55 @@ const PharmacyReports: React.FC = () => {
     }
   };
 
-  // Fetch FIXED POS summary - NO filters (shows GRAND TOTAL)
+  // POS summary from backend — same filter profile as transaction list (not paginated)
   const fetchPOSSummary = async () => {
     try {
       const params: any = {};
-      
-      // NO filters - fetch complete total
-      // If you want to apply date filter, uncomment:
-      /*
+
+      if (searchTerm) {
+        params.search = searchTerm;
+      }
+
       if (dateRange[0] && dateRange[1]) {
         params.from = dateRange[0].format('YYYY-MM-DD');
         params.to = dateRange[1].format('YYYY-MM-DD');
       }
-      */
+      if (paymentDateRange[0] && paymentDateRange[1]) {
+        params.paymentFrom = paymentDateRange[0].format('YYYY-MM-DD');
+        params.paymentTo = paymentDateRange[1].format('YYYY-MM-DD');
+      }
 
-      console.log('📊 Fetching FIXED/GRAND TOTAL summary (NO filters)');
+      if (posPaymentMethod) {
+        params.paymentMethod = posPaymentMethod;
+      }
+      if (posStatus) {
+        params.status = posStatus;
+      }
+
+      if (posPatientName.trim()) {
+        params.patientName = posPatientName.trim();
+      }
+
+      if (posPatientMr.trim()) {
+        params.patientMr = posPatientMr.trim();
+      }
+
+      if (posDoctorName.trim()) {
+        params.doctorName = posDoctorName.trim();
+      }
+
+      if (posMinAmount.trim()) {
+        params.minAmount = posMinAmount.trim();
+      }
+
+      if (posMaxAmount.trim()) {
+        params.maxAmount = posMaxAmount.trim();
+      }
+      if (posDiscountPercent.trim()) {
+        params.discountPercent = posDiscountPercent.trim();
+      }
+
+      console.log('📊 Fetching POS summary (same filters as list, all rows)');
       console.log('📊 Summary API URL:', `${Base_url}/apis/pharmPos/summary`);
       
       const response = await axios.get(`${Base_url}/apis/pharmPos/summary`, { params });
@@ -195,7 +322,7 @@ const PharmacyReports: React.FC = () => {
       
       if (response.data.status === 'ok' && response.data.summary) {
         const summary = response.data.summary;
-        console.log('✅ FIXED Summary received (GRAND TOTAL - No table filters):', {
+        console.log('✅ POS summary received:', {
           totalTransactions: summary.totalTransactions,
           totalSales: summary.totalSales,
           totalPaid: summary.totalPaid,
@@ -208,7 +335,7 @@ const PharmacyReports: React.FC = () => {
         setTotalPaid(summary.totalPaid || 0);
         setTotalDue(summary.totalDue || 0);
         
-        console.log('✅ FIXED summary cards updated - will NOT change when table filters applied!');
+        console.log('✅ Summary cards updated for current filters');
       } else {
         console.warn('⚠️ Invalid summary response format:', response.data);
       }
@@ -325,6 +452,17 @@ const PharmacyReports: React.FC = () => {
       ),
     },
     {
+      title: 'Discount',
+      dataIndex: 'totalDiscount',
+      key: 'totalDiscount',
+      render: (discount: number) => (
+        <span className={`font-semibold ${(discount || 0) > 0 ? 'text-green-600' : 'text-gray-500'}`}>
+          Rs. {(discount || 0).toLocaleString()}
+        </span>
+      ),
+      sorter: (a: POSTransaction, b: POSTransaction) => a.totalDiscount - b.totalDiscount,
+    },
+    {
       title: 'Total Amount',
       key: 'totalAmount',
       render: (_: any, record: POSTransaction) => (
@@ -341,7 +479,7 @@ const PharmacyReports: React.FC = () => {
       key: 'paid',
       render: (paid: number) => (
         <span className="font-semibold text-blue-600">
-          Rs. {paid.toLocaleString()}
+          Rs. {paid?.toLocaleString() || 0}
         </span>
       ),
     },
@@ -351,7 +489,7 @@ const PharmacyReports: React.FC = () => {
       key: 'due',
       render: (due: number) => (
         <span className={`font-semibold ${due > 0 ? 'text-red-600' : 'text-gray-500'}`}>
-          Rs. {due.toLocaleString()}
+          Rs. {due?.toLocaleString() || 0}
         </span>
       ),
     },
@@ -385,6 +523,12 @@ const PharmacyReports: React.FC = () => {
         <Space size="small">
           <Button
             type="text"
+            icon={<EditOutlined className="text-orange-500" />}
+            onClick={() => handleEditPOS(record)}
+            title="Edit POS"
+          />
+          <Button
+            type="text"
             icon={<EyeOutlined className="text-blue-500" />}
             onClick={() => handleViewPOSDetail(record)}
             title="View Details"
@@ -394,6 +538,13 @@ const PharmacyReports: React.FC = () => {
             icon={<PrinterOutlined className="text-green-500" />}
             onClick={() => handlePrintInvoice(record)}
             title="Print Invoice"
+          />
+          <Button
+            type="text"
+            danger
+            icon={<DeleteOutlined />}
+            title="Delete POS"
+            onClick={() => showDeleteConfirm(record)}
           />
         </Space>
       ),
@@ -589,10 +740,27 @@ const PharmacyReports: React.FC = () => {
     });
   };
 
-  const handlePrintInvoice = (_record: POSTransaction) => {
-    message.info('Print functionality will be implemented');
+  const handlePrintInvoice = (record: POSTransaction) => {
+    const url = `/admin/pharmacy/invoices/receipt/${record._id}`;
+    window.open(url, '_blank');
+  };
+  
+  const handleEditPOS = (record: POSTransaction) => {
+    navigate(`/admin/pharmacy/invoices/edit/${record._id}`);
   };
 
+  const handleDeletePOS = async (record: POSTransaction) => {
+    
+      try {
+        await axios.delete(`${Base_url}/apis/pharmPos/delete/${record._id}`);
+        message.success('POS transaction delete successfully!');
+        fetchPOSTransactions();
+      } catch (err) {
+        console.error('POS delete error:', err);
+        message.error('Delete nahi ho saka');
+      }
+    
+  };
   const handleExcelExport = () => {
     message.info('Excel export functionality will be implemented');
   };
@@ -601,6 +769,24 @@ const PharmacyReports: React.FC = () => {
     window.print();
   };
 
+  const showDeleteConfirm = (record: POSTransaction) => {
+    Modal.confirm({
+      title: 'Delete Confirmation',
+      content: (
+        <div>
+          <p>Are you sure you want to delete this POS transaction?</p>
+          <p><strong>Invoice:</strong> {record.invoiceNumber || record._id.slice(-6).toUpperCase()}</p>
+        </div>
+      ),
+      okText: 'Yes, Delete',
+      cancelText: 'Cancel',
+      okButtonProps: { danger: true },
+      centered: true,
+      onOk: async () => {
+        await handleDeletePOS(record);
+      },
+    });
+  };
   return (
     <div className="rounded-sm border border-stroke bg-white px-5 pt-6 pb-2.5 shadow-default dark:border-strokedark dark:bg-boxdark sm:px-7.5 xl:pb-1">
       <Breadcrumb pageName="Pharmacy Reports & History" />
@@ -658,13 +844,46 @@ const PharmacyReports: React.FC = () => {
 
       {/* Filters */}
       <div className="bg-white rounded-lg shadow-sm border border-gray-100 p-4 mb-6">
-        <div className="flex items-center mb-4">
+        <div className="flex items-center justify-between mb-4">
           <svg className="w-5 h-5 text-primary mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
           </svg>
           <h4 className="text-sm font-semibold text-gray-700">Filter & Search</h4>
+          <div className="flex items-center gap-2">
+            <Button
+              type="default"
+              onClick={() => {
+                setCurrentPage(1);
+                if (activeTab === 'pos-sales') {
+                  fetchPOSTransactions();
+                } else {
+                  fetchStockTransactions();
+                }
+              }}
+            >
+              Search
+            </Button>
+            <Button
+              onClick={() => {
+                setSearchTerm('');
+                setPosPaymentMethod('');
+                setPosStatus('');
+                setPosPatientName('');
+                setPosPatientMr('');
+                setPosDoctorName('');
+                setPosMinAmount('');
+                setPosMaxAmount('');
+                setPosDiscountPercent('');
+                setPaymentDateRange([null, null]);
+                setDateRange([dayjs().startOf('month'), dayjs().endOf('day')]);
+                setCurrentPage(1);
+              }}
+            >
+              Clear
+            </Button>
+          </div>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {/* Date Range Filter */}
           <div className="flex flex-col">
             <label className="text-xs font-medium text-gray-600 mb-1.5 flex items-center">
@@ -673,14 +892,24 @@ const PharmacyReports: React.FC = () => {
               </svg>
               Date Range
             </label>
-            <RangePicker
-              value={dateRange}
-              onChange={(dates) => setDateRange(dates as [Dayjs | null, Dayjs | null])}
-              placeholder={['From Date', 'To Date']}
-              className="w-full"
-              format="DD/MM/YYYY"
-              allowClear
-            />
+            <div className="flex gap-2">
+              <RangePicker
+                value={dateRange}
+                onChange={(dates) => {
+                  setDateRange(dates as [Dayjs | null, Dayjs | null]);
+                  if (dates && dates[0] && dates[1]) {
+                    setPaymentDateRange([null, null]);
+                  }
+                  setCurrentPage(1);
+                }}
+                placeholder={['From Date', 'To Date']}
+                className="w-full"
+                format="DD/MM/YYYY"
+                allowClear
+                presets={dateRangePresets as any}
+              />
+              <Button onClick={() => { setDateRange([null, null]); setCurrentPage(1); }}>Cancel</Button>
+            </div>
           </div>
 
           {/* Search Filter */}
@@ -708,6 +937,182 @@ const PharmacyReports: React.FC = () => {
               enterButton={<SearchOutlined />}
             />
           </div>
+
+          {activeTab === 'pos-sales' && (
+            <>
+              <div className="flex flex-col">
+                <label className="text-xs font-medium text-gray-600 mb-1.5 flex items-center">
+                  Payment Date
+                </label>
+                <div className="flex gap-2">
+                  <RangePicker
+                    value={paymentDateRange}
+                    onChange={(dates) => {
+                      setPaymentDateRange(dates as [Dayjs | null, Dayjs | null]);
+                      if (dates && dates[0] && dates[1]) {
+                        setDateRange([null, null]);
+                      }
+                      setCurrentPage(1);
+                    }}
+                    placeholder={['From Date', 'To Date']}
+                    className="w-full"
+                    format="DD/MM/YYYY"
+                    allowClear
+                  />
+                  <Button onClick={() => { setPaymentDateRange([null, null]); setCurrentPage(1); }}>Cancel</Button>
+                </div>
+              </div>
+
+              <div className="flex flex-col">
+                <label className="text-xs font-medium text-gray-600 mb-1.5 flex items-center">
+                  Patient Name
+                </label>
+                <Input
+                  placeholder="Patient name..."
+                  value={posPatientName}
+                  onChange={(e) => {
+                    setPosPatientName(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  allowClear
+                  className="w-full"
+                />
+              </div>
+
+              <div className="flex flex-col">
+                <label className="text-xs font-medium text-gray-600 mb-1.5 flex items-center">
+                  MR
+                </label>
+                <Input
+                  placeholder="MR..."
+                  value={posPatientMr}
+                  onChange={(e) => {
+                    setPosPatientMr(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  allowClear
+                  className="w-full"
+                />
+              </div>
+
+              <div className="flex flex-col">
+                <label className="text-xs font-medium text-gray-600 mb-1.5 flex items-center">
+                  Doctor
+                </label>
+                <Input
+                  placeholder="Doctor name..."
+                  value={posDoctorName}
+                  onChange={(e) => {
+                    setPosDoctorName(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  allowClear
+                  className="w-full"
+                />
+              </div>
+
+              <div className="flex flex-col">
+                <label className="text-xs font-medium text-gray-600 mb-1.5 flex items-center">
+                  Payment Method
+                </label>
+                <Select
+                  value={posPaymentMethod || undefined}
+                  onChange={(value) => {
+                    setPosPaymentMethod(String(value || ''));
+                    setCurrentPage(1);
+                  }}
+                  allowClear
+                  placeholder="All"
+                  className="w-full"
+                  options={[
+                    { value: 'Cash', label: 'Cash' },
+                    { value: 'Card', label: 'Card' },
+                    { value: 'Bank Transfer', label: 'Bank Transfer' },
+                    { value: 'Cheque', label: 'Cheque' },
+                  ]}
+                />
+              </div>
+
+              <div className="flex flex-col">
+                <label className="text-xs font-medium text-gray-600 mb-1.5 flex items-center">
+                  Status
+                </label>
+                <Select
+                  value={posStatus || undefined}
+                  onChange={(value) => {
+                    setPosStatus(String(value || ''));
+                    setCurrentPage(1);
+                  }}
+                  allowClear
+                  placeholder="All"
+                  className="w-full"
+                  options={[
+                    { value: 'Paid', label: 'Paid' },
+                    { value: 'Pending', label: 'Pending' },
+                    { value: 'Advance', label: 'Advance' },
+                  ]}
+                />
+              </div>
+
+              <div className="flex flex-col">
+                <label className="text-xs font-medium text-gray-600 mb-1.5 flex items-center">
+                  Min Amount
+                </label>
+                <Input
+                  type="number"
+                  placeholder="0"
+                  value={posMinAmount}
+                  onChange={(e) => {
+                    setPosMinAmount(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  min={0}
+                  allowClear
+                  className="w-full"
+                />
+              </div>
+
+              <div className="flex flex-col">
+                <label className="text-xs font-medium text-gray-600 mb-1.5 flex items-center">
+                  Max Amount
+                </label>
+                <Input
+                  type="number"
+                  placeholder="0"
+                  value={posMaxAmount}
+                  onChange={(e) => {
+                    setPosMaxAmount(e.target.value);
+                    setCurrentPage(1);
+                  }}
+                  min={0}
+                  allowClear
+                  className="w-full"
+                />
+              </div>
+
+              <div className="flex flex-col">
+                <label className="text-xs font-medium text-gray-600 mb-1.5 flex items-center">
+                  Discount %
+                </label>
+                <Input
+                  type="number"
+                  placeholder="0"
+                  value={posDiscountPercent}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === '' || Number(val) <= 100) {
+                      setPosDiscountPercent(val);
+                      setCurrentPage(1);
+                    }
+                  }}
+                  min={0}
+                  max={100}
+                  allowClear
+                  className="w-full"
+                />
+              </div>
+            </>
+          )}
         </div>
       </div>
 

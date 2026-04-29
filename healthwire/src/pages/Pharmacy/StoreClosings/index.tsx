@@ -211,21 +211,33 @@ const StoreClosings = () => {
 
   const fetchTotalSalesForDate = async (date: string) => {
     try {
-      const response = await axios.get(`${Base_url}/apis/pharmPos/get`, {
+      const response = await axios.get(`${Base_url}/apis/pharmPos/summary`, {
         params: {
-          date: date,
-          status: 'completed'
+          from: date,
+          to: date,
         }
       });
       
-      const sales = response.data.data || [];
-      const totalSales = sales.reduce((sum: number, sale: any) => {
-        return sum + (sale.grandTotal || sale.totalAmount || 0);
-      }, 0);
-      
-      return totalSales;
+      return Number(response.data?.summary?.totalSales) || 0;
     } catch (error) {
       console.error('Error fetching sales:', error);
+      return 0;
+    }
+  };
+
+  const fetchTotalExpensesForDate = async (date: string) => {
+    try {
+      const response = await axios.get(`${Base_url}/apis/expense/summary`, {
+        params: {
+          from: date,
+          to: date,
+          module: 'pharmacy',
+        },
+      });
+
+      return Number(response.data?.summary?.totalAmount) || 0;
+    } catch (error) {
+      console.error('Error fetching expenses:', error);
       return 0;
     }
   };
@@ -240,8 +252,10 @@ const StoreClosings = () => {
     // Auto-fetch total sales for today
     const todayStr = today.format('YYYY-MM-DD');
     const totalSales = await fetchTotalSalesForDate(todayStr);
+    const totalExpenses = await fetchTotalExpensesForDate(todayStr);
     form.setFieldsValue({
       totalSales: totalSales,
+      totalExpenses: totalExpenses,
     });
     
     setIsModalOpen(true);
@@ -462,8 +476,10 @@ const StoreClosings = () => {
                     if (date) {
                       const dateStr = date.format('YYYY-MM-DD');
                       const totalSales = await fetchTotalSalesForDate(dateStr);
+                      const totalExpenses = await fetchTotalExpensesForDate(dateStr);
                       form.setFieldsValue({
                         totalSales: totalSales,
+                        totalExpenses: totalExpenses,
                       });
                     }
                   }}
@@ -517,6 +533,7 @@ const StoreClosings = () => {
                 label={
                   <span className="font-semibold text-gray-700">
                     Total Expenses <span className="text-red-500">*</span>
+                    <span className="text-xs text-gray-500 ml-2">(Auto-calculated from Pharmacy Expenses)</span>
                   </span>
                 }
                 rules={[{ required: true, message: 'Please enter total expenses' }]}
@@ -525,8 +542,11 @@ const StoreClosings = () => {
                   type="number" 
                   min={0}
                   step={0.01}
-                  placeholder="Enter total expenses" 
+                  placeholder="Auto-calculated from pharmacy expenses"
                   prefix="Rs."
+                  readOnly
+                  className="bg-gray-50 cursor-not-allowed"
+                  title="Total expenses is automatically calculated from pharmacy expenses for the selected date"
                 />
               </Form.Item>
             </div>

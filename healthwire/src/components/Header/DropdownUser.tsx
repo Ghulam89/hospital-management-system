@@ -5,6 +5,7 @@ import UserOne from '../../images/user/user-01.png';
 import { logout } from '../../store/reducers/authReducer';
 import { toast } from 'react-toastify';
 import { useDispatch } from 'react-redux';
+import { SUPERADMIN_BRANCH_STORAGE_KEY } from '../../utils/branchScope';
 
 const DropdownUser = () => {
 
@@ -55,7 +56,8 @@ const DropdownUser = () => {
     dispatch(logout('userToken'));
     localStorage.removeItem('userToken');
     toast.success('User logout successfully!');
-    localStorage.removeItem('userData')
+    localStorage.removeItem('userData');
+    localStorage.removeItem(SUPERADMIN_BRANCH_STORAGE_KEY);
     navigate('/');
 
   

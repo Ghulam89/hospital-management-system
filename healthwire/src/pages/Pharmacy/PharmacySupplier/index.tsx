@@ -84,6 +84,21 @@ const PharmacySupplier = () => {
       render: (text) => text || 'N/A',
     },
     {
+      title: 'Payment Terms',
+      key: 'paymentTerms',
+      render: (_, record) => (
+        <div>
+          <div className="text-sm text-gray-700">
+            {record.creditDays ? `${record.creditDays} days` : 'N/A'}
+            {record.defaultPaymentMethod ? ` • ${record.defaultPaymentMethod}` : ''}
+          </div>
+          <div className="text-xs text-gray-500 truncate max-w-[240px]">
+            {record.paymentTerms || ''}
+          </div>
+        </div>
+      ),
+    },
+    {
       title: 'Address',
       dataIndex: 'address',
       key: 'address',
@@ -410,7 +425,7 @@ const PharmacySupplier = () => {
             showTotal: (total, range) =>
               `${range[0]}-${range[1]} of ${total} suppliers`,
           }}
-          scroll={{ x: 1500 }}
+          scroll={{ x: 1700 }}
         />
       </div>
 

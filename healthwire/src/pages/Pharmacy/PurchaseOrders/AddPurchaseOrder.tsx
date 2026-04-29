@@ -1,11 +1,12 @@
-import React, { useEffect, useState } from 'react';
-import { Form, Input, Select, DatePicker, Button, Table, Space, message, Card, Row, Col } from 'antd';
+import React, { useEffect, useRef, useState } from 'react';
+import { Form, Input, Select, DatePicker, Button, Table, Space, message, Card, Row, Col, Modal, Radio } from 'antd';
 import { PlusOutlined, DeleteOutlined, SaveOutlined } from '@ant-design/icons';
 import axios from 'axios';
 import { Base_url } from '../../../utils/Base_url';
 import dayjs from 'dayjs';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 import { useParams } from 'react-router-dom';
+import { AsyncPaginate, type LoadOptions } from 'react-select-async-paginate';
 
 const { Option } = Select;
 const { TextArea } = Input;
@@ -44,6 +45,12 @@ interface PurchaseOrderItem {
   totalCost: number;
 }
 
+type PharmItemOption = {
+  label: string;
+  value: string;
+  itemData: PharmItem;
+};
+
 const AddPurchaseOrder: React.FC = () => {
   const { id } = useParams<{ id: string }>();
   const isEditMode = !!id;
@@ -66,20 +73,44 @@ const AddPurchaseOrder: React.FC = () => {
       totalCost: 0,
     }
   ]);
-  const [pharmItems, setPharmItems] = useState<PharmItem[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [loading, setLoading] = useState(false);
   const [grandTotal, setGrandTotal] = useState(0);
   const [isDataLoaded, setIsDataLoaded] = useState(false);
+  const [loadModalOpen, setLoadModalOpen] = useState(false);
+  const [loadMode, setLoadMode] = useState<'all' | 'latest' | 'po'>('all');
+  const [selectedPO, setSelectedPO] = useState<any>(null);
+
+  const fetchNextPONumber = async () => {
+    try {
+      const response = await axios.get(`${Base_url}/apis/pharmPurchaseOrder/next-po-number`);
+      if (response.data && response.data.status === 'ok') {
+        form.setFieldsValue({
+          purchaseOrderNumber: response.data.nextPONumber
+        });
+      }
+    } catch (error) {
+      console.error('Error fetching next PO number:', error);
+    }
+  };
 
   useEffect(() => {
-    fetchPharmItems();
-    fetchSuppliers();
-    
-    // Fetch purchase order data if in edit mode
-    if (isEditMode && id) {
-      fetchPurchaseOrder(id);
-    }
+    const loadInitialData = async () => {
+      setIsDataLoaded(false);
+      try {
+        const promises = [fetchSuppliers()];
+        if (isEditMode && id) {
+          promises.push(fetchPurchaseOrder(id));
+        } else {
+          promises.push(fetchNextPONumber());
+        }
+        await Promise.all(promises);
+      } finally {
+        setIsDataLoaded(true);
+      }
+    };
+
+    loadInitialData();
   }, [isEditMode, id]);
 
   useEffect(() => {
@@ -96,7 +127,12 @@ const AddPurchaseOrder: React.FC = () => {
         
         // Set form values
         form.setFieldsValue({
-          supplierId: orderData.supplierId?._id,
+          supplierId: orderData.supplierId?._id
+            ? {
+                value: orderData.supplierId._id,
+                label: `${orderData.supplierId.name}${orderData.supplierId.phone ? ` - ${orderData.supplierId.phone}` : ''}`,
+              }
+            : null,
           orderDate: dayjs(orderData.orderDate),
           expectedDeliveryDate: dayjs(orderData.expectedDeliveryDate),
           projectDays: orderData.projectDays,
@@ -134,29 +170,45 @@ const AddPurchaseOrder: React.FC = () => {
     }
   };
 
-  const fetchPharmItems = async () => {
+  const loadSuppliers = async (search: string, prevOptions: any, { page }: any) => {
     try {
-      const response = await axios.get(`${Base_url}/apis/pharmItem/get?limit=1000`);
-      if (response.data && response.data.status === 'ok') {
-        setPharmItems(response.data.data || []);
-        setIsDataLoaded(true);
-      } else {
-        console.error('Failed to fetch pharmacy items:', response.data);
-        setPharmItems([]);
-        setIsDataLoaded(true);
-      }
-    } catch (error: any) {
-      console.error('Error fetching pharmacy items:', error);
-      const errorMsg = error.response?.data?.error || error.message || 'Failed to fetch pharmacy items';
-      message.error(errorMsg);
-      setPharmItems([]);
-      setIsDataLoaded(true);
+      const response = await axios.get(`${Base_url}/apis/pharmSupplier/get`, {
+        params: {
+          search: search || '',
+          page: page || 1,
+          limit: 20,
+        }
+      });
+
+      const data = response.data.data || [];
+      const options = data.map((supplier: any) => ({
+        value: supplier._id,
+        label: `${supplier.name} - ${supplier.phone}`,
+        ...supplier
+      }));
+
+      return {
+        options,
+        hasMore: data.length === 20,
+        additional: {
+          page: page + 1,
+        },
+      };
+    } catch (error) {
+      console.error('Error loading suppliers:', error);
+      return {
+        options: [],
+        hasMore: false,
+      };
     }
   };
 
+  // Legacy fetchSuppliers function for backward compatibility if needed
   const fetchSuppliers = async () => {
     try {
-      const response = await axios.get(`${Base_url}/apis/pharmSupplier/get`);
+      const response = await axios.get(`${Base_url}/apis/pharmSupplier/get`, {
+        params: { limit: 100 } // Load more suppliers for legacy usage
+      });
       if (response.data && response.data.status === 'ok') {
         setSuppliers(response.data.data || []);
       } else {
@@ -168,6 +220,434 @@ const AddPurchaseOrder: React.FC = () => {
       const errorMsg = error.response?.data?.error || error.message || 'Failed to fetch suppliers';
       message.error(errorMsg);
       setSuppliers([]);
+    }
+  };
+
+  const latestSupplierIdRef = useRef<string>('');
+
+  const fetchItemsBySupplier = async (
+    supplierId: string,
+    opts?: { zeroOnly?: boolean; from?: string; to?: string; projectDays?: number }
+  ) => {
+    try {
+      latestSupplierIdRef.current = supplierId;
+      setItems([{
+        id: 1,
+        pharmItemId: '',
+        itemName: '',
+        manufacturerName: '',
+        b2bCategory: '',
+        conversionUnit: 1,
+        currentStock: 0,
+        soldQuantity: 0,
+        avgSaleQuantity: 0,
+        projectedSales: 0,
+        unitsRequired: 0,
+        unitCost: 0,
+        totalCost: 0,
+      }]);
+
+      setLoading(true);
+      const limit = 2000; 
+      const response = await axios.get(`${Base_url}/apis/pharmItem/get`, {
+        params: { pharmSupplierId: supplierId, page: 1, limit }
+      });
+
+      const raw = response?.data || {};
+      const list =
+        Array.isArray(raw?.data) ? raw.data :
+        Array.isArray(raw?.data?.data) ? raw.data.data :
+        Array.isArray(raw) ? raw : [];
+
+      if (list) {
+        if (latestSupplierIdRef.current !== supplierId) {
+          return;
+        }
+        const directDocs = Array.isArray(list) ? list : [];
+        let poFetched: any[] = [];
+        try {
+          const poRes = await axios.get(`${Base_url}/apis/pharmPurchaseOrder/get`, {
+            params: { supplierId, limit: 1000 }
+          });
+          const orders = Array.isArray(poRes?.data?.data) ? poRes.data.data : [];
+          const idSet = new Set<string>();
+          orders.forEach((po: any) => {
+            const arr = Array.isArray(po?.items) ? po.items : [];
+            arr.forEach((it: any) => {
+              const raw = it?.pharmItemId;
+              let pid = '';
+              if (typeof raw === 'string') {
+                pid = raw.trim();
+              } else if (raw && typeof raw === 'object' && raw._id) {
+                pid = String(raw._id).trim();
+              }
+              if (pid) idSet.add(pid);
+            });
+          });
+          const ids = Array.from(idSet);
+          if (ids.length > 0) {
+            const chunks: string[][] = [];
+            for (let i = 0; i < ids.length; i += 10) chunks.push(ids.slice(i, i + 10));
+            const fetched: any[] = [];
+            for (const c of chunks) {
+              const resps = await Promise.all(
+                c.map((pid) => axios.get(`${Base_url}/apis/pharmItem/get/${pid}`).catch(() => null))
+              );
+              resps.forEach((r) => {
+                const d = r?.data?.data;
+                if (d?._id) fetched.push(d);
+              });
+            }
+            poFetched = fetched;
+          }
+        } catch {}
+        const map = new Map<string, any>();
+        directDocs.forEach((d: any) => { if (d?._id) map.set(String(d._id), d); });
+        poFetched.forEach((d: any) => { if (d?._id && !map.has(String(d._id))) map.set(String(d._id), d); });
+        const merged = Array.from(map.values());
+        if (merged.length > 0) {
+          let formatted = merged.map((item: any, index: number) => ({
+            id: index + 1,
+            pharmItemId: item._id,
+            itemName: item.name,
+            manufacturerName: item.pharmManufacturerId?.name || '',
+            b2bCategory: item.pharmCategoryId?.name || '',
+            conversionUnit: item.conversionUnit || 1,
+            currentStock: item.availableQuantity || 0,
+            soldQuantity: 0,
+            avgSaleQuantity: 0,
+            projectedSales: 0,
+            unitsRequired: 0,
+            unitCost: item.unitCost || 0,
+            totalCost: 0,
+          }));
+
+          const hasRange = !!(opts?.from && opts?.to);
+          const projDays = Number(opts?.projectDays || 0);
+          if (hasRange || projDays > 0) {
+            const rangeFrom = opts?.from || '';
+            const rangeTo = opts?.to || '';
+            const itemsCopy = [...formatted];
+            const ids = itemsCopy.map((it) => String(it.pharmItemId));
+            const chunkSize = 100;
+            for (let i = 0; i < ids.length; i += chunkSize) {
+              const chunkIds = ids.slice(i, i + chunkSize);
+              const params: any = { itemIds: chunkIds.join(',') };
+              if (rangeFrom && rangeTo) {
+                params.from = rangeFrom;
+                params.to = rangeTo;
+              }
+              const resp = await axios
+                .get(`${Base_url}/apis/pharmItem/flow-summary`, { params })
+                .catch(() => null);
+              const map = resp?.data?.data || {};
+              // Determine effective days window for averaging
+              const fromDate = rangeFrom ? dayjs(rangeFrom, 'YYYY-MM-DD') : null;
+              const toDate = rangeTo ? dayjs(rangeTo, 'YYYY-MM-DD') : null;
+              let daysWindow = projDays;
+              if (fromDate && toDate && toDate.isValid() && fromDate.isValid()) {
+                const diff = toDate.diff(fromDate, 'day') + 1;
+                daysWindow = diff > 0 ? diff : projDays;
+              }
+              itemsCopy.forEach((target) => {
+                if (!chunkIds.includes(String(target.pharmItemId))) return;
+                const row = map[String(target.pharmItemId)] || {};
+                const sold = Number(row?.netSoldUnits ?? row?.soldUnits ?? 0) || 0;
+                const avgPerDay = daysWindow > 0 ? sold / daysWindow : 0;
+                const projected = Math.ceil(avgPerDay * (projDays > 0 ? projDays : daysWindow || 0));
+                const required = Math.max(0, projected - Number(target.currentStock || 0));
+                target.soldQuantity = sold;
+                target.avgSaleQuantity = avgPerDay;
+                target.projectedSales = projected;
+                target.unitsRequired = required;
+                target.totalCost = Number(target.unitCost || 0) * Number(target.unitsRequired || 0);
+              });
+            }
+            formatted = itemsCopy;
+          }
+
+          if (opts && opts.zeroOnly === true) {
+            formatted = formatted.filter((it: any) => Number(it.currentStock || 0) === 0);
+          } else if (opts && opts.zeroOnly === false) {
+            formatted = formatted.filter((it: any) => Number(it.currentStock || 0) > 0);
+          }
+          formatted.sort((a: any, b: any) => a.currentStock - b.currentStock);
+          setItems(formatted);
+          message.success(`Loaded ${formatted.length} items for supplier`);
+        } else {
+          message.info('No items found for this supplier');
+          setItems([{
+            id: 1,
+            pharmItemId: '',
+            itemName: '',
+            manufacturerName: '',
+            b2bCategory: '',
+            conversionUnit: 1,
+            currentStock: 0,
+            soldQuantity: 0,
+            avgSaleQuantity: 0,
+            projectedSales: 0,
+            unitsRequired: 0,
+            unitCost: 0,
+            totalCost: 0,
+          }]);
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching supplier items:', error);
+      message.error('Failed to load supplier items');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadLastOrderAndAutofill = async (supplierId: string): Promise<boolean> => {
+    try {
+      latestSupplierIdRef.current = supplierId;
+      const res = await axios.get(`${Base_url}/apis/pharmPurchaseOrder/get`, {
+        params: { supplierId, limit: 1 }
+      });
+      const last = Array.isArray(res?.data?.data) ? res.data.data[0] : null;
+      if (!last) return false;
+      const lastSupplierId =
+        typeof last?.supplierId === 'object'
+          ? (last?.supplierId?._id || last?.supplierId?.toString?.() || '')
+          : String(last?.supplierId || '');
+      if (String(lastSupplierId) !== String(supplierId)) return false;
+      if (latestSupplierIdRef.current !== supplierId) return true;
+      form.setFieldsValue({
+        projectDays: last.projectDays || 0,
+        zeroQuantity: last.zeroQuantity ? 'Yes' : 'No',
+        poCategory: last.poCategory || 'Projection Period',
+        unit: last.unit || 'Pack',
+        notes: last.notes || '',
+      });
+      const mapped: PurchaseOrderItem[] = (Array.isArray(last.items) ? last.items : []).map((it: any, idx: number) => {
+        const itemDoc = it?.pharmItemId || {};
+        return {
+          id: idx + 1,
+          pharmItemId: itemDoc?._id || it?.pharmItemId,
+          itemName: itemDoc?.name || '',
+          manufacturerName: it?.manufacturerName || itemDoc?.pharmManufacturerId?.name || '',
+          b2bCategory: it?.b2bCategory || itemDoc?.pharmCategoryId?.name || '',
+          conversionUnit: it?.conversionUnit || itemDoc?.conversionUnit || 1,
+          currentStock: itemDoc?.availableQuantity || 0,
+          soldQuantity: it?.soldQuantity || 0,
+          avgSaleQuantity: it?.avgSaleQuantity || 0,
+          projectedSales: it?.projectedSales || 0,
+          unitsRequired: it?.unitsRequired || 0,
+          unitCost: it?.unitCost || itemDoc?.unitCost || 0,
+          totalCost: it?.totalCost || 0,
+        };
+      });
+      if (mapped.length > 0) {
+        setItems(mapped);
+        calculateGrandTotal();
+        message.success('Previous order data auto-filled');
+        return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  };
+
+  const loadPOOptions: LoadOptions<any, false, { page: number }> = async (search, _prev, additional) => {
+    const page = additional?.page || 1;
+    try {
+      const sidObj = form.getFieldValue('supplierId');
+      const sid = sidObj?.value || sidObj;
+      if (!sid) {
+        return { options: [], hasMore: false, additional: { page: 1 } };
+      }
+      const res = await axios.get(`${Base_url}/apis/pharmPurchaseOrder/get`, {
+        params: { supplierId: sid, search: search || '', page, limit: 10 }
+      });
+      const data = Array.isArray(res?.data?.data) ? res.data.data : [];
+      const totalPages = Number(res?.data?.totalPages || 1);
+      return {
+        options: data.map((po: any) => ({
+          value: po._id,
+          label: `${po.purchaseOrderNumber}`,
+          po
+        })),
+        hasMore: page < totalPages,
+        additional: { page: page + 1 }
+      };
+    } catch {
+      return { options: [], hasMore: false, additional: { page: 1 } };
+    }
+  };
+
+  const handleLoadData = async () => {
+    try {
+      const sidObj = form.getFieldValue('supplierId');
+      const sid = sidObj?.value || sidObj;
+      if (!sid) {
+        message.warning('Please select supplier first');
+        return;
+      }
+      if (loadMode === 'all') {
+        await fetchItemsBySupplier(sid);
+        setLoadModalOpen(false);
+        return;
+      }
+      if (loadMode === 'latest') {
+        const ok = await loadLastOrderAndAutofill(sid);
+        if (!ok) {
+          message.info('No previous order found for this supplier');
+        }
+        setLoadModalOpen(false);
+        return;
+      }
+      if (loadMode === 'po') {
+        const poId = selectedPO?.value || selectedPO;
+        if (!poId) {
+          message.warning('Select a purchase order');
+          return;
+        }
+        latestSupplierIdRef.current = sid;
+        const res = await axios.get(`${Base_url}/apis/pharmPurchaseOrder/get/${poId}`);
+        const po = res?.data?.data;
+        if (!po) {
+          message.error('Purchase order not found');
+          return;
+        }
+        const poSupplierId = typeof po?.supplierId === 'object' ? (po?.supplierId?._id || '') : String(po?.supplierId || '');
+        if (String(poSupplierId) !== String(sid)) {
+          message.error('Selected PO does not belong to this supplier');
+          return;
+        }
+        form.setFieldsValue({
+          projectDays: po.projectDays || 0,
+          zeroQuantity: po.zeroQuantity ? 'Yes' : 'No',
+          poCategory: po.poCategory || 'Projection Period',
+          unit: po.unit || 'Pack',
+          notes: po.notes || '',
+        });
+        const mapped = (Array.isArray(po.items) ? po.items : []).map((it: any, idx: number) => {
+          const itemDoc = it?.pharmItemId || {};
+          return {
+            id: idx + 1,
+            pharmItemId: itemDoc?._id || it?.pharmItemId,
+            itemName: itemDoc?.name || '',
+            manufacturerName: it?.manufacturerName || itemDoc?.pharmManufacturerId?.name || '',
+            b2bCategory: it?.b2bCategory || itemDoc?.pharmCategoryId?.name || '',
+            conversionUnit: it?.conversionUnit || itemDoc?.conversionUnit || 1,
+            currentStock: itemDoc?.availableQuantity || 0,
+            soldQuantity: it?.soldQuantity || 0,
+            avgSaleQuantity: it?.avgSaleQuantity || 0,
+            projectedSales: it?.projectedSales || 0,
+            unitsRequired: it?.unitsRequired || 0,
+            unitCost: it?.unitCost || itemDoc?.unitCost || 0,
+            totalCost: it?.totalCost || 0,
+          } as PurchaseOrderItem;
+        });
+        setItems(mapped.length ? mapped : [{
+          id: 1,
+          pharmItemId: '',
+          itemName: '',
+          manufacturerName: '',
+          b2bCategory: '',
+          conversionUnit: 1,
+          currentStock: 0,
+          soldQuantity: 0,
+          avgSaleQuantity: 0,
+          projectedSales: 0,
+          unitsRequired: 0,
+          unitCost: 0,
+          totalCost: 0,
+        }]);
+        calculateGrandTotal();
+        setLoadModalOpen(false);
+        return;
+      }
+    } catch {
+      message.error('Failed to load data');
+    }
+  };
+
+  const handleGetData = async () => {
+    const sidObj = form.getFieldValue('supplierId');
+    const sid = sidObj?.value || sidObj;
+    if (!sid) {
+      message.warning('Please select supplier first');
+      return;
+    }
+    const zq = form.getFieldValue('zeroQuantity');
+    const zeroOnly = zq === 'Yes' || zq === true;
+    const projectDaysRaw = Number(form.getFieldValue('projectDays') || 0);
+    const orderDate = form.getFieldValue('orderDate');
+    const expectedDeliveryDate = form.getFieldValue('expectedDeliveryDate');
+    const dateRange = form.getFieldValue('dateRange');
+    let effectiveProjectDays = projectDaysRaw > 0 ? projectDaysRaw : 0;
+    if (!effectiveProjectDays && orderDate && expectedDeliveryDate) {
+      const od = dayjs(orderDate);
+      const ed = dayjs(expectedDeliveryDate);
+      if (od.isValid() && ed.isValid()) {
+        const diff = ed.diff(od, 'day') + 1;
+        effectiveProjectDays = diff > 0 ? diff : 0;
+      }
+    }
+    let from = '';
+    let to = '';
+    if (dateRange && Array.isArray(dateRange) && dateRange[0] && dateRange[1]) {
+      from = dayjs(dateRange[0]).format('YYYY-MM-DD');
+      to = dayjs(dateRange[1]).format('YYYY-MM-DD');
+    } else if (effectiveProjectDays > 0) {
+      const end = dayjs();
+      const start = end.subtract(effectiveProjectDays - 1, 'day');
+      from = start.format('YYYY-MM-DD');
+      to = end.format('YYYY-MM-DD');
+    }
+    await fetchItemsBySupplier(sid, {
+      zeroOnly,
+      from: from || undefined,
+      to: to || undefined,
+      projectDays: effectiveProjectDays || undefined,
+    });
+  };
+
+  const loadPharmItemOptions: LoadOptions<PharmItemOption, false, { page: number }> = async (
+    searchQuery,
+    _loadedOptions,
+    additional,
+  ) => {
+    const page = additional?.page || 1;
+    try {
+      const response = await axios.get(`${Base_url}/apis/pharmItem/get`, {
+        params: {
+          search: searchQuery || '',
+          page,
+          limit: 20,
+        },
+      });
+
+      const raw = response.data || {};
+      const data: PharmItem[] = Array.isArray(raw?.data)
+        ? raw.data
+        : Array.isArray(raw?.data?.data)
+          ? raw.data.data
+          : [];
+
+      const totalPages = Number(raw?.totalPages || raw?.data?.totalPages || 1);
+      const currentPage = Number(raw?.currentPage || raw?.page || page);
+
+      return {
+        options: data.map((item) => ({
+          label: item.name,
+          value: item._id,
+          itemData: item,
+        })),
+        hasMore: currentPage < totalPages,
+        additional: { page: currentPage + 1 },
+      };
+    } catch {
+      return {
+        options: [],
+        hasMore: false,
+        additional: { page },
+      };
     }
   };
 
@@ -218,11 +698,34 @@ const AddPurchaseOrder: React.FC = () => {
     setItems(updatedItems);
   };
 
-  const handleItemSelect = async (id: number, pharmItemId: string) => {
-    console.log('Item selected - ID:', id, 'PharmItemId:', pharmItemId);
-    const selectedItem = pharmItems.find(item => item._id === pharmItemId);
-    console.log('Selected item:', selectedItem);
-    
+  const handleItemSelect = async (id: number, option: PharmItemOption | null) => {
+    if (!option) {
+      const updatedItems = items.map(item => {
+        if (item.id === id) {
+          return {
+            ...item,
+            pharmItemId: '',
+            itemName: '',
+            manufacturerName: '',
+            b2bCategory: '',
+            conversionUnit: 1,
+            currentStock: 0,
+            unitCost: 0,
+            soldQuantity: 0,
+            avgSaleQuantity: 0,
+            projectedSales: 0,
+            totalCost: 0,
+          };
+        }
+        return item;
+      });
+      setItems(updatedItems);
+      return;
+    }
+
+    const pharmItemId = option.value;
+    const selectedItem = option.itemData;
+
     if (selectedItem) {
       try {
         // Fetch sales statistics for this item
@@ -343,7 +846,7 @@ const AddPurchaseOrder: React.FC = () => {
       }
       
       const purchaseOrderData = {
-        supplierId: formValues.supplierId,
+        supplierId: (formValues.supplierId && formValues.supplierId.value) ? formValues.supplierId.value : formValues.supplierId,
         orderDate: formValues.orderDate?.format('YYYY-MM-DD'),
         expectedDeliveryDate: formValues.expectedDeliveryDate?.format('YYYY-MM-DD'),
         projectDays: formValues.projectDays || 0,
@@ -374,7 +877,7 @@ const AddPurchaseOrder: React.FC = () => {
       }
     } catch (error: any) {
       console.error('Error creating purchase order:', error);
-      const errorMsg = error.response?.data?.error || error.message || 'Failed to create purchase order. Please check all fields and try again.';
+      // const errorMsg = error.response?.data?.error || error.message || 'Failed to create purchase order. Please check all fields and try again.';
       message.error(errorMsg);
     } finally {
       setLoading(false);
@@ -395,38 +898,39 @@ const AddPurchaseOrder: React.FC = () => {
       width: 300,
       fixed: 'left' as const,
       render: (_: any, record: PurchaseOrderItem) => (
-        <Select
-          placeholder="Search for Items"
-          value={record.pharmItemId}
-          onChange={(value) => handleItemSelect(record.id, value)}
-          showSearch
-          filterOption={(input, option) =>
-            String(option?.children || '').toLowerCase().includes(input.toLowerCase())
-          }
-          style={{ width: '100%', minWidth: '280px' }}
-          dropdownStyle={{ minWidth: '300px' }}
-          dropdownMatchSelectWidth={false}
-          notFoundContent={pharmItems.length === 0 ? 'Loading items...' : 'No items found'}
-          optionLabelProp="label"
-        >
-          {pharmItems.map(item => (
-            <Option 
-              key={item._id} 
-              value={item._id} 
-              title={item.name}
-              label={item.name}
-            >
-              <div style={{ 
-                whiteSpace: 'nowrap', 
-                overflow: 'hidden', 
-                textOverflow: 'ellipsis',
-                maxWidth: '280px'
-              }}>
-                {item.name}
-              </div>
-            </Option>
-          ))}
-        </Select>
+        <div style={{ width: '100%', minWidth: '280px' }}>
+          <AsyncPaginate
+            value={
+              record.pharmItemId
+                ? ({
+                    value: record.pharmItemId,
+                    label: record.itemName || 'Selected item',
+                    itemData: {
+                      _id: record.pharmItemId,
+                      name: record.itemName,
+                      unitCost: record.unitCost || 0,
+                      availableQuantity: record.currentStock || 0,
+                      conversionUnit: record.conversionUnit || 1,
+                    },
+                  } as PharmItemOption)
+                : null
+            }
+            loadOptions={loadPharmItemOptions}
+            onChange={(opt) => handleItemSelect(record.id, opt as PharmItemOption | null)}
+            additional={{ page: 1 }}
+            placeholder="Search for Items"
+            classNamePrefix="react-select"
+            className="w-full"
+            debounceTimeout={400}
+            menuPortalTarget={document.body}
+            menuPosition="fixed"
+            styles={{
+              menuPortal: (base) => ({ ...base, zIndex: 9999 }),
+              control: (base) => ({ ...base, minHeight: '32px' }),
+            }}
+            isClearable
+          />
+        </div>
       ),
     },
     {
@@ -575,19 +1079,33 @@ const AddPurchaseOrder: React.FC = () => {
               name="supplierId"
               rules={[{ required: true, message: 'Please select supplier' }]}
             >
-              <Select
+              <AsyncPaginate
+                loadOptions={loadSuppliers}
+                value={form.getFieldValue('supplierId') || null}
+                onChange={(val: any) => {
+                  form.setFieldsValue({ supplierId: val });
+                }}
                 placeholder="Search by name or phone.."
-                showSearch
-                filterOption={(input, option) =>
-                  String(option?.children || '').toLowerCase().includes(input.toLowerCase())
-                }
-              >
-                {suppliers.map(supplier => (
-                  <Option key={supplier._id} value={supplier._id}>
-                    {supplier.name} - {supplier.phone}
-                  </Option>
-                ))}
-              </Select>
+                additional={{ page: 1 }}
+                debounceTimeout={300}
+                defaultOptions
+                isClearable
+                styles={{
+                  control: (provided) => ({
+                    ...provided,
+                    minHeight: '32px',
+                    fontSize: '14px',
+                    borderColor: '#d9d9d9',
+                  }),
+                  menuPortal: (provided) => ({
+                    ...provided,
+                    zIndex: 999999,
+                  }),
+                }}
+                menuPortalTarget={document.body}
+                menuPosition="fixed"
+                className="react-select-async"
+              />
             </Form.Item>
           </Col>
         </Row>
@@ -681,7 +1199,12 @@ const AddPurchaseOrder: React.FC = () => {
         </Row>
       </Form>
 
-      {/* Items Table */}
+      <div className="flex justify-end items-center gap-2 mt-2">
+        <Button type="default" onClick={handleGetData}>
+          Get Data
+        </Button>
+      </div>
+      
       <div className="mt-6">
         <div className="mb-4">
           <Button
@@ -698,7 +1221,12 @@ const AddPurchaseOrder: React.FC = () => {
           columns={columns}
           dataSource={items}
           rowKey="id"
-          pagination={false}
+          pagination={{
+            defaultPageSize: 10,
+            showSizeChanger: true,
+            pageSizeOptions: ['10', '20', '50', '100'],
+            position: ['bottomRight'],
+          }}
           scroll={{ x: 1500 }}
           size="small"
         />

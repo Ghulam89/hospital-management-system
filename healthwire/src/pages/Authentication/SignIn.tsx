@@ -9,6 +9,7 @@ import * as Yup from 'yup';
 import { toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
 import { setUserToken } from '../../store/reducers/authReducer';
+import { clearSuperadminBranchSelectionIfNeeded } from '../../utils/branchScope';
 import { useDispatch } from 'react-redux';
 
 // Validation Schema
@@ -45,13 +46,14 @@ const SignIn: React.FC = () => {
 
           toast.success(response?.data?.message);
           console.log(response);
-          
+
+          const { token, data } = response.data;
+          localStorage.setItem('userToken', token);
+          localStorage.setItem('userData', JSON.stringify(data));
+          clearSuperadminBranchSelectionIfNeeded(data);
+          dispatch(setUserToken(token));
           navigate('/dashboard');
-          const {token,data} = response.data;
-           localStorage.setItem('userToken',token);
-           localStorage.setItem('userData',JSON.stringify(data));
-           dispatch(setUserToken(data));
-           
+
          }else{
           toast.error(response?.data?.message);
          }

@@ -1,4 +1,5 @@
 const PharmConsumedStock = require("../models/pharmConsumedStockModel");
+const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible } = require("../utils/branchScope");
 
 // 1. Create Consumed Stock
 const addConsumedStock = async (req, res) => {
@@ -44,7 +45,7 @@ const addConsumedStock = async (req, res) => {
       dataToSave.consumptionDate = new Date(dataToSave.consumptionDate);
     }
     
-    const data = await PharmConsumedStock.create(dataToSave);
+    const data = await PharmConsumedStock.create(assignBranchIdForCreate(req, dataToSave));
     console.log('Consumed stock created successfully:', data._id);
     
     return res.status(200).json({ status: "ok", message: "Stock consumed successfully", data: data });
@@ -67,6 +68,9 @@ const getConsumedStocks = async (req, res) => {
     const limit = req.query.limit ? parseInt(req.query.limit) : 20;
 
     const baseQuery = {};
+
+    const branchQ = await mergeBranchScopedQuery(req);
+    if (branchQ) Object.assign(baseQuery, branchQ);
 
     // Optional filters
     if (req.query.departmentId) {
@@ -137,13 +141,13 @@ const getConsumedStockById = async (req, res) => {
       .populate('departmentId', 'name')
       .populate('consumedBy', 'name email');
     
-    if (!data) {
-      return res.status(404).json({ 
-        status: "error", 
-        message: "Consumed stock not found" 
+    if (!data || !(await branchDocumentVisible(req, data.branchId))) {
+      return res.status(404).json({
+        status: "error",
+        message: "Consumed stock not found",
       });
     }
-    
+
     return res.status(200).json({ status: "ok", data: data });
   } catch (err) {
     console.error('Error fetching consumed stock:', err);
@@ -183,6 +187,10 @@ const updateConsumedStock = async (req, res) => {
 const deleteConsumedStock = async (req, res) => {
   try {
     const id = req.params.id;
+    const row = await PharmConsumedStock.findById(id);
+    if (!row || !(await branchDocumentVisible(req, row.branchId))) {
+      return res.status(404).json({ status: "error", message: "Consumed stock not found" });
+    }
     await PharmConsumedStock.findByIdAndDelete(id);
     return res
       .status(200)
@@ -195,25 +203,34 @@ const deleteConsumedStock = async (req, res) => {
 // 6. Get Consumed Stock Statistics
 const getConsumedStockStats = async (req, res) => {
   try {
-    const totalConsumedStocks = await PharmConsumedStock.countDocuments();
-    const activeConsumedStocks = await PharmConsumedStock.countDocuments({ status: 'Active' });
-    const completedConsumedStocks = await PharmConsumedStock.countDocuments({ status: 'Completed' });
-    
+    const branchQ = await mergeBranchScopedQuery(req);
+    const scope = branchQ || {};
+
+    const totalConsumedStocks = await PharmConsumedStock.countDocuments(scope);
+    const activeConsumedStocks = await PharmConsumedStock.countDocuments({ ...scope, status: "Active" });
+    const completedConsumedStocks = await PharmConsumedStock.countDocuments({ ...scope, status: "Completed" });
+
+    const matchStages = branchQ ? [{ $match: branchQ }] : [];
+
     const totalCost = await PharmConsumedStock.aggregate([
-      { $group: { _id: null, total: { $sum: "$totalCost" } } }
+      ...matchStages,
+      { $group: { _id: null, total: { $sum: "$totalCost" } } },
     ]);
 
     const totalQuantity = await PharmConsumedStock.aggregate([
-      { $group: { _id: null, total: { $sum: "$quantity" } } }
+      ...matchStages,
+      { $group: { _id: null, total: { $sum: "$quantity" } } },
     ]);
 
     const departmentStats = await PharmConsumedStock.aggregate([
+      ...matchStages,
       { $group: { _id: "$departmentId", count: { $sum: 1 }, totalQuantity: { $sum: "$quantity" }, totalCost: { $sum: "$totalCost" } } },
       { $lookup: { from: 'departments', localField: '_id', foreignField: '_id', as: 'department' } },
       { $sort: { count: -1 } }
     ]);
 
     const reasonStats = await PharmConsumedStock.aggregate([
+      ...matchStages,
       { $group: { _id: "$reason", count: { $sum: 1 }, totalQuantity: { $sum: "$quantity" }, totalCost: { $sum: "$totalCost" } } },
       { $sort: { count: -1 } }
     ]);

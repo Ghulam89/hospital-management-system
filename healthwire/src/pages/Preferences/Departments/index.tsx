@@ -3,24 +3,27 @@ import React, { useEffect, useState } from 'react';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 import { FaRegEdit } from 'react-icons/fa';
 import { RiDeleteBin6Line } from 'react-icons/ri';
-import { Link } from 'react-router-dom';
 import axios from 'axios';
 import Swal from 'sweetalert2';
 import AddDepartment from './Add_departments';
+import { Base_url } from '../../../utils/Base_url';
+import { getUserDataFromStorage, isSuperAdminRole } from '../../../utils/branchScope';
 
 const Department = () => {
   const [isUpdateOpen, setIsUpdateOpen] = useState(false);
   const [departments, setDepartments] = useState([]);
   const [singleData, setSingleData] = useState(null);
+  const user = getUserDataFromStorage();
+  const canManageCatalog = isSuperAdminRole(user?.role);
 
   useEffect(() => {
     fetchDepartments();
   }, []);
 
   const fetchDepartments = () => {
-    axios.get('https://api.holisticare.pk/apis/department/get')
+    axios.get(`${Base_url}/apis/department/get`)
       .then((res) => {
-        setDepartments(res.data.data);
+        setDepartments(Array.isArray(res?.data?.data) ? res.data.data : []);
       })
       .catch((error) => {
         console.log(error);
@@ -38,7 +41,7 @@ const Department = () => {
       confirmButtonText: "Yes, delete it!",
     }).then((result) => {
       if (result.isConfirmed) {
-        axios.delete(`https://api.holisticare.pk/apis/department/delete/${id}`)
+        axios.delete(`${Base_url}/apis/department/delete/${id}`)
           .then((res) => {
             if (res.data.status === 'ok') {
               Swal.fire("Deleted!", "Your file has been deleted.", "success");
@@ -66,15 +69,24 @@ const Department = () => {
   return (
     <>
       
+      {canManageCatalog ? (
       <AddDepartment
         isModalOpen={isUpdateOpen}
         setIsModalOpen={setIsUpdateOpen}
         setDepartments={setDepartments}
         defaultDepartment={singleData}
       />
+      ) : null}
 
       <Breadcrumb pageName="Departments" />
 
+      {!canManageCatalog ? (
+        <p className="mb-6 rounded-sm border border-stroke bg-gray dark:border-strokedark dark:bg-meta-4 px-4 py-3 text-sm text-bodydark1">
+          Departments are synced from the central catalog. Only super admin can add, edit, or delete departments.
+        </p>
+      ) : null}
+
+      {canManageCatalog ? (
       <div className="flex justify-end pb-6">
         <button
            onClick={() => openUpdateModal()}
@@ -109,6 +121,7 @@ const Department = () => {
           Add Department
         </button>
       </div>
+      ) : null}
 
       <div className="">
         <ul className="flex flex-col gap-5 p-0">
@@ -117,12 +130,14 @@ const Department = () => {
               <div className="p-4 flex justify-between items-center">
                 <p className="text-white font-semibold m-0">{item.name}</p>
                 <p className="m-0 text-sm text-white">{item.createdAt}</p>
+                {canManageCatalog ? (
                 <div className="flex items-center gap-3">
                   <FaRegEdit className=' cursor-pointer' onClick={() => openUpdateModal(item)}  color="white" />
                   <RiDeleteBin6Line className=' cursor-pointer' onClick={() => removeFunction(item._id)} color="white" />
                 </div>
+                ) : null}
               </div>
-              {item.subDepartment.length > 0 && (
+              {Array.isArray(item.subDepartment) && item.subDepartment.length > 0 && (
                 <div className="border border-white rounded-xl">
                   <p className="text-white px-4 m-0 border-b py-4">
                     SUB-DEPARTMENT

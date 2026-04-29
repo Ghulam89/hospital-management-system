@@ -1,7 +1,21 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 
 const Tabs = ({ tabs, defaultTab ,className}) => {
   const [activeTab, setActiveTab] = useState(defaultTab);
+
+  useEffect(() => {
+    setActiveTab((prev) => {
+      if (!Array.isArray(tabs) || tabs.length === 0) return prev;
+      const titles = tabs.map((t) => t.title);
+      if (titles.includes(prev)) return prev;
+      if (defaultTab && titles.includes(defaultTab)) return defaultTab;
+      return titles[0];
+    });
+  }, [tabs, defaultTab]);
+
+  if (!Array.isArray(tabs) || tabs.length === 0) {
+    return <div className="text-sm text-slate-500">No tabs available for your permissions.</div>;
+  }
 
 
 

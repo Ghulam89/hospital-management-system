@@ -1,5 +1,7 @@
 const mongoose = require('mongoose');
-const PharmItem = require('./pharmItemModel'); // Adjust path
+const PharmItem = require('./pharmItemModel');
+const PharmInboundStock = require('./pharmInboundStockModel');
+const PharmReturnStock = require('./pharmReturnStockModel');
 
 const pharmPos = new mongoose.Schema({
     invoiceNumber: { type: String, unique: true, sparse: true }, // Invoice number for reference
@@ -7,6 +9,7 @@ const pharmPos = new mongoose.Schema({
     patientName: { type: String }, // Manual patient name when patientId is not provided
     referId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     doctorName: { type: String }, // Manual doctor name when referId is not provided
+    allowNegativeInventory: { type: Boolean, default: false },
     totalDiscount: Number,
     totalTax: Number, // Add tax field
     due: Number,
@@ -14,6 +17,7 @@ const pharmPos = new mongoose.Schema({
     paid: Number,
     note: String,
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }, // User who created the transaction
+    branchId: { type: mongoose.Schema.Types.ObjectId, ref: 'Branch' },
     allItem: [
         {
             pharmItemId: { type: mongoose.Schema.Types.ObjectId, ref: 'PharmItem' },
@@ -29,6 +33,7 @@ const pharmPos = new mongoose.Schema({
             netAmount: Number,
             totalAmount: Number,
             isReturn: { type: Boolean, default: false },
+            originalInvoiceNumber: { type: String, default: '' },
         }
     ],
     payment: [
@@ -36,7 +41,11 @@ const pharmPos = new mongoose.Schema({
             method: String,
             payDate: Date,
             paid: Number,
-            reference: String // Add reference field
+            reference: String,
+            chequeNo: { type: String, default: null },
+            bankName: { type: String, default: null },
+            chequeDate: { type: Date, default: null },
+            notes: { type: String, default: null }
         }
     ]
 }, { timestamps: true });
@@ -56,20 +65,73 @@ pharmPos.pre('save', async function (next) {
                 return next(new Error(`Item with ID ${itemData.pharmItemId} not found in pharmacy inventory`));
             }
 
-            const conversionUnit = pharmItem.conversionUnit || 1;
-            const actualQty = (itemData.unit === 'pack' ? conversionUnit : 1) * (itemData.quantity || 0);
+            const conversionUnit = Number(pharmItem.conversionUnit) || 1;
+            const unitStr = String(itemData.unit || '').toLowerCase();
+            const actualSaleQty = (unitStr === 'pack' ? conversionUnit : 1) * (Number(itemData.quantity) || 0);
+            const actualReturnQty = (unitStr === 'pack' ? conversionUnit : 1) * (Number(itemData.returnQuantity) || 0);
 
             if (itemData.isReturn) {
                 // Returning item - add stock back
-                pharmItem.availableQuantity += actualQty;
-                console.log(`Returning ${actualQty} units of ${pharmItem.name}, new stock: ${pharmItem.availableQuantity}`);
+                pharmItem.availableQuantity += actualReturnQty;
+                console.log(`Returning ${actualReturnQty} units of ${pharmItem.name}, new stock: ${pharmItem.availableQuantity}`);
             } else {
-                // Selling item - check stock and deduct
-                if (pharmItem.availableQuantity < actualQty) {
-                    return next(new Error(`Insufficient stock for ${pharmItem.name || pharmItem._id}. Available: ${pharmItem.availableQuantity}, Required: ${actualQty}`));
+                if ((Number(pharmItem.availableQuantity) || 0) < actualSaleQty) {
+                    const itemUnitStr = String(pharmItem.unit || '').toLowerCase();
+                    const openingUnits = itemUnitStr === 'pack'
+                        ? (Number(pharmItem.openingStock) || 0) * conversionUnit
+                        : (Number(pharmItem.openingStock) || 0);
+                    const inboundUnits = await PharmInboundStock.aggregate([
+                        { $unwind: "$items" },
+                        { $match: { "items.pharmItemId": pharmItem._id } },
+                        {
+                            $group: {
+                                _id: null,
+                                u: {
+                                    $sum: {
+                                        $add: [
+                                            { $multiply: [ { $ifNull: ["$items.quantity", 0] }, conversionUnit ] },
+                                            { $ifNull: ["$items.looseUnitQty", 0] }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    ]);
+                    const inboundSum = Array.isArray(inboundUnits) && inboundUnits[0] ? Number(inboundUnits[0].u) || 0 : 0;
+                    const salesUnits = await mongoose.model('PharmPos').aggregate([
+                        { $unwind: "$allItem" },
+                        { $match: { "allItem.pharmItemId": pharmItem._id, "allItem.isReturn": { $ne: true } } },
+                        {
+                            $group: {
+                                _id: null,
+                                u: {
+                                    $sum: {
+                                        $cond: [
+                                            { $eq: [ { $toLower: "$allItem.unit" }, "pack" ] },
+                                            { $multiply: [ { $ifNull: ["$allItem.quantity", 0] }, conversionUnit ] },
+                                            { $ifNull: ["$allItem.quantity", 0] }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    ]);
+                    const salesSum = Array.isArray(salesUnits) && salesUnits[0] ? Number(salesUnits[0].u) || 0 : 0;
+                    const returnUnits = await PharmReturnStock.aggregate([
+                        { $unwind: "$items" },
+                        { $match: { "items.itemId": pharmItem._id } },
+                        { $group: { _id: null, u: { $sum: { $ifNull: ["$items.quantity", 0] } } } }
+                    ]);
+                    const returnSum = Array.isArray(returnUnits) && returnUnits[0] ? Number(returnUnits[0].u) || 0 : 0;
+                    const computedAvailable = openingUnits + inboundSum - salesSum - returnSum;
+                    pharmItem.availableQuantity = computedAvailable;
+                    await pharmItem.save();
+                    if ((Number(pharmItem.availableQuantity) || 0) < actualSaleQty && !pos.allowNegativeInventory) {
+                        return next(new Error(`Insufficient stock for ${pharmItem.name || pharmItem._id}. Available: ${pharmItem.availableQuantity}, Required: ${actualSaleQty}`));
+                    }
                 }
-                pharmItem.availableQuantity -= actualQty;
-                console.log(`Selling ${actualQty} units of ${pharmItem.name}, remaining stock: ${pharmItem.availableQuantity}`);
+                pharmItem.availableQuantity = (Number(pharmItem.availableQuantity) || 0) - actualSaleQty;
+                console.log(`Selling ${actualSaleQty} units of ${pharmItem.name}, remaining stock: ${pharmItem.availableQuantity}`);
             }
 
             await pharmItem.save();
@@ -99,12 +161,13 @@ pharmPos.pre('findOneAndUpdate', async function (next) {
             if (!pharmItem) continue;
 
             const conversionUnit = pharmItem.conversionUnit || 1;
-            const actualQty = (oldItem.unit === 'pack' ? conversionUnit : 1) * (oldItem.quantity || 0);
+            const actualOldSaleQty = (oldItem.unit === 'pack' ? conversionUnit : 1) * (Number(oldItem.quantity) || 0);
+            const actualOldReturnQty = (oldItem.unit === 'pack' ? conversionUnit : 1) * (Number(oldItem.returnQuantity) || 0);
 
             if (oldItem.isReturn) {
-                pharmItem.availableQuantity -= actualQty; // undo add
+                pharmItem.availableQuantity -= actualOldReturnQty; // undo add
             } else {
-                pharmItem.availableQuantity += actualQty; // undo subtract
+                pharmItem.availableQuantity += actualOldSaleQty; // undo subtract
             }
 
             await pharmItem.save();
@@ -115,16 +178,70 @@ pharmPos.pre('findOneAndUpdate', async function (next) {
             const pharmItem = await PharmItem.findById(itemData.pharmItemId);
             if (!pharmItem) continue;
 
-            const conversionUnit = pharmItem.conversionUnit || 1;
-            const actualQty = (itemData.unit === 'pack' ? conversionUnit : 1) * (itemData.quantity || 0);
+            const conversionUnit = Number(pharmItem.conversionUnit) || 1;
+            const unitStr = String(itemData.unit || '').toLowerCase();
+            const actualSaleQty = (unitStr === 'pack' ? conversionUnit : 1) * (Number(itemData.quantity) || 0);
+            const actualReturnQty = (unitStr === 'pack' ? conversionUnit : 1) * (Number(itemData.returnQuantity) || 0);
 
             if (itemData.isReturn) {
-                pharmItem.availableQuantity += actualQty;
+                pharmItem.availableQuantity += actualReturnQty;
             } else {
-                if (pharmItem.availableQuantity < actualQty) {
-                    return next(new Error(`Insufficient stock for item ${pharmItem.name || pharmItem._id}`));
+                if ((Number(pharmItem.availableQuantity) || 0) < actualSaleQty) {
+                    const itemUnitStr = String(pharmItem.unit || '').toLowerCase();
+                    const openingUnits = itemUnitStr === 'pack'
+                        ? (Number(pharmItem.openingStock) || 0) * conversionUnit
+                        : (Number(pharmItem.openingStock) || 0);
+                    const inboundUnits = await PharmInboundStock.aggregate([
+                        { $unwind: "$items" },
+                        { $match: { "items.pharmItemId": pharmItem._id } },
+                        {
+                            $group: {
+                                _id: null,
+                                u: {
+                                    $sum: {
+                                        $add: [
+                                            { $multiply: [ { $ifNull: ["$items.quantity", 0] }, conversionUnit ] },
+                                            { $ifNull: ["$items.looseUnitQty", 0] }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    ]);
+                    const inboundSum = Array.isArray(inboundUnits) && inboundUnits[0] ? Number(inboundUnits[0].u) || 0 : 0;
+                    const salesUnits = await mongoose.model('PharmPos').aggregate([
+                        { $unwind: "$allItem" },
+                        { $match: { "allItem.pharmItemId": pharmItem._id, "allItem.isReturn": { $ne: true } } },
+                        {
+                            $group: {
+                                _id: null,
+                                u: {
+                                    $sum: {
+                                        $cond: [
+                                            { $eq: [ { $toLower: "$allItem.unit" }, "pack" ] },
+                                            { $multiply: [ { $ifNull: ["$allItem.quantity", 0] }, conversionUnit ] },
+                                            { $ifNull: ["$allItem.quantity", 0] }
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    ]);
+                    const salesSum = Array.isArray(salesUnits) && salesUnits[0] ? Number(salesUnits[0].u) || 0 : 0;
+                    const returnUnits = await PharmReturnStock.aggregate([
+                        { $unwind: "$items" },
+                        { $match: { "items.itemId": pharmItem._id } },
+                        { $group: { _id: null, u: { $sum: { $ifNull: ["$items.quantity", 0] } } } }
+                    ]);
+                    const returnSum = Array.isArray(returnUnits) && returnUnits[0] ? Number(returnUnits[0].u) || 0 : 0;
+                    const computedAvailable = openingUnits + inboundSum - salesSum - returnSum;
+                    pharmItem.availableQuantity = computedAvailable;
+                    await pharmItem.save();
+                    if ((Number(pharmItem.availableQuantity) || 0) < actualSaleQty && !(update && update.allowNegativeInventory)) {
+                        return next(new Error(`Insufficient stock for ${pharmItem.name || pharmItem._id}. Available: ${pharmItem.availableQuantity}, Required: ${actualSaleQty}`));
+                    }
                 }
-                pharmItem.availableQuantity -= actualQty;
+                pharmItem.availableQuantity = (Number(pharmItem.availableQuantity) || 0) - actualSaleQty;
             }
 
             await pharmItem.save();

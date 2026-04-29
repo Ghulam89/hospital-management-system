@@ -1,100 +1,117 @@
-import React, { useState } from 'react';
-import { Table } from 'antd';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Table, Modal, message } from 'antd';
 import { FaRegEdit } from 'react-icons/fa';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+import axios from 'axios';
+import moment from 'moment';
+import { RiDeleteBin5Line } from 'react-icons/ri';
+import { Base_url } from '../../../utils/Base_url';
+import {
+  canCreateUsers,
+  canDeleteUsers,
+  canEditUsers,
+  getStoredUserForPermissions,
+} from '../../../utils/permissions';
 
-const columns = [
-  {
-    title: 'NAME',
-    dataIndex: 'name',
-    render: () => 'Ghulam Mustafa',
-  },
-  {
-    title: 'EMAIL',
-    dataIndex: 'time',
-    render: () => 'gm6681328@gmail.com', 
-  },
-  {
-    title: 'PHONE',
-    dataIndex: 'doctor',
-    render: () => '03090962660', 
-  },
-  {
-    title: 'LAST SIGNED IN ON',
-    dataIndex: 'doctor',
-    render: () => '12/12/2024', 
-  },
-  {
-    title: 'ACTION',
-    dataIndex: 'doctor',
-    render: () => <button className="hover:text-primary">
-   <FaRegEdit size={20} />
-  </button>, 
-  },
- 
-];
-
-const data = [];
+const buildColumns = (showEdit: boolean, showDelete: boolean, onEdit: (r: any) => void, onDelete: (id: string) => void) => {
+  const cols: any[] = [
+    { title: 'NAME', dataIndex: 'name' },
+    { title: 'EMAIL', dataIndex: 'email' },
+    { title: 'PHONE', dataIndex: 'phone' },
+    {
+      title: 'LAST SIGNED IN ON',
+      dataIndex: 'updatedAt',
+      render: (text: string) => (text ? moment(text).format('DD/MM/YYYY') : '-'),
+    },
+  ];
+  if (showEdit || showDelete) {
+    cols.push({
+      title: 'ACTION',
+      dataIndex: 'action',
+      render: (_: unknown, record: any) => (
+        <div className="flex items-center gap-2">
+          {showEdit && <FaRegEdit color="blue" size={20} onClick={() => onEdit(record)} />}
+          {showDelete && <RiDeleteBin5Line color="red" size={20} onClick={() => onDelete(record._id)} />}
+        </div>
+      ),
+    });
+  }
+  return cols;
+};
 
 const Staff = () => {
-  const [selectedRowKeys, setSelectedRowKeys] = useState([]);
-  const onSelectChange = (newSelectedRowKeys) => {
-    console.log('selectedRowKeys changed: ', newSelectedRowKeys);
-    setSelectedRowKeys(newSelectedRowKeys);
-  };
-  const rowSelection = {
-    selectedRowKeys,
-    onChange: onSelectChange,
-    selections: [
-      Table.SELECTION_ALL,
-      Table.SELECTION_INVERT,
-      Table.SELECTION_NONE,
-      {
-        key: 'odd',
-        text: 'Select Odd Row',
-        onSelect: (changeableRowKeys) => {
-          let newSelectedRowKeys = [];
-          newSelectedRowKeys = changeableRowKeys.filter((_, index) => {
-            if (index % 2 !== 0) {
-              return false;
-            }
-            return true;
-          });
-          setSelectedRowKeys(newSelectedRowKeys);
-        },
+  const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  const [users, setUsers] = useState<any[]>([]);
+  const [currentPage, setCurrentPage] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
+  const navigate = useNavigate();
+
+  const userData = getStoredUserForPermissions();
+  const allowCreate = canCreateUsers(userData);
+  const allowEdit = canEditUsers(userData);
+  const allowDelete = canDeleteUsers(userData);
+
+  const columns = useMemo(
+    () => buildColumns(allowEdit, allowDelete, (r) => navigate(`/staff/edit_user/${r._id}`), handleDelete),
+    [allowEdit, allowDelete, navigate],
+  );
+
+  function fetchUsersData(page: number) {
+    axios.get(`${Base_url}/apis/user/get`, { params: { page, role: 'staff', branchId: 'all' } }).then((res) => {
+      setUsers(res.data.data || []);
+      setTotalCount(res.data.count || 0);
+    });
+  }
+
+  function handleDelete(id: string) {
+    if (!allowDelete) return;
+    Modal.confirm({
+      title: 'Delete Confirmation',
+      content: 'Are you sure you want to delete this staff user?',
+      okText: 'Yes, Delete',
+      cancelText: 'Cancel',
+      okButtonProps: { danger: true },
+      centered: true,
+      onOk: async () => {
+        try {
+          await axios.delete(`${Base_url}/apis/user/delete/${id}`);
+          message.success('Staff deleted successfully');
+          fetchUsersData(currentPage);
+        } catch {
+          message.error('Failed to delete staff');
+        }
       },
-      {
-        key: 'even',
-        text: 'Select Even Row',
-        onSelect: (changeableRowKeys) => {
-          let newSelectedRowKeys = [];
-          newSelectedRowKeys = changeableRowKeys.filter((_, index) => {
-            if (index % 2 !== 0) {
-              return true;
-            }
-            return false;
-          });
-          setSelectedRowKeys(newSelectedRowKeys);
-        },
-      },
-    ],
-  };
+    });
+  }
+
+  useEffect(() => {
+    fetchUsersData(currentPage);
+  }, [currentPage]);
 
   return (
     <div className="rounded-sm border border-stroke bg-white px-5 pt-6 pb-2.5 shadow-default dark:border-strokedark dark:bg-boxdark sm:px-7.5 xl:pb-1">
-      <div className=' flex  pb-5 justify-between items-center'>
-      <h4 className="text-xl font-semibold text-black dark:text-white">
-      Staff
-      </h4>
-      <Link
-              to="#"
-              className="inline-flex items-center justify-center gap-2.5 rounded-md bg-primary py-3 px-10 text-center font-medium text-white hover:bg-opacity-90 lg:px-8 xl:px-10"
-            >
-         <svg xmlns="http://www.w3.org/2000/svg" viewBox="0,0,256,256" width="20px" height="20px"><g fill="#ffffff" fill-rule="nonzero" stroke="none" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" stroke-miterlimit="10" stroke-dasharray="" stroke-dashoffset="0" font-family="none" font-weight="none" font-size="none" text-anchor="none" ><g transform="scale(5.12,5.12)"><path d="M25,2c-12.6907,0 -23,10.3093 -23,23c0,12.69071 10.3093,23 23,23c12.69071,0 23,-10.30929 23,-23c0,-12.6907 -10.30929,-23 -23,-23zM25,4c11.60982,0 21,9.39018 21,21c0,11.60982 -9.39018,21 -21,21c-11.60982,0 -21,-9.39018 -21,-21c0,-11.60982 9.39018,-21 21,-21zM24,13v11h-11v2h11v11h2v-11h11v-2h-11v-11z"></path></g></g></svg>
-              Add
-            </Link>
+      <div className="flex pb-5 justify-between items-center">
+        <h4 className="text-xl font-semibold text-black dark:text-white">Staff</h4>
+        {allowCreate && (
+          <Link
+            to="/staff/new_user"
+            className="inline-flex items-center justify-center gap-2.5 rounded-md bg-primary py-3 px-10 text-center font-medium text-white hover:bg-opacity-90 lg:px-8 xl:px-10"
+          >
+            Add Staff
+          </Link>
+        )}
       </div>
-      <Table rowSelection={rowSelection} columns={columns} dataSource={data} pagination={{ pageSize: 10 }} />
+      <Table
+        rowSelection={{
+          selectedRowKeys,
+          onChange: setSelectedRowKeys,
+        }}
+        columns={columns}
+        dataSource={users}
+        rowKey="_id"
+        pagination={{ current: currentPage, pageSize: 20, total: totalCount }}
+        onChange={(pagination) => setCurrentPage(pagination.current || 1)}
+      />
     </div>
   );
 };

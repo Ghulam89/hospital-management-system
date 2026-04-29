@@ -1,11 +1,12 @@
 import React, { useEffect, useState } from 'react';
 import { Table, Button, message, TablePaginationConfig, Tag, Space, Input, Select, DatePicker } from 'antd';
 import axios from 'axios';
-import { FaCloudUploadAlt, FaRegEdit, FaEye, FaCheckCircle } from 'react-icons/fa';
+import { FaCloudUploadAlt, FaRegEdit, FaEye } from 'react-icons/fa';
 import { RiDeleteBin5Line } from 'react-icons/ri';
 import { FiDownload, FiPrinter, FiPlus } from 'react-icons/fi';
 import Swal from 'sweetalert2';
 import { Base_url } from '../../../utils/Base_url';
+import { AsyncPaginate, type LoadOptions } from 'react-select-async-paginate';
 // import dayjs from 'dayjs';
 
 const { Search } = Input;
@@ -41,9 +42,11 @@ const PurchaseOrderList: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [supplierFilter, setSupplierFilter] = useState('');
+  const [selectedSupplier, setSelectedSupplier] = useState<any>(null);
   const [statusFilter, setStatusFilter] = useState('');
   const [dateRange, setDateRange] = useState<any[]>([]);
   const [grandTotal, setGrandTotal] = useState(0);
+  const [supplierSummaries, setSupplierSummaries] = useState<Record<string, any>>({});
 
   // Table row selection
   const onSelectChange = (newSelectedRowKeys: React.Key[]) => {
@@ -91,7 +94,41 @@ const PurchaseOrderList: React.FC = () => {
     }
   };
 
-  // Fetch suppliers
+  // Load suppliers with pagination and search
+  const loadSuppliers = async (search: string, prevOptions: any, { page }: any) => {
+    try {
+      const response = await axios.get(`${Base_url}/apis/pharmSupplier/get`, {
+        params: {
+          search: search || '',
+          page: page || 1,
+          limit: 20,
+        }
+      });
+
+      const data = response.data.data || [];
+      const options = data.map((supplier: any) => ({
+        value: supplier._id,
+        label: supplier.name,
+        ...supplier
+      }));
+
+      return {
+        options,
+        hasMore: data.length === 20,
+        additional: {
+          page: page + 1,
+        },
+      };
+    } catch (error) {
+      console.error('Error loading suppliers:', error);
+      return {
+        options: [],
+        hasMore: false,
+      };
+    }
+  };
+
+  // Legacy fetchSuppliers function
   const fetchSuppliers = async () => {
     try {
       const response = await axios.get(`${Base_url}/apis/pharmSupplier/get`);
@@ -105,6 +142,50 @@ const PurchaseOrderList: React.FC = () => {
     fetchPurchaseOrders();
     fetchSuppliers();
   }, [currentPage, searchTerm, supplierFilter, statusFilter, dateRange]);
+
+  const fetchSupplierSummary = async (supplierId: string) => {
+    if (!supplierId) return;
+    setSupplierSummaries(prev => ({ ...prev, [supplierId]: { ...prev[supplierId], loading: true } }));
+    try {
+      const params: any = {
+        supplierId,
+        limit: 1000,
+      };
+      if (dateRange.length === 2 && dateRange[0] && dateRange[1]) {
+        params.from = dateRange[0].format('YYYY-MM-DD');
+        params.to = dateRange[1].format('YYYY-MM-DD');
+      }
+      const res = await axios.get(`${Base_url}/apis/pharmPurchaseOrder/get`, { params });
+      const orders: PurchaseOrder[] = res.data?.data || [];
+      const totalOrders = orders.length;
+      const totalAmount = orders.reduce((sum, o) => sum + (Number(o.totalAmount) || 0), 0);
+      const statusCount = (s: string) => orders.filter(o => o.status === s).length;
+      const pending = statusCount('Pending');
+      const approved = statusCount('Approved');
+      const ordered = statusCount('Ordered');
+      const delivered = statusCount('Delivered');
+      const cancelled = statusCount('Cancelled');
+      const lastOrderDate = orders
+        .map(o => new Date(o.orderDate).getTime())
+        .reduce((a, b) => Math.max(a, b), 0);
+      setSupplierSummaries(prev => ({
+        ...prev,
+        [supplierId]: {
+          loading: false,
+          totalOrders,
+          totalAmount,
+          pending,
+          approved,
+          ordered,
+          delivered,
+          cancelled,
+          lastOrderDate: lastOrderDate ? new Date(lastOrderDate).toLocaleDateString() : null,
+        }
+      }));
+    } catch {
+      setSupplierSummaries(prev => ({ ...prev, [supplierId]: { loading: false, error: true } }));
+    }
+  };
 
   // Table columns
   const columns = [
@@ -212,14 +293,6 @@ const PurchaseOrderList: React.FC = () => {
             onClick={() => handleEdit(record)}
             title="Edit"
           />
-          {record.status === 'Pending' && (
-            <Button
-              type="text"
-              icon={<FaCheckCircle className="text-green-600" />}
-              onClick={() => handleApprove(record)}
-              title="Approve"
-            />
-          )}
           <Button
             type="text"
             icon={<RiDeleteBin5Line className="text-red-500" />}
@@ -239,30 +312,6 @@ const PurchaseOrderList: React.FC = () => {
   const handleEdit = (record: PurchaseOrder) => {
     // Implement edit functionality
     console.log('Edit:', record);
-  };
-
-  const handleApprove = async (record: PurchaseOrder) => {
-    try {
-      const result = await Swal.fire({
-        title: 'Approve Purchase Order?',
-        text: `Are you sure you want to approve PO ${record.purchaseOrderNumber}?`,
-        icon: 'question',
-        showCancelButton: true,
-        confirmButtonText: 'Yes, Approve',
-        cancelButtonText: 'Cancel',
-      });
-
-      if (result.isConfirmed) {
-        await axios.put(`${Base_url}/apis/pharmPurchaseOrder/approve/${record._id}`, {
-          approvedBy: 'current-user-id' // Replace with actual user ID
-        });
-        message.success('Purchase order approved successfully');
-        fetchPurchaseOrders();
-      }
-    } catch (error) {
-      console.error('Error approving purchase order:', error);
-      message.error('Failed to approve purchase order');
-    }
   };
 
   const handleDelete = async (record: PurchaseOrder) => {
@@ -370,19 +419,35 @@ const PurchaseOrderList: React.FC = () => {
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-60"
           />
-          <Select
+          <AsyncPaginate
             placeholder="Select Supplier"
-            value={supplierFilter}
-            onChange={setSupplierFilter}
+            value={selectedSupplier}
+            onChange={(option) => {
+              setSelectedSupplier(option);
+              setSupplierFilter(option?.value || '');
+            }}
+            loadOptions={loadSuppliers}
+            additional={{
+              page: 1,
+            }}
+            debounceTimeout={300}
+            defaultOptions
+            isClearable
             className="w-48"
-            allowClear
-          >
-            {suppliers.map(supplier => (
-              <Option key={supplier._id} value={supplier._id}>
-                {supplier.name}
-              </Option>
-            ))}
-          </Select>
+            styles={{
+              control: (provided) => ({
+                ...provided,
+                minHeight: '32px',
+                fontSize: '14px',
+              }),
+              menuPortal: (provided) => ({
+                ...provided,
+                zIndex: 999999,
+              }),
+            }}
+            menuPortalTarget={document.body}
+            menuPosition="fixed"
+          />
           <Select
             placeholder="Select Manufacturer"
             className="w-48"
@@ -427,6 +492,60 @@ const PurchaseOrderList: React.FC = () => {
               `${range[0]}-${range[1]} of ${total} items`,
           }}
           scroll={{ x: 1200 }}
+          expandable={{
+            expandedRowRender: (record: PurchaseOrder) => {
+              const sid = record.supplierId?._id;
+              const summary = supplierSummaries[sid] || {};
+              return (
+                <div className="bg-gray-50 p-4 rounded-md">
+                  <div className="text-sm font-semibold text-gray-700 mb-3">
+                    Supplier Business Summary
+                  </div>
+                  {summary.loading ? (
+                    <div className="text-gray-500 text-sm">Loading...</div>
+                  ) : summary.error ? (
+                    <div className="text-red-600 text-sm">Failed to load summary</div>
+                  ) : (
+                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                      <div className="border rounded-md p-2">
+                        <div className="text-xs text-gray-500">Total Orders</div>
+                        <div className="text-base font-bold text-gray-800">{summary.totalOrders || 0}</div>
+                      </div>
+                      <div className="border rounded-md p-2">
+                        <div className="text-xs text-gray-500">Total Amount</div>
+                        <div className="text-base font-bold text-green-700">Rs. {(Number(summary.totalAmount) || 0).toLocaleString()}</div>
+                      </div>
+                      <div className="border rounded-md p-2">
+                        <div className="text-xs text-gray-500">Pending</div>
+                        <div className="text-base font-bold text-orange-600">{summary.pending || 0}</div>
+                      </div>
+                      <div className="border rounded-md p-2">
+                        <div className="text-xs text-gray-500">Approved</div>
+                        <div className="text-base font-bold text-blue-700">{summary.approved || 0}</div>
+                      </div>
+                      <div className="border rounded-md p-2">
+                        <div className="text-xs text-gray-500">Delivered</div>
+                        <div className="text-base font-bold text-emerald-700">{summary.delivered || 0}</div>
+                      </div>
+                      <div className="border rounded-md p-2">
+                        <div className="text-xs text-gray-500">Last Order</div>
+                        <div className="text-base font-bold text-gray-700">{summary.lastOrderDate || 'N/A'}</div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              );
+            },
+            onExpand: (expanded, record: PurchaseOrder) => {
+              if (expanded && record.supplierId?._id) {
+                const sid = record.supplierId._id;
+                if (!supplierSummaries[sid] || (!supplierSummaries[sid].loading && supplierSummaries[sid].totalOrders === undefined)) {
+                  fetchSupplierSummary(sid);
+                }
+              }
+            },
+            rowExpandable: (record: PurchaseOrder) => Boolean(record.supplierId?._id),
+          }}
         />
       </div>
 

@@ -15,6 +15,8 @@ const UpdateDoctor = () => {
   const [allDepartment, setAllDepartment] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loading, setLoading] = useState(true);
+  /** Preserved from API so role/tabs are not edited on this form but stay in sync on save */
+  const [serverUser, setServerUser] = useState(null);
 
   // Main form state
   const [state, setState] = useState({
@@ -37,33 +39,6 @@ const UpdateDoctor = () => {
     followUpCharges: '',
     sharePrice: '',
     shareType: 'Rupees',
-  });
-
-  // Role rights state
-  const [roleRights, setRoleRights] = useState({
-    doctor: '',
-    patientCareOrder: '',
-    reports: '',
-    pharmacyOrders: '',
-    files: '',
-    bloodBank: '',
-    doctorRecommendation: '',
-    vitals: '',
-    labOrder: '',
-    IntakeOutput: '',
-    operationRequests: '',
-    doctorConsultationRequest: '',
-    admissionForm: '',
-    proceduresadmissionForm: '',
-    radiologyOrder: '',
-    laboratory: '',
-    healthRecords: '',
-    healthandPhysical: '',
-    nutrition: '',
-    nursingForms: '',
-    radiology: '',
-    rehabilation: '',
-    nursingNotes: '',
   });
 
   // Qualification state
@@ -124,6 +99,8 @@ const UpdateDoctor = () => {
     try {
       const response = await axios.get(`${Base_url}/apis/user/get/${id}`);
       const doctorData = response.data.data;
+
+      setServerUser(doctorData);
 
       console.log(doctorData);
 
@@ -218,22 +195,6 @@ const UpdateDoctor = () => {
         sundayDuration:
           doctorData.sundayDuration || doctorData.sundayDuration || '',
       });
-
-      // Set role rights
-      if (doctorData.role) {
-        const updatedRoleRights = { ...roleRights };
-        updatedRoleRights.doctor = doctorData.role === 'doctor' ? 'doctor' : '';
-
-        if (doctorData.tabs && doctorData.tabs.length > 0) {
-          doctorData.tabs.forEach((tab) => {
-            if (tab in updatedRoleRights) {
-              updatedRoleRights[tab] = tab;
-            }
-          });
-        }
-
-        setRoleRights(updatedRoleRights);
-      }
 
       setLoading(false);
     } catch (error) {
@@ -376,14 +337,6 @@ const UpdateDoctor = () => {
     [services.length],
   );
 
-  // Role rights handler
-  const handleRoleRightChange = useCallback((right) => {
-    setRoleRights((prev) => ({
-      ...prev,
-      [right]: prev[right] ? '' : right,
-    }));
-  }, []);
-
   // Gender handler
   const handleGenderChange = useCallback((selectedGender) => {
     setGender(selectedGender);
@@ -408,9 +361,6 @@ const UpdateDoctor = () => {
       return;
     } else if (!state.shift) {
       toast.error('Must select shift!');
-      return;
-    } else if (!roleRights.doctor) {
-      toast.error('Please select doctor role');
       return;
     }
 
@@ -451,11 +401,8 @@ const UpdateDoctor = () => {
       followUpCharges: state.followUpCharges,
       sharePrice: state.sharePrice,
       shareType: state.shareType,
-      role: roleRights.doctor,
-
-      tabs: Object.entries(roleRights)
-        .filter(([key, value]) => key !== 'doctor' && value)
-        .map(([key]) => key),
+      role: serverUser?.role || 'doctor',
+      tabs: Array.isArray(serverUser?.tabs) ? serverUser.tabs : [],
       OPD: state.OPD,
       IPD: state.IPD,
       awards: state.awards,
@@ -908,55 +855,6 @@ const UpdateDoctor = () => {
                     </div>
                   </div>
 
-                  {/* Roles and Rights Section */}
-                  <div className="mt-8">
-                    <div className="w-full pb-4">
-                      <label className="mb-2.5 block text-black dark:text-white">
-                        Add Doctor Roles & Rights
-                      </label>
-                    </div>
-                    <div className=" pb-4">
-                      <label className="flex cursor-pointer select-none ">
-                        <div>
-                          <input
-                            type="checkbox"
-                            id="roleDoctor"
-                            className="h-5 w-5 text-primary focus:ring-primary border-gray-300 rounded"
-                            checked={roleRights.doctor === 'doctor'}
-                            onChange={() => handleRoleRightChange('doctor')}
-                            required
-                          />
-                        </div>
-                        <span className="ml-2">
-                          Doctor (Access to appointments and reports of patients
-                          specific to the doctor only)
-                        </span>
-                      </label>
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                      {/* Doctor Role (required) */}
-
-                      {/* Other Rights */}
-                      {Object.entries(roleRights)
-                        .filter(([key]) => key !== 'doctor')
-                        .map(([right]) => (
-                          <div key={right}>
-                            <label className="flex cursor-pointer select-none items-center">
-                              <input
-                                type="checkbox"
-                                id={right}
-                                className="h-5 w-5 text-primary focus:ring-primary border-gray-300 rounded"
-                                checked={!!roleRights[right]}
-                                onChange={() => handleRoleRightChange(right)}
-                              />
-                              <span className="ml-2 capitalize">
-                                {right.split(/(?=[A-Z])/).join(' ')}
-                              </span>
-                            </label>
-                          </div>
-                        ))}
-                    </div>
-                  </div>
                 </div>
               </div>
             </div>

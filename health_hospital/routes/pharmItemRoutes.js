@@ -1,24 +1,18 @@
 
 const pharmItemController = require("../controllers/pharmItemController");
 const { upload } = require("../upload/UploadFile");
+const { optionalAuth, auth, requireSuperAdmin } = require("../middleware/auth");
 
 const router = require("express").Router();
 
-router.get("/get", pharmItemController.getpharmItems);
-router.post(
-  "/create",
-  pharmItemController.addpharmItem
-);
-router.post(
-  "/createExcel",
-  pharmItemController.addExcelpharmItem
-);
+router.get("/get", optionalAuth, pharmItemController.getpharmItems);
+router.get("/flow-summary", optionalAuth, pharmItemController.getPharmItemFlowSummary);
 
-router.get("/get/:id", pharmItemController.getpharmItemById);
-router.put(
-  "/update/:id",
-  pharmItemController.updatepharmItem
-);
-router.delete("/delete/:id", pharmItemController.deletepharmItem);
+router.post("/create", auth, requireSuperAdmin, pharmItemController.addpharmItem);
+router.post("/createExcel", auth, requireSuperAdmin, pharmItemController.addExcelpharmItem);
+
+router.get("/get/:id", optionalAuth, pharmItemController.getpharmItemById);
+router.put("/update/:id", optionalAuth, pharmItemController.updatepharmItem);
+router.delete("/delete/:id", auth, requireSuperAdmin, pharmItemController.deletepharmItem);
 
 module.exports = router;
