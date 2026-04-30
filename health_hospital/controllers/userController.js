@@ -6,6 +6,7 @@ const {
   findRoleDocForLogin,
   refreshUserTabsFromRole,
 } = require("../utils/syncUserTabsFromRole");
+const { loadBranchIdFromUserDoc } = require("../utils/branchScope");
 
 const isSuperAdminRole = (role) => normalizeRole(role) === "superadmin";
 const isBranchAdminRole = (role) => {
@@ -19,11 +20,21 @@ const isWithinActorBranch = (actor, targetBranchId) => {
   return String(actor.branchId || "") === String(targetBranchId || "");
 };
 
-const canManageTargetUser = (actor, targetUser) => {
+const canManageTargetUser = async (actor, targetUser) => {
   if (!actor || !targetUser) return false;
   if (isSuperAdminRole(actor.role)) return true;
   if (!isBranchAdminRole(actor.role)) return false;
-  if (!isWithinActorBranch(actor, targetUser.branchId)) return false;
+
+  let actorBr = actor.branchId;
+  if (!actorBr && actor._id) {
+    actorBr = await loadBranchIdFromUserDoc(actor._id);
+  }
+  let targetBr = targetUser.branchId;
+  if (!targetBr && targetUser._id) {
+    targetBr = await loadBranchIdFromUserDoc(targetUser._id);
+  }
+
+  if (!isWithinActorBranch({ ...actor, branchId: actorBr }, targetBr)) return false;
   return !isSuperAdminRole(targetUser.role);
 };
 
@@ -41,6 +52,14 @@ async function syncTabsFromRoleDoc(actor, payload, existingUser) {
   let effectiveBranchId = payload.branchId;
   if (existingUser && (effectiveBranchId === undefined || effectiveBranchId === null)) {
     effectiveBranchId = existingUser.branchId;
+  }
+  if (
+    (effectiveBranchId === undefined ||
+      effectiveBranchId === null ||
+      effectiveBranchId === '') &&
+    existingUser?._id
+  ) {
+    effectiveBranchId = await loadBranchIdFromUserDoc(existingUser._id);
   }
 
   const actorRole = normalizeRole(actor?.role);
@@ -95,6 +114,19 @@ const adduser = async (req, res) => {
     }
     else {
 
+      if (
+        (requestedRole === "administrator" || requestedRole === "admin") &&
+        isSuperAdminRole(actorRole)
+      ) {
+        const b = req.body.branchId;
+        if (!b || !mongoose.Types.ObjectId.isValid(String(b))) {
+          return res.status(400).json({
+            status: "fail",
+            message: "branchId is required when creating admin / administrator users",
+          });
+        }
+      }
+
       if (requestedRole === "administrator" && !req.body.branchId && !actor?.branchId) {
         return res
           .status(400)
@@ -107,7 +139,11 @@ const adduser = async (req, res) => {
             .status(403)
             .json({ status: "fail", message: "Branch admin cannot create superadmin" });
         }
-        if (!actor?.branchId) {
+        let actorBr = actor?.branchId;
+        if (!actorBr && actor?._id) {
+          actorBr = await loadBranchIdFromUserDoc(actor._id);
+        }
+        if (!actorBr) {
           return res
             .status(400)
             .json({ status: "fail", message: "Branch admin has no assigned branch" });
@@ -116,7 +152,11 @@ const adduser = async (req, res) => {
 
       const payload = { ...req.body };
       if (isBranchAdminRole(actorRole) && !isSuperAdminRole(actorRole)) {
-        payload.branchId = actor.branchId;
+        let actorBr = actor?.branchId;
+        if (!actorBr && actor?._id) {
+          actorBr = await loadBranchIdFromUserDoc(actor._id);
+        }
+        payload.branchId = actorBr;
       } else if (!payload.branchId && actor?.branchId) {
         payload.branchId = actor.branchId;
       }
@@ -152,20 +192,37 @@ const getusers = async (req, res) => {
     const actor = req.user;
     const actorRole = normalizeRole(actor?.role);
 
-    if (req.query.role) {
+    /** Comma-separated role keys (`accountant,accountant_access`) or single ?role */
+    if (req.query.roles) {
+      const arr = String(req.query.roles || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (arr.length === 1) {
+        query.role = arr[0];
+      } else if (arr.length > 1) {
+        query.role = { $in: arr };
+      }
+    } else if (req.query.role) {
       query.role = req.query.role;
     }
 
     // Superadmin: all branches unless ?branchId is a real ObjectId (not "all").
+    // Branch scoping: use User.branchId or department → branch (legacy admins)
+    let actorBranchId = actor?.branchId;
+    if (!isSuperAdminRole(actorRole) && !actorBranchId && actor?._id) {
+      actorBranchId = await loadBranchIdFromUserDoc(actor._id);
+    }
+
     if (isSuperAdminRole(actorRole)) {
       const raw = req.query.branchId;
       const s = raw != null ? String(raw).trim() : "";
       if (s && s !== "all" && mongoose.Types.ObjectId.isValid(s)) {
         query.branchId = s;
       }
-    } else if (actor?.branchId) {
-      query.branchId = actor.branchId;
-    } else if (!isSuperAdminRole(actorRole) && !actor?.branchId) {
+    } else if (actorBranchId) {
+      query.branchId = actorBranchId;
+    } else if (!isSuperAdminRole(actorRole)) {
       return res.status(200).json({
         status: "ok",
         data: [],
@@ -220,7 +277,7 @@ const getuserById = async (req, res) => {
     if (!user) {
       return res.status(404).json({ status: "fail", message: "user not found" });
     }
-    if (!canManageTargetUser(req.user, user)) {
+    if (!(await canManageTargetUser(req.user, user))) {
       return res.status(403).json({ status: "fail", message: "Forbidden" });
     }
     return res.status(200).json({ status: "ok", data: user });
@@ -237,7 +294,7 @@ const updateuser = async (req, res) => {
     if (!existingUser) {
       return res.status(404).json({ status: "fail", message: "user not found" });
     }
-    if (!canManageTargetUser(req.user, existingUser)) {
+    if (!(await canManageTargetUser(req.user, existingUser))) {
       return res.status(403).json({ status: "fail", message: "Forbidden" });
     }
 
@@ -260,7 +317,11 @@ const updateuser = async (req, res) => {
 
     const payload = { ...req.body, image: image };
     if (isBranchAdminRole(actorRole) && !isSuperAdminRole(actorRole)) {
-      payload.branchId = req.user.branchId;
+      let actorBr = req.user.branchId;
+      if (!actorBr && req.user._id) {
+        actorBr = await loadBranchIdFromUserDoc(req.user._id);
+      }
+      payload.branchId = actorBr;
     }
 
     const sync = await syncTabsFromRoleDoc(req.user, payload, existingUser);
@@ -287,7 +348,7 @@ const deleteuser = async (req, res) => {
     if (!targetUser) {
       return res.status(404).json({ status: "fail", message: "user not found" });
     }
-    if (!canManageTargetUser(req.user, targetUser)) {
+    if (!(await canManageTargetUser(req.user, targetUser))) {
       return res.status(403).json({ status: "fail", message: "Forbidden" });
     }
     await User.findByIdAndDelete(id);

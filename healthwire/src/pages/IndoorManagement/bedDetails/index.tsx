@@ -49,12 +49,16 @@ const BedDetails = () => {
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
 
+  const permUser = getStoredUserForPermissions();
+  const canBedCreate = canMenuAction(permUser, 'bed_details', 'create');
+  const canBedDelete = canMenuAction(permUser, 'bed_details', 'delete');
+
   const fetchBedDetails = (page) => {
     axios.get(`${Base_url}/apis/bedDetail/get?page=${page}`)
       .then((res) => {
-        console.log(res);
-        setBedDetails(res.data.data.map(item => ({ ...item, key: item._id })));
-        setTotalPages(res.data.totalPages);
+        const rows = Array.isArray(res.data?.data) ? res.data.data : [];
+        setBedDetails(rows.map((item) => ({ ...item, key: item._id })));
+        setTotalPages(res.data?.totalPages ?? 1);
       })
       .catch((error) => {
         console.error('Error fetching bed details:', error);

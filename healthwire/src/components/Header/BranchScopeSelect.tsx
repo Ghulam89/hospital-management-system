@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import { Select, Spin } from 'antd';
 import { Base_url } from '../../utils/Base_url';
@@ -13,7 +13,8 @@ import {
 type BranchRow = { _id: string; name: string; code?: string };
 
 const BranchScopeSelect = () => {
-  const isSuper = useMemo(() => isSuperAdminRole(getUserDataFromStorage()?.role), []);
+  /** Re-read each render so superadmin sees the dropdown after login without full page reload. */
+  const isSuper = isSuperAdminRole(getUserDataFromStorage()?.role);
 
   const [branches, setBranches] = useState<BranchRow[]>([]);
   const [loading, setLoading] = useState(false);
@@ -48,7 +49,7 @@ const BranchScopeSelect = () => {
   if (!isSuper) return null;
 
   return (
-    <div className="hidden min-w-[200px] md:block">
+    <div className="min-w-[140px] max-w-[min(100vw-8rem,260px)] sm:min-w-[200px]">
       <Select
         showSearch
         allowClear

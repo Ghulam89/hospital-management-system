@@ -7,6 +7,7 @@ const AdmitPatient = require('../models/admitPatientModel');
 const User = require('../models/userModel');
 const Visit = require('../models/visitModel');
 const Invoice = require('../models/invoiceModel');
+const Appointment = require('../models/appointmentModel');
 const { normalizeRole } = require('../middleware/auth');
 
 /** Departments tagged to a branch OR global (synced catalog — super admin maintains). */
@@ -114,6 +115,21 @@ async function resolveBranchIdForNonSuperAdmin(req) {
   return toObjectIdMaybe(branchId);
 }
 
+/** Branch used for writes (inbound stock, etc.): staff branch, or superadmin ?branchId / body.branchId. */
+async function resolveWriteBranchOid(req) {
+  const fromStaff = await resolveBranchIdForNonSuperAdmin(req);
+  if (fromStaff) return fromStaff;
+  if (!req?.user) return null;
+  const role = normalizeRole(req.user.role);
+  if (role === 'superadmin' || role === 'super admin') {
+    const bid = req.query?.branchId ?? req.body?.branchId;
+    if (bid && mongoose.Types.ObjectId.isValid(String(bid))) {
+      return new mongoose.Types.ObjectId(String(bid));
+    }
+  }
+  return null;
+}
+
 /**
  * Mongo { branchId } filter for any collection that stores branchId.
  * null = no branch restriction (unauthenticated or superadmin without ?branchId).
@@ -137,14 +153,60 @@ async function mergeBranchScopedQuery(req) {
   return null;
 }
 
+/**
+ * Pharmacy suppliers / manufacturers / categories & expense categories — one hospital-wide list.
+ * Any logged-in user can read; writes are enforced with requireSuperAdmin on routes.
+ */
+async function mergeCatalogPreferenceFilter(req) {
+  if (!req?.user) {
+    return { _id: null };
+  }
+  return {};
+}
+
 /** @deprecated name — same as mergeBranchScopedQuery (kept for patient helpers). */
 const mergePatientListBranchFilter = mergeBranchScopedQuery;
+
+/**
+ * Apply branchId to list queries (appointments, tokens).
+ * Non–super-admin without resolved branch → empty list (no global leak).
+ * Superadmin without ?branchId → no branchId on query (all branches).
+ * @returns {'ok'|'empty'}
+ */
+async function applyStrictBranchListFilter(req, query) {
+  if (!req?.user) return 'ok';
+
+  const role = normalizeRole(req.user.role);
+  const isSuper = role === 'superadmin' || role === 'super admin';
+
+  const scoped = await mergeBranchScopedQuery(req);
+  if (scoped && scoped.branchId) {
+    query.branchId = scoped.branchId;
+    return 'ok';
+  }
+
+  if (!isSuper) {
+    return 'empty';
+  }
+
+  return 'ok';
+}
 
 function assignBranchIdForCreate(req, payload) {
   const out = payload && typeof payload === 'object' ? { ...payload } : {};
   if (!req?.user) return out;
   const role = normalizeRole(req.user.role);
-  if (role === 'superadmin' || role === 'super admin') return out;
+  if (role === 'superadmin' || role === 'super admin') {
+    const bid = req.query?.branchId ?? req.body?.branchId;
+    if (
+      bid &&
+      mongoose.Types.ObjectId.isValid(String(bid)) &&
+      (out.branchId === undefined || out.branchId === null || out.branchId === '')
+    ) {
+      out.branchId = new mongoose.Types.ObjectId(String(bid));
+    }
+    return out;
+  }
   if (req.user.branchId && (out.branchId === undefined || out.branchId === null || out.branchId === '')) {
     out.branchId = req.user.branchId;
   }
@@ -167,6 +229,20 @@ async function branchDocumentVisible(req, branchIdOnDoc) {
 }
 
 /**
+ * Hospital-wide pharmacy/expense catalog rows may use branchId null.
+ * Any authenticated staff may use them in-context (e.g. supplier ledger); scoped rows match the user's branch.
+ */
+async function catalogEntityVisibleForStaff(req, branchIdOnDoc) {
+  if (!req?.user) return false;
+  const role = normalizeRole(req.user.role);
+  if (role === 'superadmin' || role === 'super admin') return true;
+  if (branchIdOnDoc == null || branchIdOnDoc === '') return true;
+  const branchId = await resolveBranchIdForNonSuperAdmin(req);
+  if (!branchId) return false;
+  return String(branchIdOnDoc) === String(branchId);
+}
+
+/**
  * Patient _ids visible for this request; null = no restriction (superadmin / unscoped).
  * Uses Visits + Invoices + legacy Patient.branchId so global patients appear once they interact with a branch.
  */
@@ -176,16 +252,22 @@ async function getScopedPatientIds(req) {
   const branchId = f.branchId;
   if (!branchId) return [];
 
-  const [fromVisits, fromInvoices, fromLegacyPatients] = await Promise.all([
-    Visit.distinct('patientId', { branchId }),
-    Invoice.distinct('patientId', { branchId }),
-    Patient.distinct('_id', { branchId }),
-  ]);
+  const [fromVisits, fromInvoices, fromLegacyPatients, fromAppointments] =
+    await Promise.all([
+      Visit.distinct('patientId', { branchId }),
+      Invoice.distinct('patientId', { branchId }),
+      Patient.distinct('_id', { branchId }),
+      Appointment.distinct('patientId', {
+        branchId,
+        patientId: { $exists: true, $ne: null },
+      }),
+    ]);
 
   const set = new Set();
   for (const id of fromVisits) if (id) set.add(String(id));
   for (const id of fromInvoices) if (id) set.add(String(id));
   for (const id of fromLegacyPatients) if (id) set.add(String(id));
+  for (const id of fromAppointments) if (id) set.add(String(id));
 
   return [...set]
     .filter((id) => mongoose.Types.ObjectId.isValid(id))
@@ -237,13 +319,14 @@ async function patientVisibleForRequest(req, patientId) {
   const bid = f.branchId;
   const pid = new mongoose.Types.ObjectId(String(patientId));
 
-  const [v, inv, legacy] = await Promise.all([
+  const [v, inv, legacy, apt] = await Promise.all([
     Visit.findOne({ patientId: pid, branchId: bid }).select('_id').lean(),
     Invoice.findOne({ patientId: pid, branchId: bid }).select('_id').lean(),
     Patient.findOne({ _id: pid, branchId: bid }).select('_id').lean(),
+    Appointment.findOne({ patientId: pid, branchId: bid }).select('_id').lean(),
   ]);
 
-  return !!(v || inv || legacy);
+  return !!(v || inv || legacy || apt);
 }
 
 /** AdmitPatient _ids whose linked patient is visible for this request. */
@@ -261,10 +344,15 @@ module.exports = {
   getScopedWardIds,
   idInList,
   mergeBranchScopedQuery,
+  mergeCatalogPreferenceFilter,
   mergePatientListBranchFilter,
+  applyStrictBranchListFilter,
+  resolveWriteBranchOid,
   resolveBranchIdForNonSuperAdmin,
+  loadBranchIdFromUserDoc,
   assignBranchIdForCreate,
   branchDocumentVisible,
+  catalogEntityVisibleForStaff,
   getScopedPatientIds,
   applyPatientIdScopeToQuery,
   patientVisibleForRequest,

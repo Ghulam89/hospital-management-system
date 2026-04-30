@@ -3,6 +3,9 @@ const Role = require('../models/roleModel');
 const permissionCatalog = require('../utils/permissionCatalog');
 const menuPermissionCatalog = require('../utils/menuPermissionCatalog');
 const { normalizeRole } = require('../middleware/auth');
+const { resolveBranchIdForNonSuperAdmin } = require('../utils/branchScope');
+const { isBranchAdmin } = require('../middleware/rbac');
+const { propagateTabsToUsersMatchingRole } = require('../utils/syncUserTabsFromRole');
 
 /** Superadmin may set role.branchId from body; omitempty → global template (`null`). */
 function parseOptionalBranchObjectId(raw) {
@@ -23,7 +26,8 @@ const normalizeKey = (raw) =>
   String(raw || '')
     .trim()
     .toLowerCase()
-    .replace(/\s+/g, '_');
+    .replace(/\s+/g, '_')
+    .replace(/-/g, '_');
 
 const sanitizePermissions = (input) => {
   if (!Array.isArray(input)) return [];
@@ -42,19 +46,56 @@ function isSuperAdmin(user) {
   return normalizeRole(user?.role) === 'superadmin';
 }
 
+/** Role keys branch admins must not list or edit (HQ-only elevated templates). */
+const RESERVED_ELEVATED_ROLE_KEYS = new Set([
+  'superadmin',
+  'super_admin',
+  'administrator',
+  'admin',
+  'full_access',
+]);
+
+function isElevatedRoleKey(rawKey) {
+  return RESERVED_ELEVATED_ROLE_KEYS.has(normalizeKey(rawKey));
+}
+
+/** First word of display name — catches name "admin" with key "4545" (branch templates). */
+function elevatedRoleNameRoot(name) {
+  const s = String(name || '').trim().toLowerCase();
+  if (!s) return '';
+  const first = s.split(/[\s(_-]+/)[0] || '';
+  return first.replace(/[^a-z0-9]/g, '');
+}
+
+function isElevatedRoleNameRootReserved(root) {
+  return root === 'admin' || root === 'administrator' || root === 'superadmin';
+}
+
+/** Roles branch admins must not see or edit (HQ / branch-administrator templates). */
+function isElevatedRoleHiddenFromBranchViewer(roleLike) {
+  if (!roleLike) return false;
+  if (isElevatedRoleKey(roleLike.key)) return true;
+  return isElevatedRoleNameRootReserved(elevatedRoleNameRoot(roleLike.name));
+}
+
+function filterRolesHiddenFromBranchAdmin(req, rows) {
+  if (!Array.isArray(rows)) return [];
+  if (isSuperAdmin(req.user)) return rows;
+  return rows.filter((r) => !isElevatedRoleHiddenFromBranchViewer(r));
+}
+
 /** Branch admins see global templates (branchId null) + roles owned by their branch. Superadmin sees all. */
-function rolesFilterForUser(user) {
-  if (isSuperAdmin(user)) return {};
-  const bid = user?.branchId;
+async function rolesFilterForUser(req) {
+  if (isSuperAdmin(req.user)) return {};
+  const bid = await resolveBranchIdForNonSuperAdmin(req);
   if (!bid) return { branchId: null };
   return { $or: [{ branchId: null }, { branchId: bid }] };
 }
 
-function assertBranchRoleRead(req, roleDoc, res) {
+async function assertBranchRoleRead(req, roleDoc, res) {
   if (isSuperAdmin(req.user)) return true;
-  const bid = req.user?.branchId;
-  const r = normalizeRole(req.user?.role);
-  if (r !== 'administrator' && r !== 'admin') return true;
+  if (!isBranchAdmin(req.user)) return true;
+  const bid = await resolveBranchIdForNonSuperAdmin(req);
   if (!bid) {
     res.status(403).json({ status: 'fail', message: 'Forbidden' });
     return false;
@@ -68,14 +109,13 @@ function assertBranchRoleRead(req, roleDoc, res) {
 }
 
 /** Branch admins may update/delete only non-global roles belonging to their branch. */
-function assertBranchRoleMutate(req, roleDoc, res) {
+async function assertBranchRoleMutate(req, roleDoc, res) {
   if (isSuperAdmin(req.user)) return true;
-  const bid = req.user?.branchId;
-  const r = normalizeRole(req.user?.role);
-  if (r !== 'administrator' && r !== 'admin') {
+  if (!isBranchAdmin(req.user)) {
     res.status(403).json({ status: 'fail', message: 'Forbidden' });
     return false;
   }
+  const bid = await resolveBranchIdForNonSuperAdmin(req);
   if (!bid) {
     res.status(403).json({ status: 'fail', message: 'Branch not assigned' });
     return false;
@@ -104,8 +144,9 @@ const getCatalog = async (req, res) => {
 
 const getRoles = async (req, res) => {
   try {
-    const filter = rolesFilterForUser(req.user);
-    const data = await Role.find(filter).sort({ isSystem: -1, name: 1 }).lean().exec();
+    const filter = await rolesFilterForUser(req);
+    const rows = await Role.find(filter).sort({ isSystem: -1, name: 1 }).lean().exec();
+    const data = filterRolesHiddenFromBranchAdmin(req, rows);
     return res.status(200).json({ status: 'ok', data });
   } catch (err) {
     return res.status(500).json({ status: 'fail', message: err.message });
@@ -118,7 +159,10 @@ const getRoleById = async (req, res) => {
     if (!role) {
       return res.status(404).json({ status: 'fail', message: 'Role not found' });
     }
-    if (!assertBranchRoleRead(req, role, res)) return;
+    if (!isSuperAdmin(req.user) && isElevatedRoleHiddenFromBranchViewer(role)) {
+      return res.status(404).json({ status: 'fail', message: 'Role not found' });
+    }
+    if (!(await assertBranchRoleRead(req, role, res))) return;
     return res.status(200).json({ status: 'ok', data: role });
   } catch (err) {
     return res.status(500).json({ status: 'fail', message: err.message });
@@ -135,15 +179,25 @@ const createRole = async (req, res) => {
     if (!name) {
       return res.status(400).json({ status: 'fail', message: 'Role name is required' });
     }
+
+    if (!isSuperAdmin(req.user) && isElevatedRoleHiddenFromBranchViewer({ key, name })) {
+      return res.status(403).json({
+        status: 'fail',
+        message: 'This role name or key is reserved for super admin only',
+      });
+    }
+
     if (!key || !/^[a-z0-9_-]+$/.test(key)) {
       return res
         .status(400)
         .json({ status: 'fail', message: 'Valid role key is required (lowercase letters, numbers, - and _)' });
     }
 
-    let branchId = req.user?.branchId || null;
+    let branchId = null;
     if (isSuperAdmin(req.user)) {
       branchId = parseOptionalBranchObjectId(req.body.branchId);
+    } else {
+      branchId = await resolveBranchIdForNonSuperAdmin(req);
     }
 
     const created = await Role.create({
@@ -154,6 +208,8 @@ const createRole = async (req, res) => {
       isSystem: false,
       branchId,
     });
+
+    await propagateTabsToUsersMatchingRole(created);
 
     return res.status(200).json({ status: 'ok', data: created });
   } catch (err) {
@@ -172,7 +228,10 @@ const updateRole = async (req, res) => {
     if (role.isSystem) {
       return res.status(400).json({ status: 'fail', message: 'System roles cannot be edited' });
     }
-    if (!assertBranchRoleMutate(req, role, res)) return;
+    if (!isSuperAdmin(req.user) && isElevatedRoleHiddenFromBranchViewer(role)) {
+      return res.status(403).json({ status: 'fail', message: 'Forbidden' });
+    }
+    if (!(await assertBranchRoleMutate(req, role, res))) return;
 
     const name = String(req.body.name || '').trim();
     const description = String(req.body.description || '').trim();
@@ -182,6 +241,9 @@ const updateRole = async (req, res) => {
       return res.status(400).json({ status: 'fail', message: 'Role name is required' });
     }
 
+    if (!isSuperAdmin(req.user) && isElevatedRoleHiddenFromBranchViewer({ key: role.key, name })) {
+      return res.status(403).json({ status: 'fail', message: 'Forbidden' });
+    }
     role.name = name;
     role.description = description;
     role.permissions = permissions;
@@ -189,6 +251,8 @@ const updateRole = async (req, res) => {
       role.branchId = parseOptionalBranchObjectId(req.body.branchId);
     }
     await role.save();
+
+    await propagateTabsToUsersMatchingRole(role);
 
     return res.status(200).json({ status: 'ok', data: role });
   } catch (err) {
@@ -205,7 +269,10 @@ const deleteRole = async (req, res) => {
     if (role.isSystem) {
       return res.status(400).json({ status: 'fail', message: 'System roles cannot be deleted' });
     }
-    if (!assertBranchRoleMutate(req, role, res)) return;
+    if (!isSuperAdmin(req.user) && isElevatedRoleHiddenFromBranchViewer(role)) {
+      return res.status(403).json({ status: 'fail', message: 'Forbidden' });
+    }
+    if (!(await assertBranchRoleMutate(req, role, res))) return;
 
     await Role.deleteOne({ _id: role._id });
     return res.status(200).json({ status: 'ok', message: 'Deleted' });

@@ -42,22 +42,28 @@ const AllAppointments = () => {
   const permUser = getStoredUserForPermissions();
   const canApptUpdate = canMenuAction(permUser, 'appointments', 'update');
   const canApptDelete = canMenuAction(permUser, 'appointments', 'delete');
-  const [searchText, setSearchText] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
+  const [pageSize, setPageSize] = useState(25);
   const [total, setTotal] = useState(0);
   
   const [editModalOpen, setEditModalOpen] = useState(false);
 const [selectedAppointment, setSelectedAppointment] = useState<Appointment | null>(null);
 
   // Enhanced filter state
-  const [filters, setFilters] = useState({
-    dateRange: [moment().subtract(1, 'month'), moment()],
+  const [filters, setFilters] = useState<{
+    dateRange: [moment.Moment | null, moment.Moment | null];
+    status: string;
+    doctorId: string;
+    consultationType: string;
+    searchText: string;
+    mr: string;
+  }>({
+    dateRange: [null, null],
     status: '',
     doctorId: '',
     consultationType: '',
     searchText: '',
-    mr:'',
+    mr: '',
   });
 
   // Fetch doctors list
@@ -154,10 +160,10 @@ const [selectedAppointment, setSelectedAppointment] = useState<Appointment | nul
     }
 
     // Add date range parameters if provided
-    if (filters.dateRange[0]) {
+    if (filters.dateRange?.[0]) {
       params.append('startDate', filters.dateRange[0].format('YYYY-MM-DD'));
     }
-    if (filters.dateRange[1]) {
+    if (filters.dateRange?.[1]) {
       params.append('endDate', filters.dateRange[1].format('YYYY-MM-DD'));
     }
 
@@ -183,10 +189,8 @@ const [selectedAppointment, setSelectedAppointment] = useState<Appointment | nul
   }, []);
 
   useEffect(() => {
-    if (doctors.length > 0 && departments.length > 0) {
-      fetchAppointments();
-    }
-  }, [fetchAppointments, doctors, departments]);
+    fetchAppointments();
+  }, [fetchAppointments]);
 
   const handleEdit = (record) => {
   setSelectedAppointment(record);
@@ -223,7 +227,9 @@ const [selectedAppointment, setSelectedAppointment] = useState<Appointment | nul
 
   // Date change handler
   const handleDateChange = (value, idx) => {
-    const newRange = [...filters.dateRange];
+    const newRange: [moment.Moment | null, moment.Moment | null] = filters.dateRange
+      ? [...filters.dateRange]
+      : [null, null];
     newRange[idx] = value ? moment(value) : null;
     // Ensure end is not before start
     if (idx === 0 && newRange[1] && value && moment(value).isAfter(newRange[1])) {
@@ -245,11 +251,12 @@ const [selectedAppointment, setSelectedAppointment] = useState<Appointment | nul
 
   const handleResetFilters = () => {
     setFilters({
-      dateRange: [moment().subtract(1, 'month'), moment()],
+      dateRange: [null, null],
       status: '',
       doctorId: '',
       consultationType: '',
-      searchText: ''
+      searchText: '',
+      mr: '',
     });
     setCurrentPage(1);
   };
@@ -270,7 +277,10 @@ const [selectedAppointment, setSelectedAppointment] = useState<Appointment | nul
     // For export, we need to fetch all data without pagination
     setLoading(true);
     
-    const exportParams = new URLSearchParams();
+    const exportParams = new URLSearchParams({
+      page: '1',
+      limit: '5000',
+    });
     if (filters.searchText.trim()) {
       exportParams.append('search', filters.searchText.trim());
     }
@@ -283,10 +293,10 @@ const [selectedAppointment, setSelectedAppointment] = useState<Appointment | nul
     if (filters.consultationType) {
       exportParams.append('consultationType', filters.consultationType);
     }
-    if (filters.dateRange[0]) {
+    if (filters.dateRange?.[0]) {
       exportParams.append('startDate', filters.dateRange[0].format('YYYY-MM-DD'));
     }
-    if (filters.dateRange[1]) {
+    if (filters.dateRange?.[1]) {
       exportParams.append('endDate', filters.dateRange[1].format('YYYY-MM-DD'));
     }
 
@@ -548,23 +558,26 @@ const [selectedAppointment, setSelectedAppointment] = useState<Appointment | nul
               </Col>
               
               <Col xs={24} sm={12} md={8} lg={12}>
-                <div style={{ display: 'flex', gap: '8px' }}>
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
                   <Input
                     type="date"
-                    value={filters.dateRange[0]?.format('YYYY-MM-DD') || ''}
+                    value={filters.dateRange?.[0]?.format('YYYY-MM-DD') || ''}
                     onChange={(e) => handleDateChange(e.target.value, 0)}
-                    style={{ flex: 1 }}
+                    style={{ flex: 1, minWidth: '120px' }}
                     max={moment().format('YYYY-MM-DD')}
                   />
                   <span style={{ alignSelf: 'center' }}>to</span>
                   <Input
                     type="date"
-                    value={filters.dateRange[1]?.format('YYYY-MM-DD') || ''}
+                    value={filters.dateRange?.[1]?.format('YYYY-MM-DD') || ''}
                     onChange={(e) => handleDateChange(e.target.value, 1)}
-                    style={{ flex: 1 }}
-                    min={filters.dateRange[0]?.format('YYYY-MM-DD')}
+                    style={{ flex: 1, minWidth: '120px' }}
+                    min={filters.dateRange?.[0]?.format('YYYY-MM-DD')}
                     max={moment().format('YYYY-MM-DD')}
                   />
+                  <span className="text-xs text-body dark:text-bodydark hidden lg:inline">
+                    Leave empty for all dates
+                  </span>
                 </div>
               </Col>
               
@@ -608,9 +621,10 @@ const [selectedAppointment, setSelectedAppointment] = useState<Appointment | nul
               total={total}
               onChange={(page, size) => {
                 setCurrentPage(page);
-                setPageSize(size || 10);
+                setPageSize(size || 25);
               }}
               showSizeChanger
+              pageSizeOptions={[10, 25, 50, 100, 200]}
               showQuickJumper
               showTotal={(total, range) => `${range[0]}-${range[1]} of ${total} items`}
               className="mt-4"

@@ -1,16 +1,38 @@
 import { useNavigate } from 'react-router-dom';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 import { Base_url } from '../../../utils/Base_url';
+import { accountantAssignableRoles, preferredNewAccountantRoleKey } from '../utils/assignableRoles';
+
+const authHeaders = () => {
+  const t = localStorage.getItem('userToken') || '';
+  return t ? { Authorization: `Bearer ${t}` } : {};
+};
 
 const AddAccountant = () => {
   const [gender, setGender] = useState('');
 const [loading, setLoading] = useState(false);
   console.log(gender);
-  
+  /** Must match Roles & Permissions role key exactly (syncs sidebar permissions → user tabs). */
+  const [assignableRoles, setAssignableRoles] = useState<{ key: string; name?: string }[]>([]);
+  const [roleKey, setRoleKey] = useState('accountant');
+
+  useEffect(() => {
+    axios
+      .get(`${Base_url}/apis/role/get`, { headers: authHeaders() })
+      .then((res) => {
+        const roleRows = Array.isArray(res.data?.data) ? res.data.data : [];
+        const list = accountantAssignableRoles(roleRows);
+        setAssignableRoles(list);
+        setRoleKey(preferredNewAccountantRoleKey(roleRows));
+      })
+      .catch(() => {
+        setAssignableRoles([{ key: 'accountant', name: 'Accountant (legacy)' }]);
+      });
+  }, []);
 
   const handleGenderChange = (gender) => {
     setGender(gender);
@@ -69,7 +91,7 @@ const [loading, setLoading] = useState(false);
           email:state.email,
           password:state.password,
           shift:state.shift,
-          role: 'accountant',
+          role: roleKey,
           tabs: [],
     
     
@@ -215,12 +237,32 @@ const [loading, setLoading] = useState(false);
 
                   <div className="w-full">
                     <label className="mb-2.5 block text-black dark:text-white">
+                      Permission role key
+                    </label>
+                    <select
+                      value={roleKey}
+                      onChange={(e) => setRoleKey(e.target.value)}
+                      className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                    >
+                      {assignableRoles.map((r) => (
+                        <option key={r.key} value={r.key}>
+                          {(r.name && r.name.trim()) || r.key}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-xs text-bodydark2 dark:text-meta-10">
+                      Must match the slug from Admin → Roles & Permissions (e.g. accountant_access). Your matrix
+                      permissions apply only when this key equals that role&apos;s key.
+                    </p>
+                  <div className="w-full">
+                    <label className="mb-2.5 block text-black dark:text-white">
                       Shift
                     </label>
-                    
-                    <select onChange={handleInputs}
-                       name='shift'
-                       className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary">
+                    <select
+                      onChange={handleInputs}
+                      name="shift"
+                      className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                    >
                       <option> Select Shift</option>
                       <option>Morning</option>
                       <option> Evening</option>

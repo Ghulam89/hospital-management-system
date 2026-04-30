@@ -81,4 +81,62 @@ const optionalAuth = async (req, res, next) => {
   }
 };
 
-module.exports = { auth, requireRole, requireSuperAdmin, normalizeRole, optionalAuth };
+/** Tabs from user doc (array, legacy object map, or JSON string). */
+function coercePermissionTabs(user) {
+  if (!user?.tabs) return [];
+  const raw = user.tabs;
+  if (Array.isArray(raw)) {
+    return raw.map((t) => String(t).trim()).filter(Boolean);
+  }
+  if (raw && typeof raw === 'object') {
+    return Object.values(raw)
+      .map((t) => String(t).trim())
+      .filter(Boolean);
+  }
+  if (typeof raw === 'string') {
+    try {
+      const p = JSON.parse(raw);
+      if (Array.isArray(p)) return p.map((t) => String(t).trim()).filter(Boolean);
+    } catch {
+      /* ignore */
+    }
+  }
+  return [];
+}
+
+/** True if user has mp.{menuId}.{action} or superadmin / legacy full admin without granular mp.* */
+function hasMpPermission(user, menuId, action) {
+  if (!user) return false;
+  const role = normalizeRole(user.role);
+  if (role === 'superadmin' || role === 'super admin') return true;
+  const tabs = new Set(coercePermissionTabs(user));
+  if (tabs.has(`mp.${menuId}.${action}`)) return true;
+  const legacyFull = ['administrator', 'admin'].includes(role);
+  const usesGranular = [...tabs].some((t) => t.startsWith('mp.'));
+  if (legacyFull && !usesGranular) return true;
+  return false;
+}
+
+const requireMpPermission = (menuId, action) => (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ status: 'fail', message: 'Unauthorized' });
+  }
+  if (!hasMpPermission(req.user, menuId, action)) {
+    return res.status(403).json({
+      status: 'fail',
+      message: 'You do not have permission for this action',
+    });
+  }
+  next();
+};
+
+module.exports = {
+  auth,
+  requireRole,
+  requireSuperAdmin,
+  normalizeRole,
+  optionalAuth,
+  coercePermissionTabs,
+  hasMpPermission,
+  requireMpPermission,
+};

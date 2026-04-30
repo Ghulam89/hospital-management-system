@@ -388,8 +388,9 @@ const Invoice = () => {
   const [selectedPatient, setSelectedPatient] = useState<PatientOption | null>(null);
 
   const [filters, setFilters] = useState({
-     startDate: moment().startOf('month'),
-       endDate: moment(),
+    // No default date range — otherwise older invoices (e.g. 2023) never appear until user clears dates.
+    startDate: null as unknown as moment.Moment,
+    endDate: null as unknown as moment.Moment,
     department: '',
     paymentMode: '',
     doctor: '',
@@ -405,8 +406,8 @@ const Invoice = () => {
     maxAmount: '',
     paymentDateStart: '',
     paymentDateEnd: '',
-        dateRange: [moment().startOf('month'), moment()],
-        discountPercent: '',
+    dateRange: [] as moment.Moment[],
+    discountPercent: '',
     
   });
 
@@ -1989,12 +1990,9 @@ const Invoice = () => {
                     <Button
                       onClick={() => {
                         setFilters({
-                          dateRange: [
-                            moment().startOf('month'),
-                            moment().endOf('day'),
-                          ],
-                          startDate: moment().startOf('month'),
-                          endDate: moment(),
+                          dateRange: [],
+                          startDate: null as unknown as moment.Moment,
+                          endDate: null as unknown as moment.Moment,
                           department: '',
                           paymentMode: '',
                           doctor: '',

@@ -85,53 +85,66 @@ const addExcelpharmItem = async (req, res) => {
   }
 };
 
-/** Global catalog rows use branchId null; branch rows hold stock. Merge so POS shows one row per product with branch qty when matched by barcode or name+price. */
-function mergeCatalogBranchPharmItems(rows, branchOid) {
-  const bid = branchOid ? String(branchOid) : '';
-  const plain = rows.map((r) => (typeof r.toObject === 'function' ? r.toObject({ virtuals: true }) : { ...r }));
-
-  const branchRows = plain.filter((r) => r.branchId != null && String(r.branchId) === bid);
-  const catalogRows = plain.filter((r) => r.branchId == null || r.branchId === undefined);
+/** Global catalog rows use branchId null; branch rows hold stock. Union keys across all fetched rows; overlay quantities for `branchOid` only. */
+function mergeUnifiedCatalogBranchStock(rows, branchOid) {
+  const bid = branchOid ? String(branchOid) : "";
+  const plain = rows.map((r) => (typeof r.toObject === "function" ? r.toObject({ virtuals: true }) : { ...r }));
 
   const keyOf = (r) => {
-    const bc = r.barcode != null ? String(r.barcode).trim() : '';
+    const bc = r.barcode != null ? String(r.barcode).trim() : "";
     if (bc) return `bc:${bc.toLowerCase()}`;
-    const name = String(r.name || '').trim().toLowerCase();
+    const name = String(r.name || "").trim().toLowerCase();
     const rp = Number(r.retailPrice) || 0;
     return `nm:${name}:${rp}`;
   };
 
-  const branchByKey = new Map();
-  for (const br of branchRows) {
-    branchByKey.set(keyOf(br), br);
+  const masterByKey = new Map();
+  const ownByKey = new Map();
+  const fallbackByKey = new Map();
+
+  for (const r of plain) {
+    const k = keyOf(r);
+    const isMaster = r.branchId == null || r.branchId === undefined;
+    if (isMaster) {
+      masterByKey.set(k, r);
+      continue;
+    }
+    if (bid && String(r.branchId) === bid) {
+      if (!ownByKey.has(k)) ownByKey.set(k, r);
+      continue;
+    }
+    if (!fallbackByKey.has(k)) fallbackByKey.set(k, r);
   }
 
+  const allKeys = new Set([...masterByKey.keys(), ...ownByKey.keys(), ...fallbackByKey.keys()]);
   const out = [];
-  const branchSeen = new Set();
 
-  for (const br of branchRows) {
-    const k = keyOf(br);
-    if (branchSeen.has(k)) continue;
-    branchSeen.add(k);
-    out.push({
-      ...br,
-      sellablePharmItemId: String(br._id),
-      catalogMasterOnly: false,
-      catalogMasterId: null,
-    });
-  }
+  for (const k of allKeys) {
+    const own = ownByKey.get(k);
+    if (own) {
+      const master = masterByKey.get(k);
+      out.push({
+        ...own,
+        sellablePharmItemId: String(own._id),
+        catalogMasterOnly: false,
+        catalogMasterId: master ? String(master._id) : null,
+      });
+      continue;
+    }
+    const master = masterByKey.get(k);
+    const fb = fallbackByKey.get(k);
+    const template = master ? { ...master } : fb ? { ...fb } : null;
+    if (!template) continue;
 
-  for (const cat of catalogRows) {
-    const k = keyOf(cat);
-    if (branchByKey.has(k)) continue;
-    const plainCat = { ...cat };
+    const plainCat = { ...template };
     plainCat.availableQuantity = 0;
     plainCat.expiredQuantity = plainCat.expiredQuantity || 0;
     out.push({
       ...plainCat,
+      _id: master ? master._id : template._id,
       sellablePharmItemId: null,
-      catalogMasterOnly: true,
-      catalogMasterId: String(cat._id),
+      catalogMasterOnly: !master,
+      catalogMasterId: master ? String(master._id) : String(template._id),
     });
   }
 
@@ -143,17 +156,75 @@ function mergeCatalogBranchPharmItems(rows, branchOid) {
   return out;
 }
 
+/**
+ * Single catalog view when no branch is selected (e.g. super admin): one row per product.
+ * Prefers global master (branchId null/missing); otherwise any branch copy as display template.
+ * Quantities are 0 here — pick a branch in the header to see that branch's stock.
+ */
+function dedupePharmCatalogAllBranches(rows) {
+  const plain = rows.map((r) => (typeof r.toObject === 'function' ? r.toObject({ virtuals: true }) : { ...r }));
+
+  const keyOf = (r) => {
+    const bc = r.barcode != null ? String(r.barcode).trim() : '';
+    if (bc) return `bc:${bc.toLowerCase()}`;
+    const name = String(r.name || '').trim().toLowerCase();
+    const rp = Number(r.retailPrice) || 0;
+    return `nm:${name}:${rp}`;
+  };
+
+  const groups = new Map();
+  for (const r of plain) {
+    const k = keyOf(r);
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(r);
+  }
+
+  const out = [];
+  for (const [, group] of groups) {
+    const master = group.find((r) => r.branchId == null || r.branchId === undefined);
+    const template = master || group[0];
+    const plainRow = { ...template };
+    plainRow.availableQuantity = 0;
+    plainRow.expiredQuantity = plainRow.expiredQuantity || 0;
+    const masterId = master ? String(master._id) : null;
+
+    out.push({
+      ...plainRow,
+      _id: master ? master._id : template._id,
+      sellablePharmItemId: null,
+      catalogMasterOnly: !master,
+      catalogMasterId: masterId || String(template._id),
+    });
+  }
+
+  out.sort((a, b) => {
+    const ta = new Date(a.createdAt || 0).getTime();
+    const tb = new Date(b.createdAt || 0).getTime();
+    return tb - ta;
+  });
+  return out;
+}
+
+/** Branch OID used to attach stock when merging global catalog rows with branch inventory (includes superadmin ?branchId). */
+async function resolveCatalogMergeBranchOid(req) {
+  const fromStaff = await resolveBranchIdForNonSuperAdmin(req);
+  if (fromStaff) return fromStaff;
+  if (!req?.user) return null;
+  const role = normalizeRole(req.user.role);
+  if (role === "superadmin" || role === "super admin") {
+    const bid = req.query.branchId;
+    if (bid && mongoose.Types.ObjectId.isValid(String(bid))) {
+      return new mongoose.Types.ObjectId(String(bid));
+    }
+  }
+  return null;
+}
+
 function buildPharmItemFilters(req, catalogSync, branchQ) {
   const filters = [];
 
-  if (catalogSync && branchQ && branchQ.branchId) {
-    filters.push({
-      $or: [
-        { branchId: branchQ.branchId },
-        { branchId: null },
-        { branchId: { $exists: false } },
-      ],
-    });
+  if (catalogSync) {
+    /** Catalog list is merged/deduped in controller; keep Mongo query broad (search/status/category only). */
   } else if (branchQ && branchQ.branchId) {
     filters.push({ branchId: branchQ.branchId });
   }
@@ -245,6 +316,19 @@ const getpharmItems = async (req, res) => {
     const catalogSync = ['1', 'true', 'yes'].includes(String(req.query.catalog || '').toLowerCase());
     const branchQ = await mergeBranchScopedQuery(req);
 
+    if (catalogSync && !req.user) {
+      return res.status(200).json({
+        status: 'ok',
+        data: [],
+        search,
+        page,
+        count: 0,
+        totalPages: 0,
+        currentPage: page,
+        limit,
+      });
+    }
+
     /** Duplicate barcode scan — keep legacy aggregation path (no catalog merge here). */
     if (req.query.duplicates) {
       let baseQuery = buildPharmItemFilters(req, false, branchQ);
@@ -306,12 +390,27 @@ const getpharmItems = async (req, res) => {
     }
 
     const baseQuery = buildPharmItemFilters(req, catalogSync, branchQ);
-    const branchOid = catalogSync && req.user ? await resolveBranchIdForNonSuperAdmin(req) : null;
-    const useMerge = catalogSync && branchOid;
+    const branchOid = catalogSync && req.user ? await resolveCatalogMergeBranchOid(req) : null;
 
     const populatePaths = ['pharmManufacturerId', 'pharmSupplierId', 'pharmCategoryId', 'pharmRackId'];
 
-    if (useMerge) {
+    if (catalogSync && req.user) {
+      const role = normalizeRole(req.user.role);
+      const isSuper = role === 'superadmin' || role === 'super admin';
+
+      if (!branchOid && !isSuper) {
+        return res.status(200).json({
+          status: 'ok',
+          data: [],
+          search,
+          page,
+          count: 0,
+          totalPages: 0,
+          currentPage: page,
+          limit,
+        });
+      }
+
       const MAX_FETCH = 2500;
       const raw = await PharmItem.find(baseQuery)
         .sort({ createdAt: -1 })
@@ -319,7 +418,10 @@ const getpharmItems = async (req, res) => {
         .limit(MAX_FETCH)
         .exec();
 
-      const merged = mergeCatalogBranchPharmItems(raw, branchOid);
+      const merged = branchOid
+        ? mergeUnifiedCatalogBranchStock(raw, branchOid)
+        : dedupePharmCatalogAllBranches(raw);
+
       const totalMerged = merged.length;
       const data = merged.slice((page - 1) * limit, page * limit);
 

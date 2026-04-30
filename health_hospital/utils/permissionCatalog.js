@@ -47,6 +47,13 @@ module.exports = [
     description: 'Pharmacy counter, stock, and dispensing areas.',
   },
   {
+    key: 'pharmacyReferenceCatalog',
+    label: 'Pharmacy reference catalog',
+    group: 'Pharmacy',
+    description:
+      'Suppliers, manufacturers, and item categories are hospital-wide (global masters visible at every branch). Fine-grained CRUD uses Roles matrix keys mp.pharm_suppliers.*, mp.pharm_manufacturers.*, mp.pharm_categories.*.',
+  },
+  {
     key: 'pharmacyOrders',
     label: 'Pharmacy orders',
     group: 'Pharmacy',
@@ -75,6 +82,13 @@ module.exports = [
     label: 'Edit expenses',
     group: 'Finance & billing',
     description: 'Manage expense categories and entries.',
+  },
+  {
+    key: 'expenseCategoriesCatalog',
+    label: 'Expense categories catalog',
+    group: 'Finance & billing',
+    description:
+      'Expense category master list is shared across branches. Assign create/update/delete via Roles matrix mp.expense_categories.*.',
   },
   {
     key: 'viewFinancialReports',

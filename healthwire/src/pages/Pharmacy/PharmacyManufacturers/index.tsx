@@ -7,10 +7,18 @@ import Swal from 'sweetalert2';
 import { Base_url } from '../../../utils/Base_url';
 import AddPharmacyManufacturers from './AddPharmacyManufacturers';
 import { canMenuAction, getStoredUserForPermissions } from '../../../utils/permissions';
+import { getUserDataFromStorage, isSuperAdminRole, buildAxiosBranchScopedParams } from '../../../utils/branchScope';
 
 const { Search } = Input;
 
 const PharmacyManufacturers = () => {
+  const catalogUser = getUserDataFromStorage();
+  const myBranchId = catalogUser?.branchId ? String(catalogUser.branchId) : '';
+  const canMutateCatalogRow = (rec) => {
+    if (isSuperAdminRole(catalogUser?.role)) return true;
+    if (rec.branchId == null || rec.branchId === '') return false;
+    return myBranchId !== '' && String(rec.branchId) === myBranchId;
+  };
   const permUser = getStoredUserForPermissions();
   const canPmCreate = canMenuAction(permUser, 'pharm_manufacturers', 'create');
   const canPmUpdate = canMenuAction(permUser, 'pharm_manufacturers', 'update');
@@ -79,7 +87,7 @@ const PharmacyManufacturers = () => {
       width: 120,
       render: (_, record) => (
         <Space size="small">
-          {canPmUpdate ? (
+          {canPmUpdate && canMutateCatalogRow(record) ? (
             <Button
               type="text"
               icon={<EditOutlined className="text-blue-500" />}
@@ -87,7 +95,7 @@ const PharmacyManufacturers = () => {
               title="Edit Manufacturer"
             />
           ) : null}
-          {canPmDelete ? (
+          {canPmDelete && canMutateCatalogRow(record) ? (
             <Button
               type="text"
               icon={<DeleteOutlined className="text-red-500" />}
@@ -103,8 +111,13 @@ const PharmacyManufacturers = () => {
   const fetchManufacturers = async (page, search = '') => {
     try {
       setLoading(true);
-      const url = `${Base_url}/apis/pharmManufacturer/get?page=${page}&limit=10&search=${encodeURIComponent(search)}`;
-      const res = await axios.get(url);
+      const params = new URLSearchParams({
+        page: String(page),
+        limit: '10',
+        search: search || '',
+        ...buildAxiosBranchScopedParams(),
+      });
+      const res = await axios.get(`${Base_url}/apis/pharmManufacturer/get?${params.toString()}`);
       
       setManufacturers(res.data.data || []);
       setTotalPages(res.data.totalPages || 1);
@@ -188,7 +201,7 @@ const PharmacyManufacturers = () => {
   return (
     <div className="rounded-sm border border-stroke bg-white px-5 pt-6 pb-2.5 shadow-default dark:border-strokedark dark:bg-boxdark sm:px-7.5 xl:pb-1">
       <Breadcrumb pageName="Pharmacy Manufacturers" />
-
+      
       <AddPharmacyManufacturers
         isModalOpen={isModalOpen}
         setIsModalOpen={handleModalClose}

@@ -7,6 +7,7 @@ import {
   getSuperadminSelectedBranchId,
   mergeAdminIdIntoAxiosParams,
   mergeBranchIdIntoAxiosParams,
+  mergeBranchScopeIntoRequestUrl,
   shouldSuggestBranchIdQuery,
 } from './utils/branchScope';
 import { Base_url } from './utils/Base_url';
@@ -37,6 +38,7 @@ axios.interceptors.request.use((config) => {
       if (branchId) mergeBranchIdIntoAxiosParams(config, branchId);
     }
     mergeAdminIdIntoAxiosParams(config);
+    mergeBranchScopeIntoRequestUrl(config);
   } catch {
     /* ignore */
   }

@@ -8,6 +8,8 @@ const {
   applyPatientIdScopeToQuery,
   patientVisibleForRequest,
   resolveBranchIdForNonSuperAdmin,
+  applyStrictBranchListFilter,
+  branchDocumentVisible,
 } = require("../utils/branchScope");
 
 // 1. Create Detail
@@ -76,30 +78,38 @@ const addDetail = async (req, res) => {
     }
 
 
-    const checkNo = await Token.findOne({ tokenNumber: req.body.tokenNumber, tokenDate:req.body.tokenDate, doctorId: req.body.doctorId,  });
+    const role = normalizeRole(req.user?.role);
+    let branchIdForToken = req.body.branchId;
+    if (role === "superadmin") {
+      const raw = branchIdForToken || req.query?.branchId;
+      if (raw != null && raw !== "" && mongoose.Types.ObjectId.isValid(String(raw))) {
+        branchIdForToken = new mongoose.Types.ObjectId(String(raw));
+      } else {
+        branchIdForToken = undefined;
+      }
+    } else {
+      branchIdForToken = await resolveBranchIdForNonSuperAdmin(req);
+    }
+
+    const dupQuery = {
+      tokenNumber: req.body.tokenNumber,
+      tokenDate: req.body.tokenDate,
+      doctorId: req.body.doctorId,
+    };
+    if (branchIdForToken) {
+      dupQuery.branchId = branchIdForToken;
+    }
+
+    const checkNo = await Token.findOne(dupQuery);
 
     if (checkNo) {
       return res
         .status(500)
         .json({ status: "fail", message: "Token number already register!" });
     }
-    else {
-      const role = normalizeRole(req.user?.role);
-      let branchId = req.body.branchId;
-      if (role === "superadmin") {
-        const raw = branchId || req.query?.branchId;
-        if (raw != null && raw !== "" && mongoose.Types.ObjectId.isValid(String(raw))) {
-          branchId = new mongoose.Types.ObjectId(String(raw));
-        } else {
-          branchId = undefined;
-        }
-      } else {
-        branchId = await resolveBranchIdForNonSuperAdmin(req);
-      }
 
-      const Detail = await Token.create({ ...req.body, branchId });
-      return res.status(200).json({ status: "ok", data: Detail });
-    }
+    const Detail = await Token.create({ ...req.body, branchId: branchIdForToken });
+    return res.status(200).json({ status: "ok", data: Detail });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -113,8 +123,12 @@ const addDetail = async (req, res) => {
 const getDetails = async (req, res) => {
   try {
     var search = req.query.search || "";
-    var page = req.query.page || "1";
-    const limit = 20;
+    let page = parseInt(String(req.query.page || "1"), 10);
+    let limit = parseInt(String(req.query.limit != null ? req.query.limit : "20"), 10);
+    if (!Number.isFinite(page) || page < 1) page = 1;
+    if (!Number.isFinite(limit) || limit < 1) limit = 20;
+    const TOKEN_LIST_MAX_LIMIT = 5000;
+    if (limit > TOKEN_LIST_MAX_LIMIT) limit = TOKEN_LIST_MAX_LIMIT;
 
     let query = {};
 
@@ -148,6 +162,20 @@ const getDetails = async (req, res) => {
       };
     }
 
+    const branchResult = await applyStrictBranchListFilter(req, query);
+    if (branchResult === "empty") {
+      return res.status(200).json({
+        status: "ok",
+        data: [],
+        search,
+        page,
+        count: 0,
+        totalPages: 0,
+        currentPage: page,
+        limit
+      });
+    }
+
     const scopeResult = await applyPatientIdScopeToQuery(req, query);
     if (scopeResult === "empty") {
       return res.status(200).json({
@@ -164,7 +192,7 @@ const getDetails = async (req, res) => {
 
     const Details = await Token.find(query).sort({createdAt:-1})
       .populate(['doctorId', 'patientId'])
-      .limit(limit * 1)
+      .limit(limit)
       .skip((page - 1) * limit)
       .exec();
 
@@ -214,6 +242,19 @@ const getTokensOpdReport = async (req, res) => {
       filter.tokenDate = {};
       if (startDate) filter.tokenDate.$gte = new Date(startDate);
       if (endDate) filter.tokenDate.$lte = new Date(endDate);
+    }
+
+    const branchResult = await applyStrictBranchListFilter(req, filter);
+    if (branchResult === "empty") {
+      return res.status(200).json({
+        status: 'ok',
+        page,
+        limit,
+        totalAppointments: 0,
+        totalPages: 0,
+        topDoctor: null,
+        data: [],
+      });
     }
 
     const scopeResult = await applyPatientIdScopeToQuery(req, filter);
@@ -322,6 +363,18 @@ const getDoctorsWithTokenCount = async (req, res) => {
       if (endDate) appointmentFilter.tokenDate.$lte = new Date(endDate);
     }
 
+    const branchResult = await applyStrictBranchListFilter(req, appointmentFilter);
+    if (branchResult === "empty") {
+      return res.status(200).json({
+        status: 'ok',
+        page,
+        limit,
+        totalDoctors: 0,
+        totalPages: 0,
+        data: [],
+      });
+    }
+
     const scopeResult = await applyPatientIdScopeToQuery(req, appointmentFilter);
     if (scopeResult === "empty") {
       return res.status(200).json({
@@ -389,9 +442,18 @@ const getUnassignedTokenList = async (req, res) => {
   try {
     const { tokenDate, doctorId } = req.query;
 
-    // Find already booked tokens for the given date and doctor
+    const bookedQuery = { tokenDate, doctorId };
+    const branchResult = await applyStrictBranchListFilter(req, bookedQuery);
+    if (branchResult === "empty") {
+      return res.status(403).json({
+        status: "fail",
+        message: "Branch could not be resolved for this user",
+      });
+    }
+
+    // Find already booked tokens for the given date and doctor (same branch when scoped)
     const bookedTokens = await Token.find(
-      { tokenDate, doctorId },
+      bookedQuery,
       'tokenNumber' // Only return tokenNumber field
     ).sort({createdAt:-1});
 
@@ -425,6 +487,9 @@ const getDetailById = async (req, res) => {
     if (!Detail) {
       return res.status(404).json({ status: "fail", message: "Detail not found" });
     }
+    if (!(await branchDocumentVisible(req, Detail.branchId))) {
+      return res.status(404).json({ status: "fail", message: "Detail not found" });
+    }
     if (Detail.patientId && !(await patientVisibleForRequest(req, Detail.patientId))) {
       return res.status(404).json({ status: "fail", message: "Detail not found" });
     }
@@ -440,6 +505,9 @@ const updateDetail = async (req, res) => {
     let id = req.params.id;
     let getImage = await Token.findById(id);
     if (!getImage) {
+      return res.status(404).json({ status: "fail", message: "Detail not found" });
+    }
+    if (!(await branchDocumentVisible(req, getImage.branchId))) {
       return res.status(404).json({ status: "fail", message: "Detail not found" });
     }
     if (getImage.patientId && !(await patientVisibleForRequest(req, getImage.patientId))) {
@@ -466,6 +534,9 @@ const deleteDetail = async (req, res) => {
     const id = req.params.id;
     const row = await Token.findById(id);
     if (!row) {
+      return res.status(404).json({ status: "fail", message: "Detail not found" });
+    }
+    if (!(await branchDocumentVisible(req, row.branchId))) {
       return res.status(404).json({ status: "fail", message: "Detail not found" });
     }
     if (row.patientId && !(await patientVisibleForRequest(req, row.patientId))) {

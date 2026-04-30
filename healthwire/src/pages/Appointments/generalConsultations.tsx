@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Calendar, momentLocalizer } from 'react-big-calendar';
 import moment from 'moment';
 import 'react-big-calendar/lib/css/react-big-calendar.css';
@@ -81,7 +81,9 @@ interface Appointment {
   startTime: string;
   endTime: string;
   consultationType: string;
-  status: string;
+  /** Legacy / unused on API — real field is appointmentStatus */
+  status?: string;
+  appointmentStatus?: string;
 }
 
 interface Token {
@@ -104,7 +106,9 @@ interface Token {
   createdAt: string;
   updatedAt: string;
   __v: number;
-  tokenStatus: string;
+  tokenStatus?: string;
+  /** Persisted field name in Mongo (backend typo). */
+  tokenSatus?: string;
 }
 
 interface Event {
@@ -120,6 +124,55 @@ interface Event {
   tokenNumber?: string;
   doctorName?: string;
   appointmentStatus?: string;
+}
+
+function appointmentStatusDisplay(a: Appointment): string {
+  return String(a.appointmentStatus ?? a.status ?? '').trim();
+}
+
+/** Calendar colours + optional status filter use lowercase union values. */
+function mapAppointmentToCalendarStatus(
+  raw: string,
+): NonNullable<Event['status']> {
+  const s = raw.trim().toLowerCase().replace(/\s+/g, '');
+  if (s === 'checked-out' || s === 'checkedout' || s === 'completed')
+    return 'completed';
+  if (s === 'checked-in' || s === 'checkedin' || s === 'engaged')
+    return 'checked-in';
+  if (s === 'no-show' || s === 'noshow') return 'no-show';
+  if (s === 'cancelled' || s === 'canceled') return 'cancelled';
+  return 'scheduled';
+}
+
+function tokenStatusDisplay(t: Token): string {
+  return String(t.tokenSatus ?? t.tokenStatus ?? '').trim();
+}
+
+/** Avoid Invalid Date when appointmentDate is ISO (e.g. ...T00:00:00.000Z). */
+function appointmentCalendarRange(a: Appointment): {
+  start: Date;
+  end: Date;
+} | null {
+  const day = moment(a.appointmentDate);
+  if (!day.isValid()) return null;
+  const dayStr = day.format('YYYY-MM-DD');
+  const startM = moment(`${dayStr} ${a.startTime}`, 'YYYY-MM-DD h:mm A', true);
+  const endM = moment(`${dayStr} ${a.endTime}`, 'YYYY-MM-DD h:mm A', true);
+  if (!startM.isValid() || !endM.isValid()) return null;
+  return { start: startM.toDate(), end: endM.toDate() };
+}
+
+function normalizedStatusKey(raw: string): string {
+  return raw.trim().toLowerCase().replace(/[\s-]+/g, '');
+}
+
+/** Only Edit modal “Completed” — checked-out / cancelled / no-show still listed & counted as remaining. */
+function isCompletedAppointmentStatus(a: Appointment): boolean {
+  return normalizedStatusKey(appointmentStatusDisplay(a)) === 'completed';
+}
+
+function isCompletedTokenStatus(t: Token): boolean {
+  return normalizedStatusKey(tokenStatusDisplay(t)) === 'completed';
 }
 
 const GeneralConsultations: React.FC = () => {
@@ -161,21 +214,74 @@ const GeneralConsultations: React.FC = () => {
   const [view, setView] = useState('week');
   const [tokenStatusCounts, setTokenStatusCounts] = useState({
     scheduled: 0,
+    checkedIn: 0,
     completed: 0,
     cancelled: 0,
   });
 
+  /** Sidebar total = loaded rows excluding status “Completed” only (same cap as fetch limit). */
+  const appointmentTotalRemainingExCompleted = useMemo(
+    () =>
+      totalAppointment.filter((a) => !isCompletedAppointmentStatus(a)).length,
+    [totalAppointment],
+  );
+
+  const tokenTotalRemainingExCompleted = useMemo(
+    () => totalTokens.filter((t) => !isCompletedTokenStatus(t)).length,
+    [totalTokens],
+  );
+
+  /** Sidebar queue — hide only completed; checked-out / cancelled / no-show remain. */
+  const recentAppointmentsList = useMemo(() => {
+    return [...totalAppointment]
+      .filter((a) => !isCompletedAppointmentStatus(a))
+      .sort(
+        (a, b) =>
+          new Date(b.appointmentDate).getTime() -
+          new Date(a.appointmentDate).getTime(),
+      );
+  }, [totalAppointment]);
+
+  const recentTokensList = useMemo(() => {
+    return [...totalTokens]
+      .filter((t) => !isCompletedTokenStatus(t))
+      .sort(
+        (a, b) =>
+          new Date(b.tokenDate).getTime() - new Date(a.tokenDate).getTime(),
+      );
+  }, [totalTokens]);
+
+  const recentAppointmentRows = useMemo(() => {
+    if (currentView === 'doctor' && selectedDoctor) {
+      return recentAppointmentsList.filter(
+        (a) => a.doctorId?._id === selectedDoctor,
+      );
+    }
+    return recentAppointmentsList;
+  }, [recentAppointmentsList, currentView, selectedDoctor]);
+
+  const recentTokenRows = useMemo(() => {
+    if (currentView === 'doctor' && selectedDoctor) {
+      return recentTokensList.filter(
+        (t) => t.doctorId?._id === selectedDoctor,
+      );
+    }
+    return recentTokensList;
+  }, [recentTokensList, currentView, selectedDoctor]);
+
   const fetchTokenData = async () => {
     try {
-      const response = await axios.get(`${Base_url}/apis/token/get`);
-      const tokens = response.data.data;
+      const response = await axios.get(`${Base_url}/apis/token/get`, {
+        params: { page: 1, limit: 5000 },
+      });
+      const tokens = response.data.data ?? [];
       setTotalTokens(tokens);
 
       // Calculate token status counts
       const counts = {
         scheduled: tokens.filter((t: Token) => t.tokenSatus === 'Scheduled')
           .length,
-        CheckIn: tokens.filter((t: Token) => t.tokenSatus === 'Checked-in')
+        checkedIn: tokens.filter((t: Token) => t.tokenSatus === 'Checked-in')
           .length,
         completed: tokens.filter((t: Token) => t.tokenSatus === 'Completed')
           .length,
@@ -205,7 +311,7 @@ const GeneralConsultations: React.FC = () => {
           title: `Token ${token?.tokenNumber} - ${token?.patientId?.name}`,
           start: startDateTime,
           end: endDateTime,
-          resourceId: token.doctorId?._id,
+          resourceId: String(token.doctorId?._id ?? ''),
           type: 'token',
           patientName: token.patientId?.name,
           patientId: token.patientId?.mr,
@@ -247,37 +353,35 @@ const GeneralConsultations: React.FC = () => {
 
   const fetchDoctorAppointmentData = async () => {
     try {
-      const response = await axios.get(`${Base_url}/apis/appointment/get`);
-      const appointmentData = response?.data?.data;
+      const response = await axios.get(`${Base_url}/apis/appointment/get`, {
+        params: { page: 1, limit: 5000 },
+      });
+      const appointmentData = response?.data?.data ?? [];
       setTotalAppointment(appointmentData);
 
-      const appointmentEvents = appointmentData.map(
-        (appointment: Appointment) => {
-          const start = moment(
-            `${appointment.appointmentDate} ${appointment.startTime}`,
-            'YYYY-MM-DD h:mm A'
-          ).toDate();
+      const appointmentEvents = appointmentData
+        .map((appointment: Appointment) => {
+          const range = appointmentCalendarRange(appointment);
+          if (!range) return null;
 
-          const end = moment(
-            `${appointment.appointmentDate} ${appointment.endTime}`,
-            'YYYY-MM-DD h:mm A'
-          ).toDate();
+          const label =
+            appointmentStatusDisplay(appointment) || 'Scheduled';
 
           return {
             id: appointment._id,
             title: `${appointment.patientId.name}`,
-            start,
-            end,
-            resourceId: appointment.doctorId._id,
-            type: 'appointment',
+            start: range.start,
+            end: range.end,
+            resourceId: String(appointment.doctorId._id),
+            type: 'appointment' as const,
             patientName: appointment.patientId.name,
             patientId: appointment.patientId.mr,
-            status: appointment.status?.toLowerCase(),
+            status: mapAppointmentToCalendarStatus(label),
             doctorName: appointment.doctorId.name,
-            appointmentStatus: appointment.status,
+            appointmentStatus: label,
           };
-        },
-      );
+        })
+        .filter(Boolean) as Event[];
 
       setEvents((prev) => [
         ...prev.filter((e) => e.type !== 'appointment'),
@@ -366,7 +470,7 @@ const GeneralConsultations: React.FC = () => {
       const currentShowMenu = showMenu;
       
       await axios.put(`${Base_url}/apis/token/update/${id}`, {
-        tokenStatus: status,
+        tokenSatus: status,
       });
       
       toast.success('Token status updated successfully!');
@@ -891,10 +995,11 @@ const GeneralConsultations: React.FC = () => {
 
               <div className="text-center dark:text-white font-bold text-lg mb-2">
                 Total {consultationType === 'token' ? 'Tokens' : 'Appointments'}
+               
                 :{' '}
                 {consultationType === 'token'
-                  ? totalTokens.length
-                  : totalAppointment.length}
+                  ? tokenTotalRemainingExCompleted
+                  : appointmentTotalRemainingExCompleted}
               </div>
 
               {selectedDoctor && (
@@ -906,21 +1011,27 @@ const GeneralConsultations: React.FC = () => {
 
             {/* Token/Appointment List */}
             <div className="bg-white dark:bg-black dark:text-white p-4 shadow-sm rounded-lg border border-primary">
-              <h3 className="font-medium dark:text-white text-lg mb-4">
+              <h3 className="font-medium dark:text-white text-lg mb-1">
                 {consultationType === 'token'
                   ? 'Recent Tokens'
                   : 'Recent Appointments'}
               </h3>
+              
               <div className="space-y-3 overflow-y-auto h-72 pr-2">
-                {(
-                  consultationType === 'token'
-                    ? (currentView === 'doctor' && selectedDoctor
-                        ? totalTokens.filter((item) => item.doctorId?._id === selectedDoctor)
-                        : totalTokens)
-                    : (currentView === 'doctor' && selectedDoctor
-                        ? totalAppointment.filter((item) => item.doctorId?._id === selectedDoctor)
-                        : totalAppointment)
-                )?.map((item) => (
+                {(consultationType === 'token'
+                  ? recentTokenRows
+                  : recentAppointmentRows
+                ).length === 0 ? (
+                  <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-8 px-2">
+                    {consultationType === 'token'
+                      ? 'No active tokens for this view.'
+                      : 'No active appointments for this view.'}
+                  </p>
+                ) : (
+                  (consultationType === 'token'
+                    ? recentTokenRows
+                    : recentAppointmentRows
+                  ).map((item) => (
                   <div
                     key={item._id}
                     className="flex justify-between items-center p-3 rounded-lg hover:bg-gray-50 cursor-pointer border border-gray-100"
@@ -955,22 +1066,48 @@ const GeneralConsultations: React.FC = () => {
                     </div>
 
                     <div className="flex items-center gap-2">
-                      <div className={`rounded-full px-2 py-1 text-xs whitespace-nowrap font-medium ${
-  consultationType === 'token'
-    ? (item as Token).tokenStatus === 'Scheduled'
-      ? 'bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-100'
-      : (item as Token).tokenStatus === 'Completed'
-      ? 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-100'
-      : 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-100'
-    : (item as Appointment).status === 'Scheduled'
-    ? 'bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-100'
-    : (item as Appointment).status === 'completed'
-    ? 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-100'
-    : 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-100'
-}`}>
+                      <div
+                        className={`rounded-full px-2 py-1 text-xs whitespace-nowrap font-medium ${
+                          consultationType === 'token'
+                            ? (() => {
+                                const ts = tokenStatusDisplay(item as Token);
+                                if (ts === 'Scheduled')
+                                  return 'bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-100';
+                                if (ts === 'Completed')
+                                  return 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-100';
+                                if (ts === 'Checked-in')
+                                  return 'bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-100';
+                                if (ts === 'Cancelled')
+                                  return 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-100';
+                                return 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-100';
+                              })()
+                            : (() => {
+                                const st = appointmentStatusDisplay(
+                                  item as Appointment,
+                                ).toLowerCase();
+                                if (st === 'scheduled')
+                                  return 'bg-yellow-100 dark:bg-yellow-900 text-yellow-800 dark:text-yellow-100';
+                                if (
+                                  st === 'checked-out' ||
+                                  st === 'completed'
+                                )
+                                  return 'bg-green-100 dark:bg-green-900 text-green-800 dark:text-green-100';
+                                if (
+                                  st === 'checked-in' ||
+                                  st === 'engaged' ||
+                                  st === 'confirmed'
+                                )
+                                  return 'bg-orange-100 dark:bg-orange-900 text-orange-800 dark:text-orange-100';
+                                if (st === 'cancelled' || st === 'no-show')
+                                  return 'bg-red-100 dark:bg-red-900 text-red-800 dark:text-red-100';
+                                return 'bg-gray-100 dark:bg-gray-700 text-gray-800 dark:text-gray-100';
+                              })()
+                        }`}
+                      >
                         {consultationType === 'token'
-                          ? (item as Token).tokenStatus
-                          : (item as Appointment).appointmentStatus}
+                          ? tokenStatusDisplay(item as Token) || '—'
+                          : appointmentStatusDisplay(item as Appointment) ||
+                            '—'}
                       </div>
                       <div>
                         <button
@@ -1104,7 +1241,8 @@ const GeneralConsultations: React.FC = () => {
                       </div>
                     </div>
                   </div>
-                ))}
+                  ))
+                )}
               </div>
             </div>
           </div>

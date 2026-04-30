@@ -1,17 +1,23 @@
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
-import SelectGroupOne from '../../../components/Forms/SelectGroup/SelectGroupOne';
 
-import { FaTrashAlt } from 'react-icons/fa';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 import { Base_url } from '../../../utils/Base_url';
+import { accountantAssignableRoles } from '../utils/assignableRoles';
+
+const authHeaders = () => {
+  const t = localStorage.getItem('userToken') || '';
+  return t ? { Authorization: `Bearer ${t}` } : {};
+};
 
 const Edit_accountant = () => {
   const { id } = useParams();
   const [gender, setGender] = useState('');
   const [user, setUser] = useState(null);
+  const [assignableRoles, setAssignableRoles] = useState<{ key: string; name?: string }[]>([]);
+  const [roleKey, setRoleKey] = useState('accountant');
   const [state, setState] = useState({
     name: '',
     phone: '',
@@ -20,12 +26,33 @@ const Edit_accountant = () => {
     shift: '',
   });
 
+  const roleOptions = useMemo(() => {
+    const ur = user?.role != null ? String(user.role).trim().toLowerCase() : '';
+    const list = [...assignableRoles];
+    if (ur && !list.some((x) => x.key === ur)) list.push({ key: ur, name: `${ur} (current)` });
+    return list;
+  }, [assignableRoles, user?.role]);
+
+  useEffect(() => {
+    axios
+      .get(`${Base_url}/apis/role/get`, { headers: authHeaders() })
+      .then((res) => {
+        const roleRows = Array.isArray(res.data?.data) ? res.data.data : [];
+        setAssignableRoles(accountantAssignableRoles(roleRows));
+      })
+      .catch(() => {
+        setAssignableRoles([{ key: 'accountant', name: 'Accountant (legacy)' }]);
+      });
+  }, []);
+
   useEffect(() => {
     axios
       .get(`${Base_url}/apis/user/get/${id}`)
       .then((res) => {
         const u = res.data.data;
         setUser(u);
+        const rk = String(u?.role || 'accountant').trim().toLowerCase();
+        setRoleKey(rk);
         if (u && ['Male', 'Female', 'Other'].includes(u.gender)) {
           setGender(u.gender);
         }
@@ -64,7 +91,7 @@ const Edit_accountant = () => {
       phone: safeText(state.phone, user?.phone),
       email: safeText(state.email, user?.email),
       shift: safeText(state.shift, user?.shift),
-      role: String(user?.role || 'accountant').trim(),
+      role: roleKey.trim().toLowerCase(),
       tabs: Array.isArray(user?.tabs) ? user.tabs : [],
     };
 
@@ -210,6 +237,26 @@ const Edit_accountant = () => {
                       className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                       defaultValue={user?.password}
                     />
+                  </div>
+
+                  <div className="w-full">
+                    <label className="mb-2.5 block text-black dark:text-white">
+                      Permission role key
+                    </label>
+                    <select
+                      value={roleKey}
+                      onChange={(e) => setRoleKey(e.target.value)}
+                      className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                    >
+                      {roleOptions.map((r) => (
+                        <option key={r.key} value={r.key}>
+                          {(r.name && r.name.trim()) || r.key}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-xs text-bodydark2 dark:text-meta-10">
+                      Must match Roles & Permissions (e.g. accountant_access) so sidebar uses that role&apos;s matrix.
+                    </p>
                   </div>
 
                   <div className="w-full">

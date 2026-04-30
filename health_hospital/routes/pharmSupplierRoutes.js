@@ -1,14 +1,15 @@
 
 const pharmSupplierController = require("../controllers/pharmSupplierController");
 const { upload } = require("../upload/UploadFile");
-const { optionalAuth } = require("../middleware/auth");
+const { optionalAuth, auth, requireSuperAdmin } = require("../middleware/auth");
 
 const router = require("express").Router();
 
 router.get("/get", optionalAuth, pharmSupplierController.getpharmSuppliers);
 router.post(
   "/create",
-  optionalAuth,
+  auth,
+  requireSuperAdmin,
   pharmSupplierController.addpharmSupplier
 );
 
@@ -68,9 +69,10 @@ router.delete(
 );
 router.put(
   "/update/:id",
-  optionalAuth,
+  auth,
+  requireSuperAdmin,
   pharmSupplierController.updatepharmSupplier
 );
-router.delete("/delete/:id", optionalAuth, pharmSupplierController.deletepharmSupplier);
+router.delete("/delete/:id", auth, requireSuperAdmin, pharmSupplierController.deletepharmSupplier);
 
 module.exports = router;

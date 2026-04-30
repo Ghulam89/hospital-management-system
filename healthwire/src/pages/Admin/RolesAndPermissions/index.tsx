@@ -39,6 +39,38 @@ function branchIdFromRole(r: AppRole): string {
   return String(raw);
 }
 
+/** Match server `normalizeKey`: hide global elevated templates from branch matrix picker. */
+function normalizeRoleKeyForFilter(raw: string): string {
+  return String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '_')
+    .replace(/-/g, '_');
+}
+
+const RESERVED_GLOBAL_TEMPLATE_KEYS = new Set([
+  'superadmin',
+  'super_admin',
+  'administrator',
+  'admin',
+  'full_access',
+]);
+
+function elevatedRoleNameRoot(name: string): string {
+  const s = String(name || '').trim().toLowerCase();
+  if (!s) return '';
+  const first = s.split(/[\s(_-]+/)[0] || '';
+  return first.replace(/[^a-z0-9]/g, '');
+}
+
+/** Align with server: hide HQ templates even when role key is a numeric/code but display name is "admin". */
+function isElevatedRoleHiddenFromBranchClient(r: AppRole): boolean {
+  const k = normalizeRoleKeyForFilter(r.key);
+  if (RESERVED_GLOBAL_TEMPLATE_KEYS.has(k)) return true;
+  const root = elevatedRoleNameRoot(r.name);
+  return root === 'admin' || root === 'administrator' || root === 'superadmin';
+}
+
 function permSetsEqual(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
   const sb = new Set(b);
@@ -75,6 +107,14 @@ const RolesAndPermissions = () => {
 
   const currentUser = useMemo(() => getUserDataFromStorage(), []);
   const isSuperAdmin = useMemo(() => isSuperAdminRole(currentUser?.role), [currentUser?.role]);
+
+  const rolesVisibleForMatrix = useMemo(() => {
+    if (isSuperAdmin) return roles;
+    return roles.filter((r) => {
+      if (r.isSystem) return false;
+      return !isElevatedRoleHiddenFromBranchClient(r);
+    });
+  }, [roles, isSuperAdmin]);
 
   /** roleId → permission keys (working copy for matrix) */
   const [matrix, setMatrix] = useState<Record<string, string[]>>({});
@@ -164,13 +204,13 @@ const RolesAndPermissions = () => {
   }, [roles]);
 
   useEffect(() => {
-    if (roles.length === 0) return;
+    if (rolesVisibleForMatrix.length === 0) return;
     setSidebarRoleId((prev) => {
-      if (prev && roles.some((r) => r._id === prev)) return prev;
-      const custom = roles.find((r) => !r.isSystem);
-      return custom?._id ?? roles[0]?._id ?? null;
+      if (prev && rolesVisibleForMatrix.some((r) => r._id === prev)) return prev;
+      const custom = rolesVisibleForMatrix.find((r) => !r.isSystem);
+      return custom?._id ?? rolesVisibleForMatrix[0]?._id ?? null;
     });
-  }, [roles]);
+  }, [rolesVisibleForMatrix]);
 
   const matrixDirty = dirtyRoleIds.size > 0;
 
@@ -307,6 +347,10 @@ const RolesAndPermissions = () => {
       toast.error('Key may only use lowercase letters, numbers, - and _');
       return;
     }
+    if (isSuperAdmin && !createForm.branchId.trim()) {
+      toast.error('Branch is required — pick which branch this role belongs to');
+      return;
+    }
     try {
       setCreating(true);
       await axios.post(
@@ -316,7 +360,7 @@ const RolesAndPermissions = () => {
           key: keyClean,
           description: createForm.description.trim(),
           permissions: [],
-          ...(isSuperAdmin ? { branchId: createForm.branchId ? createForm.branchId : null } : {}),
+          ...(isSuperAdmin ? { branchId: createForm.branchId.trim() } : {}),
         },
         { headers: getAuthHeaders() },
       );
@@ -419,9 +463,10 @@ const RolesAndPermissions = () => {
   const groupedCatalogEntries = useMemo(() => Array.from(groupedCatalog.entries()), [groupedCatalog]);
 
   const permTotal = catalog.length;
-  const editableRoles = roles.filter((r) => !r.isSystem).length;
+  const editableRoles = rolesVisibleForMatrix.filter((r) => !r.isSystem).length;
+  const rolesCountBadge = isSuperAdmin ? roles.length : rolesVisibleForMatrix.length;
 
-  return (
+  return (  
     <ConfigProvider
       theme={{
         token: {
@@ -432,33 +477,37 @@ const RolesAndPermissions = () => {
     >
       <Breadcrumb pageName="Roles & permissions" />
 
-      <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-        <div>
-          
-          
-          <div className="mt-3 flex flex-wrap gap-2">
-            <span className="inline-flex items-center rounded-full border border-stroke bg-white px-3 py-1 text-xs font-medium text-bodydark1 dark:border-strokedark dark:bg-meta-4">
-              {roles.length} roles
-            </span>
-            <span className="inline-flex items-center rounded-full border border-stroke bg-white px-3 py-1 text-xs font-medium text-bodydark1 dark:border-strokedark dark:bg-meta-4">
-              {permTotal} permission keys
-            </span>
-            <span className="inline-flex items-center rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-medium text-primary dark:border-primary/40 dark:bg-primary/15 dark:text-secondary">
-              {editableRoles} editable role{editableRoles !== 1 ? 's' : ''}
-            </span>
+      <section className="mb-6 rounded-lg border border-stroke bg-white px-4 py-5 shadow-default sm:px-6 dark:border-strokedark dark:bg-boxdark">
+        <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between lg:gap-8">
+          <div className="min-w-0 flex-1 space-y-3">
+            <div className="border-l-4 border-primary pl-4">
+              <p className="text-xs font-semibold uppercase tracking-wide text-primary">Quick guide</p>
+              <p className="mt-2 max-w-2xl text-sm leading-relaxed text-bodydark2">
+                Create a role below, select it in the matrix, set sidebar/menu permissions, then click{' '}
+                <span className="font-medium text-bodydark1 dark:text-bodydark">Save matrix</span>. Text fields submit with{' '}
+                <kbd className="rounded border border-stroke px-1.5 py-0.5 font-mono text-[11px] dark:border-strokedark">
+                  Enter
+                </kbd>
+                .
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-2 pl-1 lg:pl-[calc(1rem+4px)]">
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-stroke bg-gray-2 px-3 py-1.5 text-xs font-medium text-bodydark1 dark:border-strokedark dark:bg-meta-4 dark:text-bodydark2">
+                <span className="text-black dark:text-white">{rolesCountBadge}</span>
+                <span className="text-bodydark2">roles</span>
+              </span>
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-stroke bg-gray-2 px-3 py-1.5 text-xs font-medium text-bodydark1 dark:border-strokedark dark:bg-meta-4 dark:text-bodydark2">
+                <span className="text-black dark:text-white">{permTotal}</span>
+                <span className="text-bodydark2">permission keys</span>
+              </span>
+              <span className="inline-flex items-center gap-1.5 rounded-md border border-primary/25 bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary dark:border-primary/35 dark:bg-primary/15 dark:text-secondary">
+                <span>{editableRoles}</span>
+                <span className="opacity-90">editable role{editableRoles !== 1 ? 's' : ''}</span>
+              </span>
+            </div>
           </div>
-        </div>
-        <div className="flex flex-shrink-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
-          <div className="flex flex-wrap gap-2">
-            <Button size="middle" onClick={() => setAllGroupsExpanded(true)}>
-              Expand all groups
-            </Button>
-            <Button size="middle" onClick={() => setAllGroupsExpanded(false)}>
-              Collapse all groups
-            </Button>
-          </div>
-          <div className="flex flex-wrap gap-2 border-t border-stroke pt-2 sm:border-t-0 sm:pt-0 dark:border-strokedark">
-            {matrixDirty && (
+          <div className="flex w-full shrink-0 flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end lg:w-auto lg:min-w-[220px]">
+            {matrixDirty ? (
               <>
                 <Button onClick={discardMatrix} disabled={savingMatrix}>
                   Discard changes
@@ -467,55 +516,82 @@ const RolesAndPermissions = () => {
                   Save matrix
                 </Button>
               </>
+            ) : (
+              <div className="rounded-md border border-dashed border-stroke bg-gray-2/80 px-4 py-3 text-center text-xs text-bodydark2 dark:border-strokedark dark:bg-meta-4 sm:text-left">
+                No unsaved changes in the permission matrix.
+              </div>
             )}
           </div>
         </div>
-      </div>
+      </section>
 
       <form
         onSubmit={submitCreateRole}
-        className="mb-6 rounded-sm border border-stroke bg-white p-4 shadow-default dark:border-strokedark dark:bg-boxdark"
+        className="mb-6 rounded-lg border border-stroke bg-white p-5 shadow-default sm:p-6 dark:border-strokedark dark:bg-boxdark"
       >
-        <h2 className="mb-3 text-sm font-semibold text-black dark:text-white">Add new role</h2>
-        <p className="mb-4 text-xs text-bodydark2">
-          After creating, the role appears as a column in the matrix. Assign permissions there, then use <strong>Save matrix</strong>.
-        </p>
-        <div className="flex flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-end">
-          <div className="min-w-[180px] flex-1">
-            <label className="mb-1 block text-xs font-medium text-bodydark1">Name</label>
-            <input
-              className="w-full rounded border border-stroke bg-white px-3 py-2 text-sm text-black outline-none focus:border-primary dark:border-strokedark dark:bg-boxdark dark:text-white"
-              value={createForm.name}
-              onChange={(e) => setCreateForm((f) => ({ ...f, name: e.target.value }))}
-              placeholder="e.g. Senior pharmacist"
-            />
+        <div className="mb-5 flex flex-col gap-1 border-b border-stroke pb-4 dark:border-strokedark sm:flex-row sm:items-end sm:justify-between">
+          <div>
+            <h2 className="text-base font-semibold text-black dark:text-white">Create role</h2>
+            <p className="mt-0.5 text-xs text-bodydark2">
+              New roles start with no permissions — configure them in the matrix next.
+            </p>
           </div>
-          <div className="min-w-[160px] flex-1">
-            <label className="mb-1 block text-xs font-medium text-bodydark1">Key</label>
-            <input
-              className="w-full rounded border border-stroke bg-white px-3 py-2 font-mono text-sm text-black outline-none focus:border-primary dark:border-strokedark dark:bg-boxdark dark:text-white"
-              value={createForm.key}
-              onChange={(e) => setCreateForm((f) => ({ ...f, key: e.target.value }))}
-              placeholder="e.g. senior_pharmacist"
-            />
+          {isSuperAdmin && (
+            <span className="mt-2 inline-flex w-fit rounded-md bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary dark:bg-primary/15 dark:text-secondary sm:mt-0">
+              Branch required for each new role
+            </span>
+          )}
+        </div>
+
+        <div className="flex flex-col gap-4">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-bodydark1">
+                Name<span className="text-meta-1"> *</span>
+              </label>
+              <input
+                required
+                className="w-full rounded border border-stroke bg-white px-4 py-2.5 text-black outline-none focus:border-primary dark:border-strokedark dark:bg-boxdark dark:text-white"
+                value={createForm.name}
+                onChange={(e) => setCreateForm((f) => ({ ...f, name: e.target.value }))}
+                placeholder="e.g. Senior pharmacist"
+              />
+            </div>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-bodydark1">
+                Key (slug)<span className="text-meta-1"> *</span>
+              </label>
+              <input
+                required
+                className="w-full rounded border border-stroke bg-white px-4 py-2.5 font-mono text-sm text-black outline-none focus:border-primary dark:border-strokedark dark:bg-boxdark dark:text-white"
+                value={createForm.key}
+                onChange={(e) => setCreateForm((f) => ({ ...f, key: e.target.value }))}
+                placeholder="e.g. senior_pharmacist"
+              />
+              <p className="mt-1 text-xs text-bodydark2">
+                Lowercase letters, numbers, <span className="font-mono">_</span> and <span className="font-mono">-</span> only.
+              </p>
+            </div>
           </div>
-          <div className="min-w-[200px] flex-[2]">
-            <label className="mb-1 block text-xs font-medium text-bodydark1">Description (optional)</label>
+          <div>
+            <label className="mb-1.5 block text-sm font-medium text-bodydark1">Description (optional)</label>
             <input
-              className="w-full rounded border border-stroke bg-white px-3 py-2 text-sm text-black outline-none focus:border-primary dark:border-strokedark dark:bg-boxdark dark:text-white"
+              className="w-full rounded border border-stroke bg-white px-4 py-2.5 text-black outline-none focus:border-primary dark:border-strokedark dark:bg-boxdark dark:text-white"
               value={createForm.description}
               onChange={(e) => setCreateForm((f) => ({ ...f, description: e.target.value }))}
               placeholder="Short note"
             />
           </div>
           {isSuperAdmin && (
-            <div className="min-w-[220px] flex-[2]">
-              <label className="mb-1 block text-xs font-medium text-bodydark1">Branch</label>
+            <div>
+              <label className="mb-1.5 block text-sm font-medium text-bodydark1">
+                Branch<span className="text-meta-1"> *</span>
+              </label>
               <Select
-                allowClear
-                placeholder="Global (all branches)"
+                size="large"
+                placeholder="Select branch"
                 loading={branchesLoading}
-                className="w-full min-w-[200px]"
+                className="w-full"
                 value={createForm.branchId || undefined}
                 onChange={(v) => setCreateForm((f) => ({ ...f, branchId: (v as string) || '' }))}
                 options={branches.map((b) => ({
@@ -524,21 +600,39 @@ const RolesAndPermissions = () => {
                 }))}
               />
               <p className="mt-1 text-xs text-bodydark2">
-                Leave empty for a shared template; pick a branch for a role only that branch manages.
+                Each new role is scoped to one branch so permissions stay separate per location.
               </p>
             </div>
           )}
-          <Button type="primary" htmlType="submit" loading={creating} className="bg-primary sm:min-w-[120px]">
-            Create role
-          </Button>
+          <div className="flex justify-end border-t border-stroke pt-4 dark:border-strokedark">
+            <Button type="primary" htmlType="submit" loading={creating} className="bg-primary min-w-[130px]">
+              Create role
+            </Button>
+          </div>
         </div>
       </form>
 
-      <div className="rpm-matrix-wrap mb-8 overflow-hidden rounded-sm border border-stroke bg-white shadow-default dark:border-strokedark dark:bg-boxdark">
-        <div className="border-b border-stroke px-5 py-5 dark:border-strokedark">
+      <div className="rpm-matrix-wrap mb-8 overflow-hidden rounded-lg border border-stroke bg-white shadow-default dark:border-strokedark dark:bg-boxdark">
+        <header className="border-b border-stroke bg-gray-2 px-4 py-4 dark:border-strokedark dark:bg-meta-4 sm:px-6">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <h2 className="text-base font-semibold text-black dark:text-white">Sidebar permission matrix</h2>
+              <p className="mt-0.5 max-w-xl text-xs leading-relaxed text-bodydark2">
+                Select a role from the dropdown, then use the checkboxes to grant Access, Create, Read, Update, or Delete per
+                menu row. System roles cannot be edited here.
+              </p>
+            </div>
+            {matrixDirty && (
+              <span className="inline-flex shrink-0 items-center rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium text-amber-800 dark:border-amber-400/35 dark:bg-amber-500/15 dark:text-amber-200">
+                Unsaved changes — use Save matrix above
+              </span>
+            )}
+          </div>
+        </header>
+        <div className="px-4 py-5 sm:px-6">
           <SidebarCrudMatrix
             loading={loading}
-            roles={roles}
+            roles={rolesVisibleForMatrix}
             menuRows={menuMatrix.length ? menuMatrix : MENU_ROWS}
             selectedRoleId={sidebarRoleId}
             onSelectRole={setSidebarRoleId}
@@ -550,22 +644,25 @@ const RolesAndPermissions = () => {
       </div>
 
       <AntdModal
-        title="Edit role"
+        title={editing ? `Edit role · ${editing.name}` : 'Edit role'}
         open={modalOpen && !!editing}
         onCancel={closeModal}
-        width={520}
+        width={540}
         footer={null}
         destroyOnClose
-        styles={{ body: { maxHeight: '75vh', overflowY: 'auto' } }}
+        styles={{ body: { maxHeight: '75vh', overflowY: 'auto', paddingTop: 12 } }}
       >
         {editing ? (
           <form onSubmit={submitEditRole} className="flex flex-col gap-4">
-          <p className="m-0 text-xs text-bodydark2">
-            Update the display name or description. Permissions stay in the matrix — use <strong>Save matrix</strong> there.
-            The key cannot be changed after creation.
+          <p className="-mt-1 rounded-md bg-gray-2 px-3 py-2 text-xs leading-relaxed text-bodydark2 dark:bg-meta-4">
+            Update the display name or branch assignment. Permission toggles stay in the matrix — remember to{' '}
+            <span className="font-medium text-bodydark1 dark:text-white">Save matrix</span> after changing checkboxes.
+            The role key cannot be changed.
           </p>
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-bodydark1">Name</label>
+            <label className="mb-1.5 block text-sm font-medium text-bodydark1">
+              Name<span className="text-meta-1"> *</span>
+            </label>
             <input
               required
               className="w-full rounded border border-stroke bg-white px-4 py-2.5 text-black outline-none focus:border-primary dark:border-strokedark dark:bg-boxdark dark:text-white"
@@ -601,6 +698,7 @@ const RolesAndPermissions = () => {
               <label className="mb-1.5 block text-sm font-medium text-bodydark1">Branch</label>
               <Select
                 allowClear
+                size="large"
                 placeholder="Global (all branches)"
                 loading={branchesLoading}
                 className="w-full"
@@ -616,11 +714,11 @@ const RolesAndPermissions = () => {
               </p>
             </div>
           )}
-          <div className="mt-2 flex justify-end gap-2 border-t border-stroke pt-4 dark:border-strokedark">
+          <div className="mt-1 flex flex-col-reverse gap-2 border-t border-stroke pt-4 dark:border-strokedark sm:flex-row sm:justify-end">
             <Button onClick={closeModal} disabled={saving}>
               Cancel
             </Button>
-            <Button type="primary" htmlType="submit" loading={saving} className="bg-primary">
+            <Button type="primary" htmlType="submit" loading={saving} className="bg-primary sm:min-w-[120px]">
               Save changes
             </Button>
           </div>

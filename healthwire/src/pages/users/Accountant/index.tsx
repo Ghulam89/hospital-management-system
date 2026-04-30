@@ -9,6 +9,12 @@ import { Base_url } from '../../../utils/Base_url';
 import { RiDeleteBin5Line } from 'react-icons/ri';
 import Swal from 'sweetalert2';
 import { canCreateUsers, canDeleteUsers, canEditUsers, getStoredUserForPermissions } from '../../../utils/permissions';
+import { accountantRoleKeyQueryList } from '../utils/assignableRoles';
+
+const authHeaders = () => {
+  const t = localStorage.getItem('userToken') || '';
+  return t ? { Authorization: `Bearer ${t}` } : {};
+};
 
 const columns = (handleDelete, handleEdit, canEdit, canDelete) => [
   {
@@ -46,6 +52,7 @@ const Accountant = () => {
   const [users, setUsers] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
+  const [accountantRoleKeys, setAccountantRoleKeys] = useState(['accountant']);
   const navigate = useNavigate();
   const userData = getStoredUserForPermissions();
   const allowCreate = canCreateUsers(userData);
@@ -84,23 +91,38 @@ const Accountant = () => {
     ],
   };
 
-  const fetchUsersData = (page) => {
+  useEffect(() => {
     axios
-      .get(`${Base_url}/apis/user/get`, { params: { page, role: 'accountant', branchId: 'all' } })
+      .get(`${Base_url}/apis/role/get`, { headers: authHeaders() })
       .then((res) => {
-        const rows = Array.isArray(res.data?.data) ? res.data.data : [];
-        setUsers(rows.filter((user) => user.role === 'accountant'));
-        setTotalPages(res.data?.totalPages ?? 1);
+        const roleRows = Array.isArray(res.data?.data) ? res.data.data : [];
+        setAccountantRoleKeys(accountantRoleKeyQueryList(roleRows));
       })
       .catch(() => {
-        setUsers([]);
-        setTotalPages(1);
+        setAccountantRoleKeys(['accountant']);
       });
+  }, []);
+
+  const fetchUsersData = async (page) => {
+    const keys = accountantRoleKeys.length ? accountantRoleKeys : ['accountant'];
+    try {
+      const res = await axios.get(`${Base_url}/apis/user/get`, {
+        params: { page, roles: keys.join(','), branchId: 'all' },
+      });
+      const rows = Array.isArray(res.data?.data) ? res.data.data : [];
+      const lowered = keys.map((k) => String(k).toLowerCase());
+      setUsers(rows.filter((u) => lowered.includes(String(u?.role || '').toLowerCase())));
+      setTotalPages(res.data?.totalPages ?? 1);
+    } catch {
+      setUsers([]);
+      setTotalPages(1);
+    }
   };
 
   useEffect(() => {
     fetchUsersData(currentPage);
-  }, [currentPage]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentPage, accountantRoleKeys]);
 
   const handleTableChange = (pagination) => {
     setCurrentPage(pagination.current);

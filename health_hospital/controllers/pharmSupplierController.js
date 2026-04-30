@@ -1,6 +1,6 @@
 const PharmSupplier = require("../models/pharmSupplierModel");
 const PharmInboundStock = require("../models/pharmInboundStockModel");
-const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible } = require("../utils/branchScope");
+const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible, catalogEntityVisibleForStaff, mergeCatalogPreferenceFilter } = require("../utils/branchScope");
 
 async function inboundFilterForReq(req, extra = {}) {
   const q = { ...extra };
@@ -29,13 +29,22 @@ const getpharmSuppliers = async (req, res) => {
   try {
     let search = req.query.search || "";
     let page = parseInt(req.query.page) || 1;
-    const limit = req.query.limit?req.query?.limit:20;
+    const limit = req.query.limit ? req.query?.limit : 20;
 
-    // Create base query with optional gender filter
-    const baseQuery = {};
-
-    const branchQ = await mergeBranchScopedQuery(req);
-    if (branchQ) Object.assign(baseQuery, branchQ);
+    const catalogFilter = await mergeCatalogPreferenceFilter(req);
+    const filters = [catalogFilter];
+    const q = String(search || "").trim();
+    if (q) {
+      filters.push({
+        $or: [
+          { name: { $regex: q, $options: "i" } },
+          { phone: { $regex: q, $options: "i" } },
+          { address: { $regex: q, $options: "i" } },
+          { primaryPersonName: { $regex: q, $options: "i" } },
+        ],
+      });
+    }
+    const baseQuery = filters.length === 1 ? filters[0] : { $and: filters };
 
     const data = await PharmSupplier.find(baseQuery).sort({createdAt:-1})
       .limit(limit)
@@ -62,8 +71,14 @@ const getpharmSuppliers = async (req, res) => {
 // 3. Get pharmSupplier by id
 const getpharmSupplierById = async (req, res) => {
   try {
+    if (!req.user) {
+      return res.status(401).json({ status: "fail", message: "Unauthorized" });
+    }
     const id = req.params.id;
     const data = await PharmSupplier.findById(id);
+    if (!data) {
+      return res.status(404).json({ status: "fail", message: "Supplier not found" });
+    }
     return res.status(200).json({ status: "ok", data: data });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -114,8 +129,12 @@ const getSupplierLedger = async (req, res) => {
     const from = req.query.from ? new Date(req.query.from) : null;
     const to = req.query.to ? new Date(req.query.to) : null;
 
+    if (!req.user) {
+      return res.status(401).json({ status: "error", message: "Unauthorized" });
+    }
+
     const supplier = await PharmSupplier.findById(supplierId).lean();
-    if (!supplier || !(await branchDocumentVisible(req, supplier.branchId))) {
+    if (!supplier) {
       return res.status(404).json({ status: "error", message: "Supplier not found" });
     }
 
@@ -289,7 +308,7 @@ const addSupplierLedgerAdjustment = async (req, res) => {
   try {
     const supplierId = req.params.supplierId;
     const supplier = await PharmSupplier.findById(supplierId);
-    if (!supplier || !(await branchDocumentVisible(req, supplier.branchId))) {
+    if (!supplier || !(await catalogEntityVisibleForStaff(req, supplier.branchId))) {
       return res.status(404).json({ status: "error", message: "Supplier not found" });
     }
     const incoming = req.body?.adjustment || {};
@@ -322,7 +341,7 @@ const updateSupplierLedgerAdjustment = async (req, res) => {
   try {
     const { supplierId, adjustmentId } = req.params;
     const supplier = await PharmSupplier.findById(supplierId);
-    if (!supplier || !(await branchDocumentVisible(req, supplier.branchId))) {
+    if (!supplier || !(await catalogEntityVisibleForStaff(req, supplier.branchId))) {
       return res.status(404).json({ status: "error", message: "Supplier not found" });
     }
     const a = supplier.adjustments?.id(adjustmentId);
@@ -362,7 +381,7 @@ const deleteSupplierLedgerAdjustment = async (req, res) => {
   try {
     const { supplierId, adjustmentId } = req.params;
     const supplier = await PharmSupplier.findById(supplierId);
-    if (!supplier || !(await branchDocumentVisible(req, supplier.branchId))) {
+    if (!supplier || !(await catalogEntityVisibleForStaff(req, supplier.branchId))) {
       return res.status(404).json({ status: "error", message: "Supplier not found" });
     }
     const a = supplier.adjustments?.id(adjustmentId);
@@ -382,7 +401,7 @@ const addSupplierLedgerPayment = async (req, res) => {
   try {
     const supplierId = req.params.supplierId;
     const supplier = await PharmSupplier.findById(supplierId);
-    if (!supplier || !(await branchDocumentVisible(req, supplier.branchId))) {
+    if (!supplier || !(await catalogEntityVisibleForStaff(req, supplier.branchId))) {
       return res.status(404).json({ status: "error", message: "Supplier not found" });
     }
 
@@ -509,7 +528,7 @@ const addSupplierPurchaseLedgerPayment = async (req, res) => {
   try {
     const { supplierId, purchaseId } = req.params;
     const supplier = await PharmSupplier.findById(supplierId).lean();
-    if (!supplier || !(await branchDocumentVisible(req, supplier.branchId))) {
+    if (!supplier || !(await catalogEntityVisibleForStaff(req, supplier.branchId))) {
       return res.status(404).json({ status: "error", message: "Supplier not found" });
     }
 
@@ -574,7 +593,7 @@ const updateSupplierPurchaseLedgerPayment = async (req, res) => {
     const { supplierId, purchaseId, paymentId } = req.params;
 
     const supplier = await PharmSupplier.findById(supplierId).lean();
-    if (!supplier || !(await branchDocumentVisible(req, supplier.branchId))) {
+    if (!supplier || !(await catalogEntityVisibleForStaff(req, supplier.branchId))) {
       return res.status(404).json({ status: "error", message: "Supplier not found" });
     }
 
@@ -629,7 +648,7 @@ const deleteSupplierPurchaseLedgerPayment = async (req, res) => {
     const { supplierId, purchaseId, paymentId } = req.params;
 
     const supplier = await PharmSupplier.findById(supplierId).lean();
-    if (!supplier || !(await branchDocumentVisible(req, supplier.branchId))) {
+    if (!supplier || !(await catalogEntityVisibleForStaff(req, supplier.branchId))) {
       return res.status(404).json({ status: "error", message: "Supplier not found" });
     }
 
@@ -666,7 +685,7 @@ const addSupplierPurchaseLedgerAdjustment = async (req, res) => {
   try {
     const { supplierId, purchaseId } = req.params;
     const supplier = await PharmSupplier.findById(supplierId).lean();
-    if (!supplier || !(await branchDocumentVisible(req, supplier.branchId))) {
+    if (!supplier || !(await catalogEntityVisibleForStaff(req, supplier.branchId))) {
       return res.status(404).json({ status: "error", message: "Supplier not found" });
     }
     const doc = await PharmInboundStock.findOne(await inboundFilterForReq(req, { _id: purchaseId, supplierId }));
@@ -712,7 +731,7 @@ const updateSupplierPurchaseLedgerAdjustment = async (req, res) => {
   try {
     const { supplierId, purchaseId, adjustmentId } = req.params;
     const supplier = await PharmSupplier.findById(supplierId).lean();
-    if (!supplier || !(await branchDocumentVisible(req, supplier.branchId))) {
+    if (!supplier || !(await catalogEntityVisibleForStaff(req, supplier.branchId))) {
       return res.status(404).json({ status: "error", message: "Supplier not found" });
     }
     const doc = await PharmInboundStock.findOne(await inboundFilterForReq(req, { _id: purchaseId, supplierId }));
@@ -764,7 +783,7 @@ const deleteSupplierPurchaseLedgerAdjustment = async (req, res) => {
   try {
     const { supplierId, purchaseId, adjustmentId } = req.params;
     const supplier = await PharmSupplier.findById(supplierId).lean();
-    if (!supplier || !(await branchDocumentVisible(req, supplier.branchId))) {
+    if (!supplier || !(await catalogEntityVisibleForStaff(req, supplier.branchId))) {
       return res.status(404).json({ status: "error", message: "Supplier not found" });
     }
     const doc = await PharmInboundStock.findOne(await inboundFilterForReq(req, { _id: purchaseId, supplierId }));
@@ -796,7 +815,7 @@ const updateSupplierLedgerPayment = async (req, res) => {
   try {
     const { supplierId, paymentId } = req.params;
     const supplier = await PharmSupplier.findById(supplierId);
-    if (!supplier || !(await branchDocumentVisible(req, supplier.branchId))) {
+    if (!supplier || !(await catalogEntityVisibleForStaff(req, supplier.branchId))) {
       return res.status(404).json({ status: "error", message: "Supplier not found" });
     }
 
@@ -832,7 +851,7 @@ const deleteSupplierLedgerPayment = async (req, res) => {
   try {
     const { supplierId, paymentId } = req.params;
     const supplier = await PharmSupplier.findById(supplierId);
-    if (!supplier || !(await branchDocumentVisible(req, supplier.branchId))) {
+    if (!supplier || !(await catalogEntityVisibleForStaff(req, supplier.branchId))) {
       return res.status(404).json({ status: "error", message: "Supplier not found" });
     }
 

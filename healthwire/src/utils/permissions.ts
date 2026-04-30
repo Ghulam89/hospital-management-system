@@ -53,6 +53,40 @@ function isFullAccessRole(role: string): boolean {
 }
 
 /**
+ * Legacy: `admin` / `administrator` with no Roles matrix (`mp.*`) keep full app access.
+ * If `tabs` include any `mp.*`, those users follow the matrix only — role slug `admin` must not bypass.
+ */
+function hasLegacyFullBranchAdminBypass(user: StoredUser): boolean {
+  if (!user) return false;
+  const role = normalizeRole(user);
+  if (role === 'superadmin') return false;
+  if (usesGranularMenuTabs(user)) return false;
+  return isFullAccessRole(role);
+}
+
+export function getUserRoleSlug(user: StoredUser): string {
+  return normalizeRole(user);
+}
+
+/** Legacy branch login slugs that may manage standard staff user lists (not Admin list unless superadmin). */
+export function isBranchStaffAdminSlug(user: StoredUser): boolean {
+  if (!user) return false;
+  const r = normalizeRole(user);
+  return (
+    r === 'admin' ||
+    r === 'administrator' ||
+    r === 'branchadmin' ||
+    r === 'branch_admin'
+  );
+}
+
+/** Only superadmin may open the Users → Admin tab (branch `admin` / others must not manage admin accounts here). */
+export function canSeeUsersAdminSubtab(user: StoredUser): boolean {
+  if (!user) return false;
+  return normalizeRole(user) === 'superadmin';
+}
+
+/**
  * Old staff roles stored without `mp.*` keys — keep prior behaviour (full sidebar).
  * Custom roles created in Roles & Permissions use arbitrary keys (e.g. `amp_reception`);
  * those MUST rely on `mp.*` in JWT or the sidebar stays minimal / empty.
@@ -91,9 +125,11 @@ export function usesGranularMenuTabs(user: StoredUser): boolean {
 export function canSeeSidebarMenu(user: StoredUser, menuId: string): boolean {
   if (!user) return false;
   const role = normalizeRole(user);
-  /** HQ branch management (/admin/branches): superadmin only; branch admins use scoped data APIs elsewhere. */
+  /** Branches: superadmin sees all; branch admins see own branch row only (API scoped); others need mp.branches.* */
   if (menuId === 'branches') {
     if (role === 'superadmin') return true;
+    if (isBranchStaffAdminSlug(user)) return true;
+    if (hasLegacyFullBranchAdminBypass(user)) return true;
     const tabs = getTabs(user);
     if (!usesGranularMenuTabs(user)) return false;
     const mk = menuPermissionKey('branches', 'module');
@@ -101,12 +137,12 @@ export function canSeeSidebarMenu(user: StoredUser, menuId: string): boolean {
     return tabs.has(mk) || tabs.has(rk);
   }
   /**
-   * Roles & permissions UI: superadmin + branch admins always; everyone else needs explicit
-   * `mp.roles.module` / `mp.roles.read` (assigned users must not inherit this unless granted).
+   * Roles matrix: superadmin + legacy branch admins; granular users need mp.roles.read/module.
+   * Elevated role templates are hidden in the UI/API for non–super-admins.
    */
   if (menuId === 'roles') {
     if (role === 'superadmin') return true;
-    if (isFullAccessRole(role)) return true;
+    if (hasLegacyFullBranchAdminBypass(user)) return true;
     const tabs = getTabs(user);
     if (!usesGranularMenuTabs(user)) return false;
     const mk = menuPermissionKey('roles', 'module');
@@ -114,7 +150,7 @@ export function canSeeSidebarMenu(user: StoredUser, menuId: string): boolean {
     return tabs.has(mk) || tabs.has(rk);
   }
   if (role === 'superadmin') return true;
-  if (isFullAccessRole(role)) return true;
+  if (hasLegacyFullBranchAdminBypass(user)) return true;
   const tabs = getTabs(user);
   if (!usesGranularMenuTabs(user)) {
     if (LEGACY_FULL_SIDEBAR_ROLES.has(role)) return true;
@@ -136,7 +172,8 @@ export function canSeeAnySidebarMenu(user: StoredUser, menuIds: string[]): boole
 /**
  * Granular UI action (create / read / update / delete) for a menu row from the Roles matrix.
  * Superadmin and branch admins: always allowed. Legacy doctor/nurse full sidebar: allowed.
- * Other users: must have the matching `mp.{menuId}.{action}` in `tabs`.
+ * Other users: must have the matching `mp.{menuId}.{action}` in `tabs` when granular `mp.*` is enabled.
+ * Legacy tab `deletePatient` applies only when the user has no granular matrix keys (old JWT shape).
  */
 export function canMenuAction(
   user: StoredUser,
@@ -146,7 +183,7 @@ export function canMenuAction(
   if (!user) return false;
   const role = normalizeRole(user);
   if (role === 'superadmin') return true;
-  if (isFullAccessRole(role)) return true;
+  if (hasLegacyFullBranchAdminBypass(user)) return true;
 
   const row = MENU_ROWS.find((r) => r.id === menuId);
   if (!row || !row.cells[action]) return false;
@@ -159,10 +196,6 @@ export function canMenuAction(
       return hasAnyPermission(user, 'deletePatient');
     }
     return false;
-  }
-
-  if (menuId === 'patients' && action === 'delete') {
-    if (hasAnyPermission(user, 'deletePatient')) return true;
   }
 
   return tabs.has(menuPermissionKey(menuId, action));
@@ -226,16 +259,17 @@ export function hasAnyPermission(user: StoredUser, ...keys: string[]): boolean {
   return false;
 }
 
-/** Superadmin and branch admins see every Users subtab without relying on JWT `tabs` keys. */
+/** Superadmin sees every Users subtab without per-tab filtering; branch admins use legacy/mp checks below. */
 export function canAccessAllUsersRoleTabs(user: StoredUser): boolean {
   if (!user) return false;
-  return isFullAccessRole(normalizeRole(user));
+  return normalizeRole(user) === 'superadmin';
 }
 
 export function canCreateUsers(user: StoredUser): boolean {
   if (!user) return false;
   const role = normalizeRole(user);
-  if (isFullAccessRole(role)) return true;
+  if (role === 'superadmin') return true;
+  if (hasLegacyFullBranchAdminBypass(user)) return true;
   if (hasAnyPermission(user, 'createUsers')) return true;
   return hasGranularMenuPermission(user, 'users', 'create');
 }
@@ -243,7 +277,8 @@ export function canCreateUsers(user: StoredUser): boolean {
 export function canEditUsers(user: StoredUser): boolean {
   if (!user) return false;
   const role = normalizeRole(user);
-  if (isFullAccessRole(role)) return true;
+  if (role === 'superadmin') return true;
+  if (hasLegacyFullBranchAdminBypass(user)) return true;
   if (hasAnyPermission(user, 'editUsers', 'createUsers')) return true;
   return hasGranularMenuPermission(user, 'users', 'update');
 }
@@ -251,7 +286,8 @@ export function canEditUsers(user: StoredUser): boolean {
 export function canDeleteUsers(user: StoredUser): boolean {
   if (!user) return false;
   const role = normalizeRole(user);
-  if (isFullAccessRole(role)) return true;
+  if (role === 'superadmin') return true;
+  if (hasLegacyFullBranchAdminBypass(user)) return true;
   if (hasAnyPermission(user, 'deleteUsers')) return true;
   return hasGranularMenuPermission(user, 'users', 'delete');
 }
@@ -361,7 +397,7 @@ const PATH_RULES: { prefix: string; anyOf: string[] }[] = [
   },
   {
     prefix: '/admin/branches',
-    anyOf: ['superadmin'],
+    anyOf: ['superadmin', 'administrator', 'admin', 'branchadmin', 'branch_admin'],
   },
   {
     prefix: '/appointments',
@@ -591,18 +627,19 @@ export function canAccessPath(user: StoredUser, pathname: string): boolean {
   if (role === 'superadmin') return true;
 
   /**
-   * Branch admins (`admin`, `administrator`) keep full access inside their branch data model,
-   * but cannot open the global Branches HQ UI (backend already restricts mutations).
+   * Legacy branch admins (`admin`, `administrator` without `mp.*`) — full app incl. view-only Branches for own branch.
    */
-  if (isFullAccessRole(role)) {
-    const hq = matchesPrefix(path.toLowerCase(), '/admin/branches');
-    if (hq) return false;
+  if (hasLegacyFullBranchAdminBypass(user)) {
     return true;
   }
 
   const tabs = getTabs(user);
 
   if (usesGranularMenuTabs(user)) {
+    const scoped = pathKey(pathname).toLowerCase();
+    if (matchesPrefix(scoped, '/admin/branches') && isBranchStaffAdminSlug(user)) {
+      return true;
+    }
     const row = menuRowForPath(pathname);
     if (row) {
       return (

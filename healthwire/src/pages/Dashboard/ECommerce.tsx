@@ -8,7 +8,7 @@ import { Base_url } from '../../utils/Base_url';
 import TodayAppointments from '../../components/Tables/TodayAppointments';
 import { Link } from 'react-router-dom';
 import Breadcrumb from '../../components/Breadcrumbs/Breadcrumb';
-import { BRANCH_CHANGED_EVENT } from '../../utils/branchScope';
+import { BRANCH_CHANGED_EVENT, buildAxiosBranchScopedParams } from '../../utils/branchScope';
 
 const ECommerce: React.FC = () => {
 
@@ -16,7 +16,7 @@ const [todayAppointments, setTodayAppointments] = React.useState({});
 
   const loadDashboard = useCallback(() => {
     axios
-      .get(`${Base_url}/apis/appointment/dashboard`)
+      .get(`${Base_url}/apis/appointment/dashboard`, { params: buildAxiosBranchScopedParams() })
       .then((response) => {
         setTodayAppointments(response.data?.data || {});
       })

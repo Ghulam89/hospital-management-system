@@ -8,6 +8,7 @@ import dayjs from 'dayjs';
 import { useNavigate, useParams } from 'react-router-dom';
 import { AsyncPaginate } from 'react-select-async-paginate';
 import * as XLSX from 'xlsx';
+import { buildAxiosBranchScopedParams } from '../../../utils/branchScope';
 
 interface StockItem {
   id: string;
@@ -222,11 +223,14 @@ export default function AddNewStock() {
           search: search || '',
           page: page || 1,
           limit: 20,
-        }
+          catalog: '1',
+          ...buildAxiosBranchScopedParams(),
+        },
       });
 
       const data = response.data.data || [];
       const options = data.map((item: any) => {
+        const inventoryId = item.sellablePharmItemId || item._id;
         const manufacturer = getNameFromRef(
           item.pharmManufacturerId,
           manufacturerNameById,
@@ -240,7 +244,7 @@ export default function AddNewStock() {
         const rack = getNameFromRef(item.pharmRackId, rackNameById, item.rack);
 
         return {
-          value: item._id,
+          value: inventoryId,
           label: item.name,
           _manufacturerName: manufacturer,
           _categoryName: category,
@@ -304,7 +308,9 @@ export default function AddNewStock() {
     const fetchInitialData = async () => {
       try {
         const [itemsRes, suppliersRes, manufacturersRes, categoriesRes, racksRes] = await Promise.all([
-          axios.get(`${Base_url}/apis/pharmItem/get?limit=10`),
+          axios.get(`${Base_url}/apis/pharmItem/get`, {
+            params: { limit: 10, catalog: '1', ...buildAxiosBranchScopedParams() },
+          }),
           axios.get(`${Base_url}/apis/pharmSupplier/get?limit=10`),
           axios.get(`${Base_url}/apis/pharmManufacturer/get?limit=1000`),
           axios.get(`${Base_url}/apis/pharmCategory/get?limit=1000`),
@@ -1029,7 +1035,10 @@ export default function AddNewStock() {
   return (
     <div className="mx-auto max-w-[1800px] px-4 py-6">
       <Breadcrumb pageName={isEditMode ? "Edit Stock" : "Add New Stock"} />
-      
+      <p className="mb-4 rounded-sm border border-stroke bg-gray dark:border-strokedark dark:bg-meta-4 px-4 py-3 text-sm text-bodydark1 dark:text-bodydark2">
+        Inbound quantities apply only to the <strong>selected branch</strong> (header branch picker for super admin). Each branch keeps separate inventory rows.
+      </p>
+
       <Form
         form={form}
         layout="vertical"
@@ -1244,17 +1253,24 @@ export default function AddNewStock() {
                     let itemRes;
                     try {
                       itemRes = await axios.get(`${Base_url}/apis/pharmItem/get`, {
-                        params: { search: name, page: 1, limit: 1 },
+                        params: {
+                          search: name,
+                          page: 1,
+                          limit: 1,
+                          catalog: '1',
+                          ...buildAxiosBranchScopedParams(),
+                        },
                       });
                     } catch {}
                     const itemDoc = Array.isArray(itemRes?.data?.data) ? itemRes?.data?.data[0] : null;
                     if (!itemDoc?._id) continue;
+                    const rowInventoryId = itemDoc.sellablePharmItemId || itemDoc._id;
                     const conv = Number(itemDoc?.conversionUnit) || 1;
                     const exp = expiryRaw ? dayjs(expiryRaw).isValid() ? dayjs(expiryRaw).format('YYYY-MM-DD') : '' : '';
                     nextRows.push({
                       ...defaultRow,
                       id: String(nextRows.length + 1),
-                      pharmItemId: itemDoc._id,
+                      pharmItemId: rowInventoryId,
                       itemName: itemDoc.name || name,
                       manufacturer: itemDoc?.pharmManufacturerId?.name || '',
                       b2bCategory: itemDoc?.pharmCategoryId?.name || '',

@@ -4,14 +4,23 @@ export const SUPERADMIN_BRANCH_STORAGE_KEY = 'healthwire_superadminBranchId';
 export const BRANCH_CHANGED_EVENT = 'healthwire-branch-changed';
 
 export function normalizeRole(role: unknown): string {
-  return String(role || '')
-    .toLowerCase()
-    .replace(/\s+/g, '');
+  if (role == null || role === '') return '';
+  let s: string;
+  if (typeof role === 'string') {
+    s = role;
+  } else if (typeof role === 'object' && role !== null) {
+    const o = role as Record<string, unknown>;
+    if (typeof o.name === 'string') s = o.name;
+    else if (typeof o.slug === 'string') s = o.slug;
+    else return '';
+  } else {
+    s = String(role);
+  }
+  return s.toLowerCase().replace(/\s+/g, '');
 }
 
 export function isSuperAdminRole(role: unknown): boolean {
-  const r = normalizeRole(role);
-  return r === 'superadmin' || r === 'super admin';
+  return normalizeRole(role) === 'superadmin';
 }
 
 export function getUserDataFromStorage(): Record<string, unknown> | null {
@@ -71,9 +80,17 @@ export function mergeBranchIdIntoAxiosParams(
   if (!url.includes('/apis/')) return;
   if (url.includes('/apis/login/')) return;
 
-  let existing: Record<string, unknown> = {};
   const p = config.params;
-  if (p && typeof p === 'object' && !Array.isArray(p) && !(p instanceof URLSearchParams)) {
+  if (p instanceof URLSearchParams) {
+    if (!p.has('branchId') || p.get('branchId') === '') {
+      p.set('branchId', branchId);
+    }
+    config.params = p;
+    return;
+  }
+
+  let existing: Record<string, unknown> = {};
+  if (p && typeof p === 'object' && !Array.isArray(p)) {
     existing = { ...(p as Record<string, unknown>) };
   }
   if (existing.branchId !== undefined && existing.branchId !== null && existing.branchId !== '') {
@@ -96,9 +113,17 @@ export function mergeAdminIdIntoAxiosParams(config: { url?: string; params?: unk
   const u = getUserDataFromStorage();
   if (!u?._id || isSuperAdminRole(u.role)) return;
 
-  let existing: Record<string, unknown> = {};
   const p = config.params;
-  if (p && typeof p === 'object' && !Array.isArray(p) && !(p instanceof URLSearchParams)) {
+  if (p instanceof URLSearchParams) {
+    if (!p.has('adminId') || p.get('adminId') === '') {
+      p.set('adminId', String(u._id));
+    }
+    config.params = p;
+    return;
+  }
+
+  let existing: Record<string, unknown> = {};
+  if (p && typeof p === 'object' && !Array.isArray(p)) {
     existing = { ...(p as Record<string, unknown>) };
   }
   if (existing.adminId !== undefined && existing.adminId !== null && existing.adminId !== '') {
@@ -107,4 +132,48 @@ export function mergeAdminIdIntoAxiosParams(config: { url?: string; params?: unk
   }
   existing.adminId = String(u._id);
   config.params = existing;
+}
+
+/**
+ * When the URL itself carries query params (`.../get?page=1&...`), axios may still omit merging;
+ * append branch scope onto `config.url` so appointments/dashboard/opd lists honor branch filters.
+ */
+export function mergeBranchScopeIntoRequestUrl(config: { url?: string }): void {
+  const raw = config.url;
+  if (!raw || typeof raw !== 'string') return;
+  if (!raw.includes('/apis/') || raw.includes('/apis/login/')) return;
+
+  let parsed: URL;
+  try {
+    parsed = raw.includes('://') ? new URL(raw) : new URL(raw, 'http://127.0.0.1');
+  } catch {
+    return;
+  }
+
+  if (shouldSuggestBranchIdQuery()) {
+    const bid = getSuperadminSelectedBranchId();
+    if (bid && (!parsed.searchParams.has('branchId') || parsed.searchParams.get('branchId') === '')) {
+      parsed.searchParams.set('branchId', bid);
+    }
+  }
+
+  const u = getUserDataFromStorage();
+  if (u?._id && !isSuperAdminRole(u.role)) {
+    if (!parsed.searchParams.has('adminId') || parsed.searchParams.get('adminId') === '') {
+      parsed.searchParams.set('adminId', String(u._id));
+    }
+  }
+
+  config.url = raw.includes('://') ? parsed.toString() : `${parsed.pathname}${parsed.search}${parsed.hash}`;
+}
+
+/**
+ * Superadmin: selected branch as explicit axios `params` (dashboard/cards must match header scope).
+ * Other roles: empty (interceptor adds `adminId` separately).
+ */
+export function buildAxiosBranchScopedParams(): Record<string, string> {
+  const u = getUserDataFromStorage();
+  if (!u || !isSuperAdminRole(u.role)) return {};
+  const bid = getSuperadminSelectedBranchId();
+  return bid ? { branchId: bid } : {};
 }

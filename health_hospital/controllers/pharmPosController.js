@@ -6,7 +6,6 @@ const PharmReturnStock = require("../models/pharmReturnStockModel");
 const Patient = require("../models/patientModel");
 const User = require("../models/userModel");
 const {
-  getScopedPatientIds,
   mergeBranchScopedQuery,
   assignBranchIdForCreate,
 } = require("../utils/branchScope");
@@ -185,31 +184,8 @@ const buildPharmPosQuery = async (req) => {
     });
   }
 
-  const scopedIds = await getScopedPatientIds(req);
-  if (scopedIds !== null) {
-    if (scopedIds.length === 0) {
-      andConditions.push({ _id: { $in: [] } });
-    } else {
-      const pidEq = andConditions.find((c) => c.patientId && !c.patientId.$in);
-      if (pidEq) {
-        if (!scopedIds.some((id) => String(id) === String(pidEq.patientId))) {
-          andConditions.push({ _id: { $in: [] } });
-        }
-      } else {
-        const pidIn = andConditions.find((c) => c.patientId && c.patientId.$in);
-        if (pidIn) {
-          const scopeSet = new Set(scopedIds.map(String));
-          const next = pidIn.patientId.$in.filter((id) => scopeSet.has(String(id)));
-          pidIn.patientId = { $in: next };
-          if (next.length === 0) {
-            andConditions.push({ _id: { $in: [] } });
-          }
-        } else {
-          andConditions.push({ patientId: { $in: scopedIds } });
-        }
-      }
-    }
-  }
+  // Branch scoping (mergeBranchScopedQuery) is sufficient for POS: many invoices are
+  // walk-ins with patientId null — getScopedPatientIds would incorrectly hide them.
 
   const branchPosQ = await mergeBranchScopedQuery(req);
   if (branchPosQ) {

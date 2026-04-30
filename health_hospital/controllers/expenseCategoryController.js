@@ -1,5 +1,5 @@
 const ExpenseCategory = require("../models/expenseCategoryModel");
-const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible } = require("../utils/branchScope");
+const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible, mergeCatalogPreferenceFilter } = require("../utils/branchScope");
 
 // 1. Create expenseCategory
 const addexpenseCategory = async (req, res) => {
@@ -21,13 +21,15 @@ const getexpenseCategorys = async (req, res) => {
   try {
     let search = req.query.search || "";
     let page = parseInt(req.query.page) || 1;
-    const limit = req.query.limit?req.query?.limit:20;
+    const limit = req.query.limit ? req.query?.limit : 20;
 
-    // Create base query with optional gender filter
-    const baseQuery = {};
-
-    const branchQ = await mergeBranchScopedQuery(req);
-    if (branchQ) Object.assign(baseQuery, branchQ);
+    const catalogFilter = await mergeCatalogPreferenceFilter(req);
+    const filters = [catalogFilter];
+    const q = String(search || "").trim();
+    if (q) {
+      filters.push({ name: { $regex: q, $options: "i" } });
+    }
+    const baseQuery = filters.length === 1 ? filters[0] : { $and: filters };
 
     const data = await ExpenseCategory.find(baseQuery).sort({createdAt:-1})
       .limit(limit)
@@ -54,9 +56,12 @@ const getexpenseCategorys = async (req, res) => {
 // 3. Get expenseCategory by id
 const getexpenseCategoryById = async (req, res) => {
   try {
+    if (!req.user) {
+      return res.status(401).json({ status: "fail", message: "Unauthorized" });
+    }
     const id = req.params.id;
     const data = await ExpenseCategory.findById(id);
-    if (!data || !(await branchDocumentVisible(req, data.branchId))) {
+    if (!data) {
       return res.status(404).json({ status: "fail", message: "Expense category not found" });
     }
     return res.status(200).json({ status: "ok", data: data });

@@ -1,6 +1,7 @@
 const Branch = require('../models/branchModel');
 const User = require('../models/userModel');
 const { normalizeRole } = require('../middleware/auth');
+const { resolveBranchIdForNonSuperAdmin } = require('../utils/branchScope');
 
 const createBranch = async (req, res) => {
   try {
@@ -35,10 +36,13 @@ const getBranches = async (req, res) => {
     const limit = parseInt(String(req.query.limit || '20'), 10) || 20;
 
     const role = normalizeRole(req.user?.role);
-    const query = {};
+    const isSuper = role === 'superadmin';
 
-    if (role === 'administrator' || role === 'admin') {
-      if (!req.user?.branchId) {
+    let query = {};
+
+    if (!isSuper) {
+      const bid = await resolveBranchIdForNonSuperAdmin(req);
+      if (!bid) {
         return res.status(200).json({
           status: 'ok',
           data: [],
@@ -50,10 +54,24 @@ const getBranches = async (req, res) => {
           limit,
         });
       }
-      query._id = req.user.branchId;
-    }
 
-    if (search) {
+      const searchOr =
+        search.trim().length > 0
+          ? [
+              { name: { $regex: search, $options: 'i' } },
+              { code: { $regex: search, $options: 'i' } },
+              { phone: { $regex: search, $options: 'i' } },
+              { address: { $regex: search, $options: 'i' } },
+              { location: { $regex: search, $options: 'i' } },
+            ]
+          : null;
+
+      if (searchOr) {
+        query = { $and: [{ _id: bid }, { $or: searchOr }] };
+      } else {
+        query = { _id: bid };
+      }
+    } else if (search.trim()) {
       query.$or = [
         { name: { $regex: search, $options: 'i' } },
         { code: { $regex: search, $options: 'i' } },
@@ -89,8 +107,9 @@ const getBranches = async (req, res) => {
 const getBranchById = async (req, res) => {
   try {
     const role = normalizeRole(req.user?.role);
-    if ((role === 'administrator' || role === 'admin') && req.user?.branchId) {
-      if (String(req.user.branchId) !== String(req.params.id)) {
+    if (role !== 'superadmin') {
+      const bid = await resolveBranchIdForNonSuperAdmin(req);
+      if (!bid || String(bid) !== String(req.params.id)) {
         return res.status(404).json({ status: 'fail', message: 'Branch not found' });
       }
     }

@@ -13,7 +13,7 @@ import { Base_url } from '../../../utils/Base_url';
 import AddPharmacyItems from './AddPharmacyItems';
 import UploadPharmacyItem from './UploadPharmacyItem';
 import dayjs from 'dayjs';
-import { getUserDataFromStorage, isSuperAdminRole } from '../../../utils/branchScope';
+import { getUserDataFromStorage, isSuperAdminRole, buildAxiosBranchScopedParams } from '../../../utils/branchScope';
 
 const { Search } = Input;
 const { RangePicker } = DatePicker;
@@ -155,11 +155,7 @@ const PharmacyItems: React.FC = () => {
             >
               {record.name}
             </button>
-            {meta.catalogMasterOnly ? (
-              <span className="text-[11px] font-medium text-bodydark2 dark:text-bodydark">
-                Global catalog · branch stock Manage Stock se add karein
-              </span>
-            ) : null}
+         
           </div>
         );
       },
@@ -202,7 +198,7 @@ const PharmacyItems: React.FC = () => {
       sorter: (a: PharmacyItem, b: PharmacyItem) => ((a.pharmCategoryId as any)?.name || '').localeCompare((b.pharmCategoryId as any)?.name || ''),
     },
     {
-      title: 'Stock',
+      title: 'Stock (branch)',
       dataIndex: 'availableQuantity',
       render: (text: number) => text || 0,
       sorter: (a: PharmacyItem, b: PharmacyItem) => a.availableQuantity - b.availableQuantity,
@@ -488,6 +484,13 @@ const PharmacyItems: React.FC = () => {
       params.push('catalog=1');
     }
 
+    const scoped = buildAxiosBranchScopedParams();
+    Object.entries(scoped).forEach(([k, v]) => {
+      if (v !== undefined && v !== '') {
+        params.push(`${encodeURIComponent(k)}=${encodeURIComponent(String(v))}`);
+      }
+    });
+
     return params;
   };
 
@@ -591,7 +594,7 @@ const PharmacyItems: React.FC = () => {
   return (
     <>
       <Breadcrumb pageName="Pharmacy Items" />
-      {/* Add/Edit Modal */}
+      
       <AddPharmacyItems
         isModalOpen={isAddEditModalOpen}
         setIsModalOpen={handleModalClose}

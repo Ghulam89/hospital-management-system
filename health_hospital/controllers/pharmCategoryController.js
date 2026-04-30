@@ -1,5 +1,5 @@
 const PharmCategory = require("../models/pharmCategoryModel");
-const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible } = require("../utils/branchScope");
+const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible, mergeCatalogPreferenceFilter } = require("../utils/branchScope");
 
 // 1. Create pharmCategory
 const addpharmCategory = async (req, res) => {
@@ -17,10 +17,13 @@ const getpharmCategorys = async (req, res) => {
     let page = parseInt(req.query.page) || 1;
     const limit = req.query.limit ? req.query?.limit : 20;
 
-    const baseQuery = {};
-
-    const branchQ = await mergeBranchScopedQuery(req);
-    if (branchQ) Object.assign(baseQuery, branchQ);
+    const catalogFilter = await mergeCatalogPreferenceFilter(req);
+    const filters = [catalogFilter];
+    const q = String(search || "").trim();
+    if (q) {
+      filters.push({ name: { $regex: q, $options: "i" } });
+    }
+    const baseQuery = filters.length === 1 ? filters[0] : { $and: filters };
 
     const data = await PharmCategory.find(baseQuery)
       .sort({ createdAt: -1 })
@@ -48,9 +51,12 @@ const getpharmCategorys = async (req, res) => {
 // 3. Get pharmCategory by id
 const getpharmCategoryById = async (req, res) => {
   try {
+    if (!req.user) {
+      return res.status(401).json({ status: "fail", message: "Unauthorized" });
+    }
     const id = req.params.id;
     const data = await PharmCategory.findById(id);
-    if (!data || !(await branchDocumentVisible(req, data.branchId))) {
+    if (!data) {
       return res.status(404).json({ status: "fail", message: "Pharmacy category not found" });
     }
     return res.status(200).json({ status: "ok", data: data });

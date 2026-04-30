@@ -1265,7 +1265,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                           </li> */}
 
 
-                          {!usesGranularMenuTabs(permUser) && (
+                          {/* {!usesGranularMenuTabs(permUser) && (
                           <li>
                             <NavLink
                               to="#"
@@ -1292,7 +1292,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                                Discount
                              </NavLink>
                           </li>
-                          )}
+                          )} */}
 
 
                           {canSeeSidebarMenu(permUser, 'procedures') && (

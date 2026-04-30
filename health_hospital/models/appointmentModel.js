@@ -54,6 +54,11 @@ const appointmentSchema = new mongoose.Schema({
     type: String,
     default: 'Scheduled',
   },
+  branchId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Branch',
+    index: true,
+  },
 }, { timestamps: true });
 
 module.exports = mongoose.model('Appointment', appointmentSchema);

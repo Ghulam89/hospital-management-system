@@ -80,12 +80,6 @@ const Department = () => {
 
       <Breadcrumb pageName="Departments" />
 
-      {!canManageCatalog ? (
-        <p className="mb-6 rounded-sm border border-stroke bg-gray dark:border-strokedark dark:bg-meta-4 px-4 py-3 text-sm text-bodydark1">
-          Departments are synced from the central catalog. Only super admin can add, edit, or delete departments.
-        </p>
-      ) : null}
-
       {canManageCatalog ? (
       <div className="flex justify-end pb-6">
         <button

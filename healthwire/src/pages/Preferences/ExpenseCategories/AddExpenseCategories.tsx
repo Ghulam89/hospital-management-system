@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import Modal from '../../../components/modal';
 import { MdClose } from 'react-icons/md';
 import axios from 'axios';
+import { Base_url } from '../../../utils/Base_url';
 import { toast } from 'react-toastify';
 
 const AddExpenseCategories = ({ isModalOpen, setIsModalOpen, selectedCategory, fetchExpenseCategories }) => {
@@ -44,8 +45,8 @@ const AddExpenseCategories = ({ isModalOpen, setIsModalOpen, selectedCategory, f
 
     try {
       const request = selectedCategory
-        ? axios.put(`https://api.holisticare.pk/apis/expenseCategory/update/${selectedCategory._id}`, formData)
-        : axios.post('https://api.holisticare.pk/apis/expenseCategory/create', formData);
+        ? axios.put(`${Base_url}/apis/expenseCategory/update/${selectedCategory._id}`, formData)
+        : axios.post(`${Base_url}/apis/expenseCategory/create`, formData);
 
       const res = await request;
 

@@ -51,6 +51,43 @@ export default function SidebarCrudMatrix({
     }
   };
 
+  const toggleRow = (row: MenuMatrixRow, checked: boolean) => {
+    if (readOnly || !selectedRole || selectedRole.isSystem) return;
+    for (const action of MENU_MATRIX_ACTIONS) {
+      if (!row.cells[action]) continue;
+      const key = menuPermissionKey(row.id, action);
+      const isOn = tabSet.has(key);
+      if (checked && !isOn) onToggle(row.id, action, true);
+      if (!checked && isOn) onToggle(row.id, action, false);
+    }
+  };
+
+  const toggleAllApplicable = (checked: boolean) => {
+    if (readOnly || !selectedRole || selectedRole.isSystem) return;
+    for (const row of menuRows) {
+      for (const action of MENU_MATRIX_ACTIONS) {
+        if (!row.cells[action]) continue;
+        const key = menuPermissionKey(row.id, action);
+        const isOn = tabSet.has(key);
+        if (checked && !isOn) onToggle(row.id, action, true);
+        if (!checked && isOn) onToggle(row.id, action, false);
+      }
+    }
+  };
+
+  const rowTriState = (row: MenuMatrixRow) => {
+    let applicable = 0;
+    let on = 0;
+    for (const action of MENU_MATRIX_ACTIONS) {
+      if (!row.cells[action]) continue;
+      applicable += 1;
+      if (tabSet.has(menuPermissionKey(row.id, action))) on += 1;
+    }
+    const checked = applicable > 0 && on === applicable;
+    const indeterminate = on > 0 && on < applicable;
+    return { checked, indeterminate, applicable };
+  };
+
   const columnTriState = (action: MenuMatrixAction) => {
     let applicable = 0;
     let on = 0;
@@ -73,18 +110,31 @@ export default function SidebarCrudMatrix({
     return m;
   }, [menuRows]);
 
+  const matrixSummary = useMemo(() => {
+    let applicable = 0;
+    let on = 0;
+    for (const row of menuRows) {
+      for (const action of MENU_MATRIX_ACTIONS) {
+        if (!row.cells[action]) continue;
+        applicable += 1;
+        if (tabSet.has(menuPermissionKey(row.id, action))) on += 1;
+      }
+    }
+    const checked = applicable > 0 && on === applicable;
+    const indeterminate = on > 0 && on < applicable;
+    return { checked, indeterminate, applicable };
+  }, [menuRows, tabSet]);
+
+  const headerColSpan = 1 + MENU_MATRIX_ACTIONS.length;
+
   if (loading) return <p className="text-sm text-bodydark2">Loading sidebar permissions…</p>;
 
   return (
     <div className="space-y-4">
       <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-        <div>
-          <p className="m-0 text-sm font-medium text-bodydark1">Sidebar access (module × CRUD)</p>
-          <p className="m-0 text-xs text-bodydark2">
-            Pick a role, tick Access / Create / Read / Update / Delete per menu — matches sidebar tabs &amp;
-            submenus. Save with <strong>Save matrix</strong>.
-          </p>
-        </div>
+       <div>
+        
+       </div>
         <Select
           className="min-w-[220px]"
           placeholder="Select role"
@@ -105,11 +155,24 @@ export default function SidebarCrudMatrix({
         </p>
       ) : (
         <div className="overflow-x-auto rounded-sm border border-stroke bg-white dark:border-strokedark dark:bg-boxdark">
-          <table className="w-full min-w-[920px] border-collapse text-[13px]">
+            <table className="w-full min-w-[920px] border-collapse text-[13px]">
             <thead>
               <tr className="border-b border-stroke bg-gray dark:border-strokedark dark:bg-meta-4">
                 <th className="px-3 py-3 text-left font-semibold text-black dark:text-white">
-                  Module / submenu
+                  <div className="flex flex-col gap-1.5">
+                    <span>Module / submenu</span>
+                    {matrixSummary.applicable > 0 ? (
+                        <div className="flex items-center gap-2">
+                          <Checkbox
+                            checked={matrixSummary.checked}
+                            indeterminate={matrixSummary.indeterminate}
+                            disabled={readOnly}
+                            onChange={(e) => toggleAllApplicable(e.target.checked)}
+                          />
+                          <span className="text-xs font-normal text-bodydark2">All rows</span>
+                        </div>
+                      ) : null}
+                  </div>
                 </th>
                 {MENU_MATRIX_ACTIONS.map((action) => {
                   const { checked, indeterminate, applicable } = columnTriState(action);
@@ -136,7 +199,7 @@ export default function SidebarCrudMatrix({
                 <React.Fragment key={group}>
                   <tr className="bg-whiten dark:bg-meta-4/60">
                     <td
-                      colSpan={6}
+                      colSpan={headerColSpan}
                       className="px-3 py-2 text-xs font-bold uppercase tracking-wide text-bodydark2"
                     >
                       {group}
@@ -148,11 +211,30 @@ export default function SidebarCrudMatrix({
                       className="border-b border-stroke hover:bg-gray dark:border-strokedark dark:hover:bg-meta-4/40"
                     >
                       <td className="max-w-[340px] px-3 py-2 align-middle">
-                        <div className="font-medium text-black dark:text-bodydark1">{row.label}</div>
-                        {row.parentLabel ? (
-                          <div className="text-[11px] text-body dark:text-bodydark2">{row.parentLabel}</div>
-                        ) : null}
-                        <code className="text-[10px] text-bodydark2">{row.pathPrefix}</code>
+                        <div className="flex items-start gap-2">
+                          {(() => {
+                            const { checked, indeterminate, applicable } = rowTriState(row);
+                            return applicable > 0 ? (
+                              <Checkbox
+                                className="mt-0.5 flex-shrink-0"
+                                checked={checked}
+                                indeterminate={indeterminate}
+                                disabled={readOnly}
+                                title="Turn all actions on or off for this module"
+                                onChange={(e) => toggleRow(row, e.target.checked)}
+                              />
+                            ) : (
+                              <span className="mt-0.5 inline-block w-4 flex-shrink-0" aria-hidden />
+                            );
+                          })()}
+                          <div className="min-w-0">
+                            <div className="font-medium text-black dark:text-bodydark1">{row.label}</div>
+                            {row.parentLabel ? (
+                              <div className="text-[11px] text-body dark:text-bodydark2">{row.parentLabel}</div>
+                            ) : null}
+                            <code className="text-[10px] text-bodydark2">{row.pathPrefix}</code>
+                          </div>
+                        </div>
                       </td>
                       {MENU_MATRIX_ACTIONS.map((action) => {
                         const enabled = row.cells[action];
@@ -177,8 +259,8 @@ export default function SidebarCrudMatrix({
                 </React.Fragment>
               ))}
             </tbody>
-          </table>
-        </div>
+            </table>
+          </div>
       )}
     </div>
   );

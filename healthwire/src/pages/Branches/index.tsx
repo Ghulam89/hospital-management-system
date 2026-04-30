@@ -66,8 +66,11 @@ const Branches = () => {
   }, []);
 
   const isSuperAdmin = userRole === 'superadmin';
-  const isBranchAdmin =
-    userRole === 'administrator' || userRole === 'admin';
+  const isBranchScopedAdmin =
+    userRole === 'administrator' ||
+    userRole === 'admin' ||
+    userRole === 'branchadmin' ||
+    userRole === 'branch_admin';
 
   const fetchBranches = useCallback(() => {
     setLoading(true);
@@ -277,7 +280,7 @@ const Branches = () => {
         <div className="text-sm text-bodydark2 max-w-3xl">
           {isSuperAdmin ? (
             <span>Super Admin: add, edit, or delete branches and create branch administrators.</span>
-          ) : isBranchAdmin ? (
+          ) : isBranchScopedAdmin ? (
             <span>
               View-only: details for <strong>your branch</strong> only. You cannot create, edit, or
               delete branches or branch admins — contact Super Admin for changes.

@@ -7,10 +7,18 @@ import Swal from 'sweetalert2';
 import { Base_url } from '../../../utils/Base_url';
 import AddPharmacySupplier from './AddPharmacySupplier';
 import { canMenuAction, getStoredUserForPermissions } from '../../../utils/permissions';
+import { getUserDataFromStorage, isSuperAdminRole, buildAxiosBranchScopedParams } from '../../../utils/branchScope';
 
 const { Search } = Input;
 
 const PharmacySupplier = () => {
+  const catalogUser = getUserDataFromStorage();
+  const myBranchId = catalogUser?.branchId ? String(catalogUser.branchId) : '';
+  const canMutateCatalogRow = (rec) => {
+    if (isSuperAdminRole(catalogUser?.role)) return true;
+    if (rec.branchId == null || rec.branchId === '') return false;
+    return myBranchId !== '' && String(rec.branchId) === myBranchId;
+  };
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
   const [manufacturers, setManufacturers] = useState([]);
@@ -164,18 +172,22 @@ const PharmacySupplier = () => {
       width: 120,
       render: (_, record) => (
         <Space size="small">
-          <Button
-            type="text"
-            icon={<EditOutlined className="text-blue-500" />}
-            onClick={() => handleEdit(record)}
-            title="Edit Supplier"
-          />
-          <Button
-            type="text"
-            icon={<DeleteOutlined className="text-red-500" />}
-            onClick={() => handleDelete(record._id)}
-            title="Delete Supplier"
-          />
+          {canPsUpdate && canMutateCatalogRow(record) ? (
+            <Button
+              type="text"
+              icon={<EditOutlined className="text-blue-500" />}
+              onClick={() => handleEdit(record)}
+              title="Edit Supplier"
+            />
+          ) : null}
+          {canPsDelete && canMutateCatalogRow(record) ? (
+            <Button
+              type="text"
+              icon={<DeleteOutlined className="text-red-500" />}
+              onClick={() => handleDelete(record._id)}
+              title="Delete Supplier"
+            />
+          ) : null}
         </Space>
       ),
     },
@@ -184,13 +196,17 @@ const PharmacySupplier = () => {
   const fetchSuppliers = async (page, search = '') => {
     try {
       setLoading(true);
-      const url = `${Base_url}/apis/pharmSupplier/get?page=${page}&search=${search}`;
-      const res = await axios.get(url);
-      
+      const params = new URLSearchParams({
+        page: String(page),
+        search: search || '',
+        ...buildAxiosBranchScopedParams(),
+      });
+      const res = await axios.get(`${Base_url}/apis/pharmSupplier/get?${params.toString()}`);
+
       setSuppliers(res.data.data || []);
       setTotalPages(res.data.totalPages || 1);
-      setTotalSuppliers(res.data.total || 0);
-      
+      setTotalSuppliers(res.data.count || 0);
+
       // Calculate total amount due
       const totalDue = res.data.data?.reduce((sum, supplier) => sum + (supplier.amountDue || 0), 0) || 0;
       setTotalAmountDue(totalDue);
@@ -204,7 +220,11 @@ const PharmacySupplier = () => {
 
   const fetchManufacturers = async () => {
     try {
-      const res = await axios.get(`${Base_url}/apis/pharmManufacturer/get`);
+      const params = new URLSearchParams({
+        limit: '500',
+        ...buildAxiosBranchScopedParams(),
+      });
+      const res = await axios.get(`${Base_url}/apis/pharmManufacturer/get?${params.toString()}`);
       setManufacturers(res.data.data);
     } catch (error) {
       message.error('Failed to fetch manufacturers');
@@ -287,7 +307,7 @@ const PharmacySupplier = () => {
   return (
     <div className="rounded-sm border border-stroke bg-white px-5 pt-6 pb-2.5 shadow-default dark:border-strokedark dark:bg-boxdark sm:px-7.5 xl:pb-1">
       <Breadcrumb pageName="Pharmacy Suppliers" />
-
+     
       <AddPharmacySupplier
         isModalOpen={isModalOpen}
         setIsModalOpen={handleModalClose}

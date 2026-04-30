@@ -5,7 +5,7 @@ import axios from 'axios';
 import moment from 'moment';
 import { RiDeleteBin5Line } from 'react-icons/ri';
 import { Base_url } from '../../utils/Base_url';
-import { BRANCH_CHANGED_EVENT } from '../../utils/branchScope';
+import { BRANCH_CHANGED_EVENT, buildAxiosBranchScopedParams } from '../../utils/branchScope';
 
 const TodayAppointments = () => {
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
@@ -48,7 +48,7 @@ const TodayAppointments = () => {
   const fetchAppointments = useCallback(() => {
     setLoading(true);
     axios
-      .get(`${Base_url}/apis/appointment/dashboard`)
+      .get(`${Base_url}/apis/appointment/dashboard`, { params: buildAxiosBranchScopedParams() })
       .then((res) => {
         setAppointments(res?.data?.data?.todayAppointments || []);
       })

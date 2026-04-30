@@ -10,6 +10,7 @@ import * as XLSX from 'xlsx';
 import { useReactToPrint } from 'react-to-print';
 import { Link, useNavigate } from 'react-router-dom';
 import { canMenuAction, getStoredUserForPermissions } from '../../../utils/permissions';
+import { buildAxiosBranchScopedParams } from '../../../utils/branchScope';
 
 const { Search } = Input;
 const { Option } = Select;
@@ -225,23 +226,24 @@ const PharmacyStocks: React.FC = () => {
   const fetchStocks = async () => {
     try {
       setLoading(true);
-      const params: any = {
+      const params: Record<string, string> = {
         page: currentPage.toString(),
         limit: '20',
+        ...buildAxiosBranchScopedParams(),
       };
-      
+
       if (searchTerm) {
         params.search = searchTerm;
       }
-      
+
       if (supplierFilter) {
         params.supplierId = supplierFilter;
       }
-      
+
       if (manufacturerFilter) {
         params.manufacturerId = manufacturerFilter;
       }
-      
+
       if (dateRange[0] && dateRange[1]) {
         params.fromDate = dateRange[0].format('YYYY-MM-DD');
         params.toDate = dateRange[1].format('YYYY-MM-DD');

@@ -340,8 +340,8 @@ const PatientInvoice = () => {
   const tableRef = useRef();
 
   const [filters, setFilters] = useState({
-    startDate: moment().startOf('month'),
-    endDate: moment(),
+    startDate: null as unknown as moment.Moment,
+    endDate: null as unknown as moment.Moment,
     department: '',
     paymentMode: '',
     doctor: '',
@@ -351,7 +351,7 @@ const PatientInvoice = () => {
     status: '',
     minAmount: '',
     maxAmount: '',
-    dateRange: [moment().startOf('month'), moment()],
+    dateRange: [] as moment.Moment[],
   });
 
   console.log(filters, 'filters');
@@ -1272,12 +1272,9 @@ const PatientInvoice = () => {
               <Button
                 onClick={() => {
                   setFilters({
-                    dateRange: [
-                      moment().startOf('month'),
-                      moment().endOf('day'),
-                    ],
-                    startDate: moment().startOf('month'),
-                    endDate: moment(),
+                    dateRange: [],
+                    startDate: null as unknown as moment.Moment,
+                    endDate: null as unknown as moment.Moment,
                     department: '',
                     paymentMode: '',
                     doctor: '',

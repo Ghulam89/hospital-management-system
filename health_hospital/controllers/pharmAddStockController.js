@@ -1,37 +1,86 @@
-const PharmAddStock = require("../models/pharmAddStockModel");
 const PharmInboundStock = require("../models/pharmInboundStockModel");
 const PharmItem = require("../models/pharmItemModel");
-const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible } = require("../utils/branchScope");
+const {
+  mergeBranchScopedQuery,
+  assignBranchIdForCreate,
+  branchDocumentVisible,
+  resolveWriteBranchOid,
+} = require("../utils/branchScope");
+const { resolvePharmItemIdForBranchStock } = require("../utils/pharmBranchInventory");
 
 // 1. Create pharmAddStock (Inbound Stock Document)
 const addpharmAddStock = async (req, res) => {
   try {
-    const { 
-      documentNumber, 
-      date, 
-      supplierId, 
-      supplierInvoiceDate, 
-      supplierInvoiceNumber, 
-      items, 
-      totalCost, 
-      totalTax, 
-      grandTotal, 
-      remarks 
+    if (!req.user) {
+      return res.status(401).json({
+        status: "error",
+        message: "Unauthorized",
+      });
+    }
+
+    const {
+      documentNumber,
+      date,
+      supplierId,
+      supplierInvoiceDate,
+      supplierInvoiceNumber,
+      items,
+      totalCost,
+      totalTax,
+      grandTotal,
+      remarks,
     } = req.body;
-    
+
+    const branchOid = await resolveWriteBranchOid(req);
+    if (!branchOid) {
+      return res.status(400).json({
+        status: "error",
+        message:
+          "Branch is required for stock. Select a branch in the header (super admin) or assign a branch to your user.",
+      });
+    }
+
     // Check if items array exists and has data
     if (!items || !Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ 
-        status: "error", 
-        message: "No items provided" 
+      return res.status(400).json({
+        status: "error",
+        message: "No items provided",
       });
     }
 
     // Check if supplierId is provided
     if (!supplierId) {
-      return res.status(400).json({ 
-        status: "error", 
-        message: "Supplier ID is required" 
+      return res.status(400).json({
+        status: "error",
+        message: "Supplier ID is required",
+      });
+    }
+
+    const mappedItems = [];
+    for (const item of items) {
+      if (!item?.pharmItemId) {
+        return res.status(400).json({
+          status: "error",
+          message: "Each line must include pharmItemId",
+        });
+      }
+      const targetId = await resolvePharmItemIdForBranchStock(item.pharmItemId, branchOid);
+      if (!targetId) {
+        return res.status(400).json({
+          status: "error",
+          message: `Could not resolve pharmacy item for this branch: ${item.pharmItemId}`,
+        });
+      }
+      mappedItems.push({
+        pharmItemId: targetId,
+        quantity: item.quantity || 0,
+        looseUnitQty: item.looseUnitQty || 0,
+        unitCost: item.unitCost || 0,
+        totalCost: item.totalCost || 0,
+        itemTax: item.itemTax || 0,
+        batchNumber: item.batchNumber || null,
+        expiryDate: item.expiryDate || null,
+        rack: item.rack || null,
       });
     }
 
@@ -42,35 +91,24 @@ const addpharmAddStock = async (req, res) => {
       supplierId,
       supplierInvoiceDate: supplierInvoiceDate || null,
       supplierInvoiceNumber: supplierInvoiceNumber || null,
-      items: items.map(item => ({
-        pharmItemId: item.pharmItemId,
-        quantity: item.quantity || 0,
-        looseUnitQty: item.looseUnitQty || 0,
-        unitCost: item.unitCost || 0,
-        totalCost: item.totalCost || 0,
-        itemTax: item.itemTax || 0,
-        batchNumber: item.batchNumber || null,
-        expiryDate: item.expiryDate || null,
-        rack: item.rack || null
-      })),
+      items: mappedItems,
       totalCost: totalCost || 0,
       totalTax: totalTax || 0,
       grandTotal: grandTotal || 0,
       paid: 0,
       due: Number(grandTotal) || 0,
       payment: [],
-      remarks: remarks || '',
-      status: 'completed'
+      remarks: remarks || "",
+      status: "completed",
     };
 
     const createdInboundStock = await PharmInboundStock.create(assignBranchIdForCreate(req, inboundStockData));
 
-    return res.status(200).json({ 
-      status: "ok", 
+    return res.status(200).json({
+      status: "ok",
       message: "Stock added successfully",
-      data: createdInboundStock 
+      data: createdInboundStock,
     });
-    
   } catch (err) {
     console.error('Error adding stock:', err);
     const errorMessage = err.message || 'Failed to add stock';
@@ -90,18 +128,21 @@ const getpharmAddStocks = async (req, res) => {
     let page = parseInt(req.query.page) || 1;
     let supplierFilter = req.query.supplierId || "";
     let manufacturerFilter = req.query.manufacturerId || "";
-    let from = req.query.from;
-    let to = req.query.to;
+    const from = req.query.from || req.query.fromDate;
+    const to = req.query.to || req.query.toDate;
     const limit = req.query.limit ? parseInt(req.query.limit) : 20;
 
     // Create base query
     const baseQuery = {};
 
+    const branchQ = await mergeBranchScopedQuery(req);
+    if (branchQ) Object.assign(baseQuery, branchQ);
+
     // Date range filter
     if (from && to) {
       baseQuery.createdAt = {
         $gte: new Date(from),
-        $lte: new Date(to)
+        $lte: new Date(to),
       };
     }
 
@@ -113,8 +154,8 @@ const getpharmAddStocks = async (req, res) => {
     // Search filter (search by document number or supplier invoice number)
     if (search) {
       baseQuery.$or = [
-        { documentNumber: { $regex: search, $options: 'i' } },
-        { supplierInvoiceNumber: { $regex: search, $options: 'i' } }
+        { documentNumber: { $regex: search, $options: "i" } },
+        { supplierInvoiceNumber: { $regex: search, $options: "i" } },
       ];
     }
 
@@ -185,6 +226,10 @@ const getpharmAddStockById = async (req, res) => {
 // 4. Update pharmAddStock
 const updatepharmAddStock = async (req, res) => {
   try {
+    if (!req.user) {
+      return res.status(401).json({ status: "error", message: "Unauthorized" });
+    }
+
     let id = req.params.id;
     const doc = await PharmInboundStock.findById(id);
     if (!doc || !(await branchDocumentVisible(req, doc.branchId))) {
@@ -214,7 +259,30 @@ const updatepharmAddStock = async (req, res) => {
     const inventoryNeedsUpdate =
       Array.isArray(req.body.items) || incomingStatus !== (doc.status ?? "completed");
 
-    const incomingItems = Array.isArray(req.body.items) ? normalizeItems(req.body.items) : null;
+    const incomingItemsRaw = Array.isArray(req.body.items) ? normalizeItems(req.body.items) : null;
+    const branchOidForLines = doc.branchId || (await resolveWriteBranchOid(req));
+
+    let incomingItems = incomingItemsRaw;
+    if (incomingItemsRaw) {
+      if (!branchOidForLines) {
+        return res.status(400).json({
+          status: "error",
+          message: "Inbound document has no branch; cannot update line items safely.",
+        });
+      }
+      incomingItems = [];
+      for (const it of incomingItemsRaw) {
+        const tid = await resolvePharmItemIdForBranchStock(it.pharmItemId, branchOidForLines);
+        if (!tid) {
+          return res.status(400).json({
+            status: "error",
+            message: `Could not resolve pharmacy item for this branch: ${it.pharmItemId}`,
+          });
+        }
+        incomingItems.push({ ...it, pharmItemId: tid });
+      }
+    }
+
     const finalItems = incomingItems || normalizeItems(doc.items);
 
     const oldItemIds = normalizeItems(doc.items).map((it) => String(it.pharmItemId));
@@ -308,10 +376,12 @@ const updatepharmAddStock = async (req, res) => {
 const deletepharmAddStock = async (req, res) => {
   try {
     const id = req.params.id;
+    const doc = await PharmInboundStock.findById(id);
+    if (!doc || !(await branchDocumentVisible(req, doc.branchId))) {
+      return res.status(404).json({ status: "fail", message: "Inbound stock not found" });
+    }
     await PharmInboundStock.findByIdAndDelete(id);
-    return res
-      .status(200)
-      .json({ status: "ok", message: "Inbound stock document deleted successfully" });
+    return res.status(200).json({ status: "ok", message: "Inbound stock document deleted successfully" });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
