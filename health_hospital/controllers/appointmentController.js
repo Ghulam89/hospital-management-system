@@ -3,7 +3,13 @@ const Appointment = require('../models/appointmentModel');
 const Leave = require('../models/leaveModel');
 const User = require('../models/userModel');
 const Patient = require('../models/patientModel');
-const { applyPatientIdScopeToQuery, getScopedPatientIds, getScopedDepartmentIds, patientVisibleForRequest } = require('../utils/branchScope');
+const {
+    applyPatientIdScopeToQuery,
+    getScopedPatientIds,
+    getScopedDepartmentIds,
+    patientVisibleForRequest,
+    mergeBranchScopedQuery,
+} = require('../utils/branchScope');
 
 // Utility for recurrence
 
@@ -193,7 +199,11 @@ const getAppointmentDashboard = async (req, res) => {
         const allPatientAppointments = await Appointment.find(patQuery).populate(['doctorId', 'patientId']);
         const allAppointments = await Appointment.find(scopeByPatient).populate(['doctorId', 'patientId']);
 
+        const branchFilter = await mergeBranchScopedQuery(req);
         let doctorQuery = { role: 'doctor' };
+        if (branchFilter && branchFilter.branchId) {
+            doctorQuery.branchId = branchFilter.branchId;
+        }
         if (scopedDeptIds !== null) {
             doctorQuery.departmentId = scopedDeptIds.length === 0 ? { $in: [] } : { $in: scopedDeptIds };
         }

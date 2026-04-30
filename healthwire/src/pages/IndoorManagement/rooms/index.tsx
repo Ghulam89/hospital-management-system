@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, message } from 'antd';
+import { Table, message } from 'antd';
 
 import { Link } from 'react-router-dom';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
@@ -8,38 +8,21 @@ import { FaRegEdit } from 'react-icons/fa';
 import { RiDeleteBin5Line } from 'react-icons/ri';
 import AddRoom from './AddRoom';
 import Swal from 'sweetalert2';
+import { Base_url } from '../../../utils/Base_url';
+import { canMenuAction, getStoredUserForPermissions } from '../../../utils/permissions';
 
-const columns = (handleDelete, handleEdit) => [
-  {
-    title: 'NAME',
-    dataIndex: 'name',
-  },
-  {
-    title: 'DEPARTMENT NAME',
-    dataIndex: ['departmentId', 'name'], // Access the nested name field within departmentId
-  },
-  {
-    title: 'ACTION',
-    dataIndex: 'action',
-    render: (text, record) => (
-      <>
-        <div className=' flex items-center  gap-2'> 
-        <FaRegEdit color='blue' size={20} onClick={() => handleEdit(record)} />
-      
-        <RiDeleteBin5Line color='red' size={20} onClick={() => handleDelete(record.key)} />
-        </div>
-      </>
-    ),
-  },
-];
-
-const Rooms= () => {
+const Rooms = () => {
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
   const [wardData, setWardData] = useState([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [editingWard, setEditingWard] = useState(null);
+
+  const permUser = getStoredUserForPermissions();
+  const canRoomCreate = canMenuAction(permUser, 'rooms', 'create');
+  const canRoomUpdate = canMenuAction(permUser, 'rooms', 'update');
+  const canRoomDelete = canMenuAction(permUser, 'rooms', 'delete');
 
   const onSelectChange = (newSelectedRowKeys) => {
     setSelectedRowKeys(newSelectedRowKeys);
@@ -74,12 +57,13 @@ const Rooms= () => {
   };
 
   const fetchWardData = (page) => {
-    axios.get(`https://api.holisticare.pk/apis/room/get?page=${page}`).then((res) => {
-      console.log(res);
-      
-      setWardData(res.data.data.map(item => ({ ...item, key: item._id }))); 
-      setTotalPages(res.data.totalPages); 
-    });
+    axios
+      .get(`${Base_url}/apis/room/get?page=${page}`)
+      .then((res) => {
+        setWardData(res.data.data.map((item) => ({ ...item, key: item._id })));
+        setTotalPages(res.data.totalPages);
+      })
+      .catch(() => message.error('Failed to load rooms'));
   };
 
   useEffect(() => {
@@ -90,70 +74,90 @@ const Rooms= () => {
     setCurrentPage(pagination.current);
   };
 
-  
-
-
   const handleDelete = (key) => {
+    if (!canRoomDelete) return;
     Swal.fire({
-      title: "Are you sure?",
+      title: 'Are you sure?',
       text: "You won't be able to revert this!",
-      icon: "warning",
+      icon: 'warning',
       showCancelButton: true,
-      confirmButtonColor: "#4EC3BD",
-      cancelButtonColor: "#d33",
-      confirmButtonText: "Yes, delete it!",
+      confirmButtonColor: '#4EC3BD',
+      cancelButtonColor: '#d33',
+      confirmButtonText: 'Yes, delete it!',
     }).then((result) => {
       if (result.isConfirmed) {
-        axios.delete(`https://api.holisticare.pk/apis/room/delete/${key}`)
+        axios
+          .delete(`${Base_url}/apis/room/delete/${key}`)
           .then((res) => {
             if (res.data.status === 'ok') {
-              Swal.fire("Deleted!", "Your file has been deleted.", "success");
+              Swal.fire('Deleted!', 'Your file has been deleted.', 'success');
               fetchWardData(currentPage);
             }
           })
-          .catch((error) => {
-            console.log(error);
-          });
+          .catch(() => message.error('Failed to delete room'));
       }
     });
   };
 
   const handleEdit = (ward) => {
+    if (!canRoomUpdate) return;
     setEditingWard(ward);
     setIsModalOpen(true);
   };
 
-
   const handleAdd = () => {
+    if (!canRoomCreate) return;
     setEditingWard(null);
     setIsModalOpen(true);
   };
 
+  const columns = [
+    {
+      title: 'NAME',
+      dataIndex: 'name',
+    },
+    {
+      title: 'DEPARTMENT NAME',
+      dataIndex: ['departmentId', 'name'],
+    },
+    {
+      title: 'ACTION',
+      dataIndex: 'action',
+      render: (text, record) => (
+        <>
+          <div className=" flex items-center  gap-2">
+            {canRoomUpdate ? (
+              <FaRegEdit color="blue" size={20} onClick={() => handleEdit(record)} />
+            ) : null}
+            {canRoomDelete ? (
+              <RiDeleteBin5Line color="red" size={20} onClick={() => handleDelete(record.key)} />
+            ) : null}
+          </div>
+        </>
+      ),
+    },
+  ];
+
   return (
     <>
-      <>
-        <Breadcrumb pageName="Rooms" />
+      <Breadcrumb pageName="Rooms" />
 
-        <AddRoom
-          isModalOpen={isModalOpen}
-          setIsModalOpen={setIsModalOpen}
-          fetchWardData={() => fetchWardData(currentPage)}
-          selectedWard={editingWard}
-        />
+      <AddRoom
+        isModalOpen={isModalOpen}
+        setIsModalOpen={setIsModalOpen}
+        fetchWardData={() => fetchWardData(currentPage)}
+        selectedWard={editingWard}
+      />
 
-        <div className="mb-5 flex justify-between items-center">
-          <h1></h1>
+      <div className="mb-5 flex justify-between items-center">
+        <h1></h1>
+        {canRoomCreate ? (
           <Link
-             onClick={handleAdd}
+            onClick={handleAdd}
             to="#"
             className="inline-flex items-center justify-center gap-2.5 rounded-md bg-primary py-3 px-10 text-center font-medium text-white hover:bg-opacity-90 lg:px-8 xl:px-10"
           >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 256 256"
-              width="20px"
-              height="20px"
-            >
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="20px" height="20px">
               <g
                 fill="#ffffff"
                 fillRule="nonzero"
@@ -176,17 +180,17 @@ const Rooms= () => {
             </svg>
             Add Room Type
           </Link>
-        </div>
-        <div className="rounded-sm border border-stroke bg-white px-5 pt-6 pb-2.5 shadow-default dark:border-strokedark dark:bg-boxdark sm:px-7.5 xl:pb-1">
-          <Table
-            rowSelection={rowSelection}
-            columns={columns(handleDelete, handleEdit)}
-            dataSource={wardData}
-            pagination={{ current: currentPage, pageSize: 10, total: totalPages * 10 }}
-            onChange={handleTableChange}
-          />
-        </div>
-      </>
+        ) : null}
+      </div>
+      <div className="rounded-sm border border-stroke bg-white px-5 pt-6 pb-2.5 shadow-default dark:border-strokedark dark:bg-boxdark sm:px-7.5 xl:pb-1">
+        <Table
+          rowSelection={rowSelection}
+          columns={columns}
+          dataSource={wardData}
+          pagination={{ current: currentPage, pageSize: 10, total: totalPages * 10 }}
+          onChange={handleTableChange}
+        />
+      </div>
     </>
   );
 };

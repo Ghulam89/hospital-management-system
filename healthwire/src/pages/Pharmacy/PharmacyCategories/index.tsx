@@ -6,6 +6,7 @@ import axios from 'axios';
 import Swal from 'sweetalert2';
 import AddPharmacyCategories from './AddPharmacyCategories';
 import { Base_url } from '../../../utils/Base_url';
+import { canMenuAction, getStoredUserForPermissions } from '../../../utils/permissions';
 
 const { Search } = Input;
 
@@ -19,6 +20,11 @@ const PharmacyCategories = () => {
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [totalCategories, setTotalCategories] = useState(0);
+
+  const permUser = getStoredUserForPermissions();
+  const canPcCreate = canMenuAction(permUser, 'pharm_categories', 'create');
+  const canPcUpdate = canMenuAction(permUser, 'pharm_categories', 'update');
+  const canPcDelete = canMenuAction(permUser, 'pharm_categories', 'delete');
 
   const onSelectChange = (newSelectedRowKeys) => {
     setSelectedRowKeys(newSelectedRowKeys);
@@ -83,18 +89,22 @@ const PharmacyCategories = () => {
       width: 120,
       render: (_, record) => (
         <Space size="small">
-          <Button
-            type="text"
-            icon={<EditOutlined className="text-blue-500" />}
-            onClick={() => handleEdit(record)}
-            title="Edit Category"
-          />
-          <Button
-            type="text"
-            icon={<DeleteOutlined className="text-red-500" />}
-            onClick={() => handleDelete(record._id)}
-            title="Delete Category"
-          />
+          {canPcUpdate ? (
+            <Button
+              type="text"
+              icon={<EditOutlined className="text-blue-500" />}
+              onClick={() => handleEdit(record)}
+              title="Edit Category"
+            />
+          ) : null}
+          {canPcDelete ? (
+            <Button
+              type="text"
+              icon={<DeleteOutlined className="text-red-500" />}
+              onClick={() => handleDelete(record._id)}
+              title="Delete Category"
+            />
+          ) : null}
         </Space>
       ),
     },
@@ -221,6 +231,7 @@ const PharmacyCategories = () => {
             >
               Print
             </Button>
+            {canPcCreate ? (
             <Button
               type="default"
               icon={<PlusOutlined />}
@@ -229,6 +240,7 @@ const PharmacyCategories = () => {
             >
               + Add Category
             </Button>
+            ) : null}
           </div>
         </div>
 

@@ -6,6 +6,7 @@ import axios from 'axios';
 import Swal from 'sweetalert2';
 import { Base_url } from '../../../utils/Base_url';
 import AddPharmacySupplier from './AddPharmacySupplier';
+import { canMenuAction, getStoredUserForPermissions } from '../../../utils/permissions';
 
 const { Search } = Input;
 
@@ -21,6 +22,11 @@ const PharmacySupplier = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [totalSuppliers, setTotalSuppliers] = useState(0);
   const [totalAmountDue, setTotalAmountDue] = useState(0);
+
+  const permUser = getStoredUserForPermissions();
+  const canPsCreate = canMenuAction(permUser, 'pharm_suppliers', 'create');
+  const canPsUpdate = canMenuAction(permUser, 'pharm_suppliers', 'update');
+  const canPsDelete = canMenuAction(permUser, 'pharm_suppliers', 'delete');
 
   const onSelectChange = (newSelectedRowKeys) => {
     setSelectedRowKeys(newSelectedRowKeys);
@@ -311,6 +317,7 @@ const PharmacySupplier = () => {
             >
               Print
             </Button>
+            {canPsCreate ? (
             <Button
               type="default"
               icon={<PlusOutlined />}
@@ -319,6 +326,7 @@ const PharmacySupplier = () => {
             >
               + Add Supplier
             </Button>
+            ) : null}
           </div>
         </div>
 

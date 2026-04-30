@@ -34,6 +34,7 @@ const roleSchema = new mongoose.Schema(
   { timestamps: true },
 );
 
-roleSchema.index({ key: 1 }, { unique: true });
+/** One row per (key, branch): global templates use branchId `null`; each branch may reuse the same key. */
+roleSchema.index({ key: 1, branchId: 1 }, { unique: true });
 
 module.exports = mongoose.model('Role', roleSchema);

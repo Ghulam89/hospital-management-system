@@ -1,3 +1,4 @@
+const mongoose = require("mongoose");
 const PharmPos = require("../models/pharmPosModel");
 const PharmItem = require("../models/pharmItemModel");
 const PharmInboundStock = require("../models/pharmInboundStockModel");
@@ -1011,6 +1012,29 @@ const getPosByItem = async (req, res) => {
   }
 };
 
+/** Super admin only: sets branchId on every POS invoice document. */
+const bulkSetBranchForAllPos = async (req, res) => {
+  try {
+    const raw = req.body && req.body.branchId != null ? String(req.body.branchId).trim() : "";
+    if (!raw || !mongoose.Types.ObjectId.isValid(raw)) {
+      return res.status(400).json({
+        status: "fail",
+        message: "Valid branchId (Mongo ObjectId) is required in body.",
+      });
+    }
+    const branchOid = new mongoose.Types.ObjectId(raw);
+    const result = await PharmPos.updateMany({}, { $set: { branchId: branchOid } });
+    return res.status(200).json({
+      status: "ok",
+      message: "All pharmacy POS invoices updated with the selected branch.",
+      matchedCount: result.matchedCount,
+      modifiedCount: result.modifiedCount,
+    });
+  } catch (err) {
+    return res.status(500).json({ status: "error", error: err.message });
+  }
+};
+
 module.exports = {
   addpharmPos,
   getpharmPoss,
@@ -1022,5 +1046,6 @@ module.exports = {
   updatePatientPosLedgerPayment,
   deletePatientPosLedgerPayment,
   addPatientPosInvoicePayment,
-  getPosByItem
+  getPosByItem,
+  bulkSetBranchForAllPos,
 };

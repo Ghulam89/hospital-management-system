@@ -18,6 +18,7 @@ import {
   isSuperAdminRole,
   setSuperadminSelectedBranchId,
 } from '../../utils/branchScope';
+import { canMenuAction, getStoredUserForPermissions } from '../../utils/permissions';
 
 type BranchRow = { _id: string; name: string; code?: string };
 
@@ -60,6 +61,10 @@ const Patients = () => {
 
   const isSuper = isSuperAdminRole(getUserDataFromStorage()?.role);
   const userBranchId = getUserBranchIdFromStorage();
+  const permUser = getStoredUserForPermissions();
+  const canPatientCreate = canMenuAction(permUser, 'patients', 'create');
+  const canPatientUpdate = canMenuAction(permUser, 'patients', 'update');
+  const canPatientDelete = canMenuAction(permUser, 'patients', 'delete');
 
   const loadBranches = useCallback(() => {
     setBranchListLoading(true);
@@ -296,28 +301,36 @@ const Patients = () => {
                   <FaEye className="text-[18px]" />
                 </Link>
               </Tooltip>
-              <span className="w-px shrink-0 self-stretch bg-stroke dark:bg-strokedark" aria-hidden />
-              <Tooltip title="Edit">
-                <button
-                  type="button"
-                  className="inline-flex h-8 w-9 items-center justify-center text-blue-600 transition-colors hover:bg-blue-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-blue-500 dark:text-blue-400 dark:hover:bg-blue-500/15"
-                  onClick={() => handleEdit(record)}
-                  aria-label="Edit patient"
-                >
-                  <FaRegEdit className="text-[17px]" />
-                </button>
-              </Tooltip>
-              <span className="w-px shrink-0 self-stretch bg-stroke dark:bg-strokedark" aria-hidden />
-              <Tooltip title="Delete">
-                <button
-                  type="button"
-                  className="inline-flex h-8 w-9 items-center justify-center text-red-500 transition-colors hover:bg-red-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-red-500 dark:text-red-400 dark:hover:bg-red-500/15"
-                  onClick={() => handleDelete(record._id)}
-                  aria-label="Delete patient"
-                >
-                  <RiDeleteBin5Line className="text-[17px]" />
-                </button>
-              </Tooltip>
+              {canPatientUpdate ? (
+                <>
+                  <span className="w-px shrink-0 self-stretch bg-stroke dark:bg-strokedark" aria-hidden />
+                  <Tooltip title="Edit">
+                    <button
+                      type="button"
+                      className="inline-flex h-8 w-9 items-center justify-center text-blue-600 transition-colors hover:bg-blue-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-blue-500 dark:text-blue-400 dark:hover:bg-blue-500/15"
+                      onClick={() => handleEdit(record)}
+                      aria-label="Edit patient"
+                    >
+                      <FaRegEdit className="text-[17px]" />
+                    </button>
+                  </Tooltip>
+                </>
+              ) : null}
+              {canPatientDelete ? (
+                <>
+                  <span className="w-px shrink-0 self-stretch bg-stroke dark:bg-strokedark" aria-hidden />
+                  <Tooltip title="Delete">
+                    <button
+                      type="button"
+                      className="inline-flex h-8 w-9 items-center justify-center text-red-500 transition-colors hover:bg-red-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-red-500 dark:text-red-400 dark:hover:bg-red-500/15"
+                      onClick={() => handleDelete(record._id)}
+                      aria-label="Delete patient"
+                    >
+                      <RiDeleteBin5Line className="text-[17px]" />
+                    </button>
+                  </Tooltip>
+                </>
+              ) : null}
             </div>
           )}
         </div>
@@ -524,38 +537,40 @@ const Patients = () => {
           >
             Export Excel
           </Button>
-          <button
-            onClick={handleAdd}
-            className="inline-flex items-center justify-center gap-2.5 rounded-md bg-primary py-3 px-10 text-center font-medium text-white hover:bg-opacity-90 lg:px-8 xl:px-10"
-          >
-            <svg
-              xmlns="http://www.w3.org/2000/svg"
-              viewBox="0 0 256 256"
-              width="20px"
-              height="20px"
+          {canPatientCreate ? (
+            <button
+              onClick={handleAdd}
+              className="inline-flex items-center justify-center gap-2.5 rounded-md bg-primary py-3 px-10 text-center font-medium text-white hover:bg-opacity-90 lg:px-8 xl:px-10"
             >
-              <g
-                fill="#ffffff"
-                fillRule="nonzero"
-                stroke="none"
-                strokeWidth="1"
-                strokeLinecap="butt"
-                strokeLinejoin="miter"
-                strokeMiterlimit="10"
-                strokeDasharray=""
-                strokeDashoffset="0"
-                fontFamily="none"
-                fontWeight="none"
-                fontSize="none"
-                textAnchor="none"
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                viewBox="0 0 256 256"
+                width="20px"
+                height="20px"
               >
-                <g transform="scale(5.12,5.12)">
-                  <path d="M25,2c-12.6907,0 -23,10.3093 -23,23c0,12.69071 10.3093,23 23,23c12.69071,0 23,-10.30929 23,-23c0,-12.6907 -10.30929,-23 -23,-23zM25,4c11.60982,0 21,9.39018 21,21c0,11.60982 -9.39018,21 -21,21c-11.60982,0 -21,-9.39018 -21,-21c0,-11.60982 9.39018,-21 21,-21zM24,13v11h-11v2h11v11h2v-11h11v-2h-11v-11z"></path>
+                <g
+                  fill="#ffffff"
+                  fillRule="nonzero"
+                  stroke="none"
+                  strokeWidth="1"
+                  strokeLinecap="butt"
+                  strokeLinejoin="miter"
+                  strokeMiterlimit="10"
+                  strokeDasharray=""
+                  strokeDashoffset="0"
+                  fontFamily="none"
+                  fontWeight="none"
+                  fontSize="none"
+                  textAnchor="none"
+                >
+                  <g transform="scale(5.12,5.12)">
+                    <path d="M25,2c-12.6907,0 -23,10.3093 -23,23c0,12.69071 10.3093,23 23,23c12.69071,0 23,-10.30929 23,-23c0,-12.6907 -10.30929,-23 -23,-23zM25,4c11.60982,0 21,9.39018 21,21c0,11.60982 -9.39018,21 -21,21c-11.60982,0 -21,-9.39018 -21,-21c0,-11.60982 9.39018,-21 21,-21zM24,13v11h-11v2h11v11h2v-11h11v-2h-11v-11z"></path>
+                  </g>
                 </g>
-              </g>
-            </svg>
-            Add Patient
-          </button>
+              </svg>
+              Add Patient
+            </button>
+          ) : null}
         </div>
       </div>
 
@@ -617,7 +632,7 @@ const Patients = () => {
             dataSource={patientData}
             loading={loading}
             pagination={false}
-            scroll={{ x: 1088 }}
+            scroll={{ x: 1160 }}
             tableLayout="fixed"
           />
         </div>

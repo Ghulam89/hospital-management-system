@@ -133,6 +133,70 @@ export function canSeeAnySidebarMenu(user: StoredUser, menuIds: string[]): boole
   return menuIds.some((id) => canSeeSidebarMenu(user, id));
 }
 
+/**
+ * Granular UI action (create / read / update / delete) for a menu row from the Roles matrix.
+ * Superadmin and branch admins: always allowed. Legacy doctor/nurse full sidebar: allowed.
+ * Other users: must have the matching `mp.{menuId}.{action}` in `tabs`.
+ */
+export function canMenuAction(
+  user: StoredUser,
+  menuId: string,
+  action: MenuMatrixAction,
+): boolean {
+  if (!user) return false;
+  const role = normalizeRole(user);
+  if (role === 'superadmin') return true;
+  if (isFullAccessRole(role)) return true;
+
+  const row = MENU_ROWS.find((r) => r.id === menuId);
+  if (!row || !row.cells[action]) return false;
+
+  const tabs = getTabs(user);
+
+  if (!usesGranularMenuTabs(user)) {
+    if (LEGACY_FULL_SIDEBAR_ROLES.has(role)) return true;
+    if (menuId === 'patients' && action === 'delete') {
+      return hasAnyPermission(user, 'deletePatient');
+    }
+    return false;
+  }
+
+  if (menuId === 'patients' && action === 'delete') {
+    if (hasAnyPermission(user, 'deletePatient')) return true;
+  }
+
+  return tabs.has(menuPermissionKey(menuId, action));
+}
+
+/**
+ * True when `tabs` includes `mp.{menuId}.{action}` only (no superadmin / branch-admin / legacy doctor-nurse bypass).
+ * Use to extend `canCreateUsers` / similar without treating every clinical legacy role as Users admin.
+ */
+export function hasGranularMenuPermission(
+  user: StoredUser,
+  menuId: string,
+  action: MenuMatrixAction,
+): boolean {
+  if (!user) return false;
+  const row = MENU_ROWS.find((r) => r.id === menuId);
+  if (!row || !row.cells[action]) return false;
+  if (!usesGranularMenuTabs(user)) return false;
+  return getTabs(user).has(menuPermissionKey(menuId, action));
+}
+
+/** Any scoped Users-matrix access (for /admin/users subtabs). */
+export function hasAnyUsersMenuPermission(user: StoredUser): boolean {
+  if (!user) return false;
+  if (!usesGranularMenuTabs(user)) return false;
+  return (
+    hasGranularMenuPermission(user, 'users', 'module') ||
+    hasGranularMenuPermission(user, 'users', 'read') ||
+    hasGranularMenuPermission(user, 'users', 'create') ||
+    hasGranularMenuPermission(user, 'users', 'update') ||
+    hasGranularMenuPermission(user, 'users', 'delete')
+  );
+}
+
 export function getStoredUserForPermissions(): StoredUser {
   try {
     const raw = localStorage.getItem('userData');
@@ -172,21 +236,24 @@ export function canCreateUsers(user: StoredUser): boolean {
   if (!user) return false;
   const role = normalizeRole(user);
   if (isFullAccessRole(role)) return true;
-  return hasAnyPermission(user, 'createUsers');
+  if (hasAnyPermission(user, 'createUsers')) return true;
+  return hasGranularMenuPermission(user, 'users', 'create');
 }
 
 export function canEditUsers(user: StoredUser): boolean {
   if (!user) return false;
   const role = normalizeRole(user);
   if (isFullAccessRole(role)) return true;
-  return hasAnyPermission(user, 'editUsers', 'createUsers');
+  if (hasAnyPermission(user, 'editUsers', 'createUsers')) return true;
+  return hasGranularMenuPermission(user, 'users', 'update');
 }
 
 export function canDeleteUsers(user: StoredUser): boolean {
   if (!user) return false;
   const role = normalizeRole(user);
   if (isFullAccessRole(role)) return true;
-  return hasAnyPermission(user, 'deleteUsers');
+  if (hasAnyPermission(user, 'deleteUsers')) return true;
+  return hasGranularMenuPermission(user, 'users', 'delete');
 }
 
 /** Longest-prefix wins; first matching rule in array order for same length. */

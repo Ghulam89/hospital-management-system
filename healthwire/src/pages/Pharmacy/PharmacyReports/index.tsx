@@ -5,6 +5,7 @@ import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 import axios from 'axios';
 import { Base_url } from '../../../utils/Base_url';
 import dayjs, { Dayjs } from 'dayjs';
+import * as XLSX from 'xlsx';
 import Swal from 'sweetalert2';
 import { useNavigate } from 'react-router-dom';
 
@@ -95,6 +96,7 @@ const PharmacyReports: React.FC = () => {
   const [paymentDateRange, setPaymentDateRange] = useState<[Dayjs | null, Dayjs | null]>([null, null]);
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
+  const [exporting, setExporting] = useState(false);
   
   // POS Sales Data - All calculated on BACKEND, not frontend
   const [posTransactions, setPosTransactions] = useState<POSTransaction[]>([]);
@@ -186,58 +188,48 @@ const PharmacyReports: React.FC = () => {
     }
   }, [activeTab, currentPage, searchTerm, dateRange, paymentDateRange, posPaymentMethod, posStatus, posPatientName, posPatientMr, posDoctorName, posMinAmount, posMaxAmount, posDiscountPercent]);
 
+  const buildPOSListFilterParams = () => {
+    const params: Record<string, string> = {};
+    if (searchTerm) params.search = searchTerm;
+    if (dateRange[0] && dateRange[1]) {
+      params.from = dateRange[0].format('YYYY-MM-DD');
+      params.to = dateRange[1].format('YYYY-MM-DD');
+    }
+    if (paymentDateRange[0] && paymentDateRange[1]) {
+      params.paymentFrom = paymentDateRange[0].format('YYYY-MM-DD');
+      params.paymentTo = paymentDateRange[1].format('YYYY-MM-DD');
+    }
+    if (posPaymentMethod) params.paymentMethod = posPaymentMethod;
+    if (posStatus) params.status = posStatus;
+    if (posPatientName.trim()) params.patientName = posPatientName.trim();
+    if (posPatientMr.trim()) params.patientMr = posPatientMr.trim();
+    if (posDoctorName.trim()) params.doctorName = posDoctorName.trim();
+    if (posMinAmount.trim()) params.minAmount = posMinAmount.trim();
+    if (posMaxAmount.trim()) params.maxAmount = posMaxAmount.trim();
+    if (posDiscountPercent.trim()) params.discountPercent = posDiscountPercent.trim();
+    return params;
+  };
+
+  const buildStockListFilterParams = () => {
+    const params: Record<string, string> = {};
+    if (searchTerm) params.search = searchTerm;
+    if (dateRange[0] && dateRange[1]) {
+      params.from = dateRange[0].format('YYYY-MM-DD');
+      params.to = dateRange[1].format('YYYY-MM-DD');
+    }
+    return params;
+  };
+
   // Fetch POS transactions - Only display, NO calculations here
   const fetchPOSTransactions = async () => {
     try {
       setLoading(true);
-      const params: any = {
+      const params = {
         page: currentPage,
-        limit: 20, // 20 records per page
-        sort: '-createdAt'
+        limit: 20,
+        sort: '-createdAt',
+        ...buildPOSListFilterParams(),
       };
-      
-      if (searchTerm) {
-        params.search = searchTerm;
-      }
-      
-      if (dateRange[0] && dateRange[1]) {
-        params.from = dateRange[0].format('YYYY-MM-DD');
-        params.to = dateRange[1].format('YYYY-MM-DD');
-      }
-      if (paymentDateRange[0] && paymentDateRange[1]) {
-        params.paymentFrom = paymentDateRange[0].format('YYYY-MM-DD');
-        params.paymentTo = paymentDateRange[1].format('YYYY-MM-DD');
-      }
-
-      if (posPaymentMethod) {
-        params.paymentMethod = posPaymentMethod;
-      }
-      if (posStatus) {
-        params.status = posStatus;
-      }
-
-      if (posPatientName.trim()) {
-        params.patientName = posPatientName.trim();
-      }
-
-      if (posPatientMr.trim()) {
-        params.patientMr = posPatientMr.trim();
-      }
-
-      if (posDoctorName.trim()) {
-        params.doctorName = posDoctorName.trim();
-      }
-
-      if (posMinAmount.trim()) {
-        params.minAmount = posMinAmount.trim();
-      }
-
-      if (posMaxAmount.trim()) {
-        params.maxAmount = posMaxAmount.trim();
-      }
-      if (posDiscountPercent.trim()) {
-        params.discountPercent = posDiscountPercent.trim();
-      }
 
       console.log('📤 Fetching POS transactions - Page:', currentPage);
       const response = await axios.get(`${Base_url}/apis/pharmPos/get`, { params });
@@ -267,50 +259,7 @@ const PharmacyReports: React.FC = () => {
   // POS summary from backend — same filter profile as transaction list (not paginated)
   const fetchPOSSummary = async () => {
     try {
-      const params: any = {};
-
-      if (searchTerm) {
-        params.search = searchTerm;
-      }
-
-      if (dateRange[0] && dateRange[1]) {
-        params.from = dateRange[0].format('YYYY-MM-DD');
-        params.to = dateRange[1].format('YYYY-MM-DD');
-      }
-      if (paymentDateRange[0] && paymentDateRange[1]) {
-        params.paymentFrom = paymentDateRange[0].format('YYYY-MM-DD');
-        params.paymentTo = paymentDateRange[1].format('YYYY-MM-DD');
-      }
-
-      if (posPaymentMethod) {
-        params.paymentMethod = posPaymentMethod;
-      }
-      if (posStatus) {
-        params.status = posStatus;
-      }
-
-      if (posPatientName.trim()) {
-        params.patientName = posPatientName.trim();
-      }
-
-      if (posPatientMr.trim()) {
-        params.patientMr = posPatientMr.trim();
-      }
-
-      if (posDoctorName.trim()) {
-        params.doctorName = posDoctorName.trim();
-      }
-
-      if (posMinAmount.trim()) {
-        params.minAmount = posMinAmount.trim();
-      }
-
-      if (posMaxAmount.trim()) {
-        params.maxAmount = posMaxAmount.trim();
-      }
-      if (posDiscountPercent.trim()) {
-        params.discountPercent = posDiscountPercent.trim();
-      }
+      const params = buildPOSListFilterParams();
 
       console.log('📊 Fetching POS summary (same filters as list, all rows)');
       console.log('📊 Summary API URL:', `${Base_url}/apis/pharmPos/summary`);
@@ -356,20 +305,12 @@ const PharmacyReports: React.FC = () => {
   const fetchStockTransactions = async () => {
     try {
       setLoading(true);
-      const params: any = {
+      const params = {
         page: currentPage,
-        limit: 20, // 20 records per page
-        sort: '-createdAt'
+        limit: 20,
+        sort: '-createdAt',
+        ...buildStockListFilterParams(),
       };
-      
-      if (searchTerm) {
-        params.search = searchTerm;
-      }
-      
-      if (dateRange[0] && dateRange[1]) {
-        params.from = dateRange[0].format('YYYY-MM-DD');
-        params.to = dateRange[1].format('YYYY-MM-DD');
-      }
 
       console.log('📦 Fetching stock transactions from backend - Page:', currentPage);
       const response = await axios.get(`${Base_url}/apis/pharmAddStock/get`, { params });
@@ -761,8 +702,164 @@ const PharmacyReports: React.FC = () => {
       }
     
   };
-  const handleExcelExport = () => {
-    message.info('Excel export functionality will be implemented');
+  const fetchAllPosForExport = async (): Promise<POSTransaction[]> => {
+    const filters = buildPOSListFilterParams();
+    const limit = 500;
+    let page = 1;
+    const all: POSTransaction[] = [];
+    for (;;) {
+      const response = await axios.get(`${Base_url}/apis/pharmPos/get`, {
+        params: { ...filters, page, limit, sort: '-createdAt' },
+      });
+      const batch: POSTransaction[] = response.data.data || [];
+      all.push(...batch);
+      if (batch.length < limit) break;
+      page += 1;
+    }
+    return all;
+  };
+
+  const fetchAllStockForExport = async (): Promise<StockTransaction[]> => {
+    const filters = buildStockListFilterParams();
+    const limit = 500;
+    let page = 1;
+    const all: StockTransaction[] = [];
+    for (;;) {
+      const response = await axios.get(`${Base_url}/apis/pharmAddStock/get`, {
+        params: { ...filters, page, limit, sort: '-createdAt' },
+      });
+      const batch: StockTransaction[] = response.data.data || [];
+      all.push(...batch);
+      if (batch.length < limit) break;
+      page += 1;
+    }
+    return all;
+  };
+
+  const handleExcelExport = async () => {
+    if (exporting) return;
+    setExporting(true);
+    try {
+      if (activeTab === 'pos-sales') {
+        const rows = await fetchAllPosForExport();
+        if (!rows.length) {
+          message.warning('No POS data to export for the current filters');
+          return;
+        }
+        const summaryRows = rows.map((record) => ({
+          'Invoice #': record.invoiceNumber || record._id.slice(-8).toUpperCase(),
+          Date: dayjs(record.createdAt).format('DD/MM/YYYY'),
+          Time: dayjs(record.createdAt).format('hh:mm A'),
+          Patient: record.patientName || record.patientId?.name || 'Walk-in',
+          MR: record.patientId?.mr || '',
+          Phone: record.patientId?.phone || '',
+          Doctor: record.doctorName || record.referId?.name || 'N/A',
+          'Items Count': record.allItem?.length || 0,
+          'Total Discount': Number(record.totalDiscount) || 0,
+          'Total Tax': Number(record.totalTax) || 0,
+          'Total Amount': Number(record.paid) + Number(record.due),
+          Paid: Number(record.paid) || 0,
+          Due: Number(record.due) || 0,
+          Advance: Number(record.advance) || 0,
+          'Payment Methods': (record.payment || [])
+            .map((p) => `${p.method}: ${p.paid}${p.reference ? ` (${p.reference})` : ''}`)
+            .join('; '),
+          Note: record.note || '',
+          'Created By': record.createdBy?.name || 'System',
+        }));
+
+        const lineRows: Record<string, string | number>[] = [];
+        for (const record of rows) {
+          const inv = record.invoiceNumber || record._id.slice(-8).toUpperCase();
+          const patient = record.patientName || record.patientId?.name || 'Walk-in';
+          const doctor = record.doctorName || record.referId?.name || 'N/A';
+          const dateStr = dayjs(record.createdAt).format('DD/MM/YYYY HH:mm');
+          for (const item of record.allItem || []) {
+            lineRows.push({
+              'Invoice #': inv,
+              Date: dateStr,
+              Patient: patient,
+              Doctor: doctor,
+              'Item Name': item.pharmItemId?.name || 'N/A',
+              Unit: item.unit || '',
+              Qty: item.quantity,
+              Rate: item.rate,
+              'Line Discount': item.discount ?? 0,
+              'Tax %': item.tax ?? 0,
+              'Line Total': item.totalAmount,
+            });
+          }
+        }
+
+        const wb = XLSX.utils.book_new();
+        const ws1 = XLSX.utils.json_to_sheet(summaryRows);
+        XLSX.utils.book_append_sheet(wb, ws1, 'POS_Sales');
+        if (lineRows.length) {
+          const ws2 = XLSX.utils.json_to_sheet(lineRows);
+          XLSX.utils.book_append_sheet(wb, ws2, 'Line_Items');
+        }
+        const part =
+          dateRange[0] && dateRange[1]
+            ? `${dateRange[0].format('YYYYMMDD')}_${dateRange[1].format('YYYYMMDD')}`
+            : dayjs().format('YYYYMMDD');
+        XLSX.writeFile(wb, `POS_Sales_Summary_${part}.xlsx`);
+        message.success(`Exported ${rows.length} POS bill(s)`);
+      } else {
+        const rows = await fetchAllStockForExport();
+        if (!rows.length) {
+          message.warning('No stock purchase data to export for the current filters');
+          return;
+        }
+        const summaryRows = rows.map((record) => ({
+          'Document #': record.documentNumber || '',
+          Date: dayjs(record.createdAt).format('DD/MM/YYYY HH:mm'),
+          Supplier: record.supplierId?.name || 'N/A',
+          'Supplier Inv #': record.supplierInvoiceNumber || '',
+          'Supplier Inv Date': record.supplierInvoiceDate
+            ? dayjs(record.supplierInvoiceDate).format('DD/MM/YYYY')
+            : '',
+          'Line Items': record.items?.length || 0,
+          'Total Cost': Number(record.totalCost) || 0,
+          'Created By': record.createdBy?.name || 'System',
+        }));
+
+        const lineRows: Record<string, string | number>[] = [];
+        for (const record of rows) {
+          for (const item of record.items || []) {
+            lineRows.push({
+              'Document #': record.documentNumber,
+              Date: dayjs(record.createdAt).format('DD/MM/YYYY HH:mm'),
+              Supplier: record.supplierId?.name || '',
+              'Item Name': item.pharmItemId?.name || 'N/A',
+              Qty: item.quantity,
+              'Unit Cost': item.unitCost,
+              'Line Total': item.totalCost,
+              Batch: item.batchNumber || '',
+              Expiry: item.expiryDate ? dayjs(item.expiryDate).format('DD/MM/YYYY') : '',
+            });
+          }
+        }
+
+        const wb = XLSX.utils.book_new();
+        const ws1 = XLSX.utils.json_to_sheet(summaryRows);
+        XLSX.utils.book_append_sheet(wb, ws1, 'Stock_Purchases');
+        if (lineRows.length) {
+          const ws2 = XLSX.utils.json_to_sheet(lineRows);
+          XLSX.utils.book_append_sheet(wb, ws2, 'Line_Items');
+        }
+        const part =
+          dateRange[0] && dateRange[1]
+            ? `${dateRange[0].format('YYYYMMDD')}_${dateRange[1].format('YYYYMMDD')}`
+            : dayjs().format('YYYYMMDD');
+        XLSX.writeFile(wb, `Stock_Purchases_${part}.xlsx`);
+        message.success(`Exported ${rows.length} stock document(s)`);
+      }
+    } catch (e: any) {
+      console.error('Excel export error:', e);
+      message.error(e?.response?.data?.message || e?.message || 'Export failed');
+    } finally {
+      setExporting(false);
+    }
   };
 
   const handlePrint = () => {
@@ -801,6 +898,7 @@ const PharmacyReports: React.FC = () => {
             <Button
               icon={<DownloadOutlined />}
               onClick={handleExcelExport}
+              loading={exporting}
               className="flex items-center gap-2"
             >
               Excel

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, message } from 'antd';
+import { Table, message } from 'antd';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 import axios from 'axios';
 import { FaRegEdit } from 'react-icons/fa';
@@ -7,6 +7,7 @@ import { RiDeleteBin5Line } from 'react-icons/ri';
 import Swal from 'sweetalert2';
 import { Base_url } from '../../../utils/Base_url';
 import AddPharmacyRack from './AddPharmacyRack';
+import { canMenuAction, getStoredUserForPermissions } from '../../../utils/permissions';
 
 const PharmacyRack = () => {
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
@@ -17,6 +18,11 @@ const PharmacyRack = () => {
   const [editingRack, setEditingRack] = useState(null);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
+
+  const permUser = getStoredUserForPermissions();
+  const canRackCreate = canMenuAction(permUser, 'pharm_racks', 'create');
+  const canRackUpdate = canMenuAction(permUser, 'pharm_racks', 'update');
+  const canRackDelete = canMenuAction(permUser, 'pharm_racks', 'delete');
 
   const onSelectChange = (newSelectedRowKeys) => {
     setSelectedRowKeys(newSelectedRowKeys);
@@ -47,50 +53,6 @@ const PharmacyRack = () => {
       },
     ],
   };
-
-  const columns = [
-    {
-      title: 'Name',
-      dataIndex: 'name',
-      sorter: (a, b) => a.name.localeCompare(b.name),
-    },
-    {
-      title: 'Items Count',
-      dataIndex: 'pharmItemId',
-      render: (items) => items?.length || 0,
-      sorter: (a, b) => (a.pharmItemId?.length || 0) - (b.pharmItemId?.length || 0),
-    },
-    {
-      title: 'Created At',
-      dataIndex: 'createdAt',
-      render: (date) => new Date(date).toLocaleDateString(),
-      sorter: (a, b) => new Date(a.createdAt) - new Date(b.createdAt),
-    },
-    {
-      title: 'Actions',
-      dataIndex: 'action',
-      fixed: "right",
-      width: 100,
-      render: (text, record) => (
-        <div className='flex items-center gap-4'> 
-          <FaRegEdit 
-            color='blue' 
-            size={18} 
-            onClick={() => handleEdit(record)} 
-            className="cursor-pointer hover:text-blue-600"
-            title="Edit Rack"
-          />
-          <RiDeleteBin5Line 
-            color='red' 
-            size={18} 
-            onClick={() => handleDelete(record._id)} 
-            className="cursor-pointer hover:text-red-600"
-            title="Delete Rack"
-          />
-        </div>
-      ),
-    },
-  ];
 
   const fetchRacks = async (page, search = '') => {
     try {
@@ -171,6 +133,54 @@ const PharmacyRack = () => {
     setCurrentPage(1);
   };
 
+  const columns = [
+    {
+      title: 'Name',
+      dataIndex: 'name',
+      sorter: (a, b) => a.name.localeCompare(b.name),
+    },
+    {
+      title: 'Items Count',
+      dataIndex: 'pharmItemId',
+      render: (items) => items?.length || 0,
+      sorter: (a, b) => (a.pharmItemId?.length || 0) - (b.pharmItemId?.length || 0),
+    },
+    {
+      title: 'Created At',
+      dataIndex: 'createdAt',
+      render: (date) => new Date(date).toLocaleDateString(),
+      sorter: (a, b) => new Date(a.createdAt) - new Date(b.createdAt),
+    },
+    {
+      title: 'Actions',
+      dataIndex: 'action',
+      fixed: 'right',
+      width: 100,
+      render: (text, record) => (
+        <div className="flex items-center gap-4">
+          {canRackUpdate && (
+            <FaRegEdit
+              color="blue"
+              size={18}
+              onClick={() => handleEdit(record)}
+              className="cursor-pointer hover:text-blue-600"
+              title="Edit Rack"
+            />
+          )}
+          {canRackDelete && (
+            <RiDeleteBin5Line
+              color="red"
+              size={18}
+              onClick={() => handleDelete(record._id)}
+              className="cursor-pointer hover:text-red-600"
+              title="Delete Rack"
+            />
+          )}
+        </div>
+      ),
+    },
+  ];
+
   return (
     <>
       <Breadcrumb pageName="Pharmacy Racks" />
@@ -193,6 +203,7 @@ const PharmacyRack = () => {
           />
         </div>
         
+        {canRackCreate && (
         <button
           onClick={handleAdd}
           className="inline-flex items-center justify-center gap-2.5 rounded-md bg-primary py-3 px-6 text-center font-medium text-white hover:bg-opacity-90 transition-colors duration-200"
@@ -208,6 +219,7 @@ const PharmacyRack = () => {
           </svg>
           Add Rack
         </button>
+        )}
       </div>
       
       <div className="rounded-lg border border-stroke bg-white shadow-default dark:border-strokedark dark:bg-boxdark">

@@ -10,6 +10,7 @@ import Breadcrumb from '../../components/Breadcrumbs/Breadcrumb';
 import * as XLSX from 'xlsx';
 import { useReactToPrint } from 'react-to-print';
 import EditAppointment from '../Appointments/EditAppointment';
+import { canMenuAction, getStoredUserForPermissions } from '../../utils/permissions';
 
 const { Option } = Select;
 
@@ -38,6 +39,9 @@ const AllAppointments = () => {
   const [doctors, setDoctors] = useState([]);
   const [departments, setDepartments] = useState([]);
   const navigate = useNavigate();
+  const permUser = getStoredUserForPermissions();
+  const canApptUpdate = canMenuAction(permUser, 'appointments', 'update');
+  const canApptDelete = canMenuAction(permUser, 'appointments', 'delete');
   const [searchText, setSearchText] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -383,18 +387,22 @@ const [selectedAppointment, setSelectedAppointment] = useState<Appointment | nul
       width: 100,
       render: (_, record) => (
         <div className='flex items-center gap-2'>
-             <RiEdit2Fill 
-        className=' text-primary' 
-        size={20} 
-        onClick={() => handleEdit(record)} 
-        style={{ cursor: 'pointer' }}
-      />
+          {canApptUpdate ? (
+            <RiEdit2Fill 
+              className=' text-primary' 
+              size={20} 
+              onClick={() => handleEdit(record)} 
+              style={{ cursor: 'pointer' }}
+            />
+          ) : null}
+          {canApptDelete ? (
             <RiDeleteBin5Line 
-            color='red' 
-            size={20} 
-            onClick={() => handleDelete(record._id)} 
-            style={{ cursor: 'pointer' }}
-          />
+              color='red' 
+              size={20} 
+              onClick={() => handleDelete(record._id)} 
+              style={{ cursor: 'pointer' }}
+            />
+          ) : null}
         </div>
       ),
     },

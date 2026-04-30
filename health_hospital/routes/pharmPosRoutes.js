@@ -1,7 +1,7 @@
 
 const pharmPosController = require("../controllers/pharmPosController");
 const { upload } = require("../upload/UploadFile");
-const { optionalAuth } = require("../middleware/auth");
+const { optionalAuth, auth, requireSuperAdmin } = require("../middleware/auth");
 
 const router = require("express").Router();
 
@@ -52,5 +52,11 @@ router.put(
   pharmPosController.updatepharmPos
 );
 router.delete("/delete/:id", optionalAuth, pharmPosController.deletepharmPos);
+router.post(
+  "/bulk-set-branch",
+  auth,
+  requireSuperAdmin,
+  pharmPosController.bulkSetBranchForAllPos
+);
 
 module.exports = router;

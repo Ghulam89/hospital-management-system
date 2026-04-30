@@ -56,6 +56,10 @@ const PharmacyItems: React.FC = () => {
   const navigate = useNavigate();
   const user = getUserDataFromStorage();
   const isSuperAdmin = isSuperAdminRole(user?.role);
+  /** Table actions mirror header: edit/delete/upload only for super admin (same as Manufacturers page fix pattern). */
+  const showPharmItemEdit = isSuperAdmin;
+  const showPharmItemDelete = isSuperAdmin;
+
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [items, setItems] = useState<PharmacyItem[]>([]);
   const [racks, setRacks] = useState<any[]>([]);
@@ -252,27 +256,34 @@ const PharmacyItems: React.FC = () => {
       width: 100,
       render: (_: any, record: PharmacyItem) => (
         <div className="flex items-center gap-4">
-          <FaRegEdit
-            color="blue"
-            size={18}
-            onClick={() => handleEdit(record)}
-            className="cursor-pointer hover:text-blue-600"
-            title="Edit Item"
-          />
-          <RiDeleteBin5Line
-            color="red"
-            size={18}
-            onClick={() => handleDelete(record._id)}
-            className="cursor-pointer hover:text-red-600"
-            title="Delete Item"
-          />
+          {showPharmItemEdit ? (
+            <FaRegEdit
+              color="blue"
+              size={18}
+              onClick={() => handleEdit(record)}
+              className="cursor-pointer hover:text-blue-600"
+              title="Edit Item"
+            />
+          ) : null}
+          {showPharmItemDelete ? (
+            <RiDeleteBin5Line
+              color="red"
+              size={18}
+              onClick={() => handleDelete(record._id)}
+              className="cursor-pointer hover:text-red-600"
+              title="Delete Item"
+            />
+          ) : null}
         </div>
       ),
     },
   ];
 
   const columns = allColumns.filter((col) => {
-    if (!isSuperAdmin && (col.dataIndex === 'toggle' || col.dataIndex === 'action')) {
+    if (!isSuperAdmin && col.dataIndex === 'toggle') {
+      return false;
+    }
+    if (col.dataIndex === 'action' && !showPharmItemEdit && !showPharmItemDelete) {
       return false;
     }
     return true;
@@ -315,7 +326,8 @@ const PharmacyItems: React.FC = () => {
       const res = await axios.get(url);
       
       if (res.data && res.data.status === 'ok') {
-        setItems(res.data.data || []);
+        const list = res.data.data;
+        setItems(Array.isArray(list) ? list : []);
         setTotalPages(res.data.totalPages || 1);
         setTotalItems(res.data.count || 0);
       } else {
@@ -343,10 +355,10 @@ const PharmacyItems: React.FC = () => {
         axios.get(`${Base_url}/apis/pharmCategory/get`),
         axios.get(`${Base_url}/apis/pharmSupplier/get`),
       ]);
-      setRacks(racksRes.data.data);
-      setManufacturers(manufacturersRes.data.data);
-      setCategories(categoriesRes.data.data);
-      setSuppliers(suppliersRes.data.data);
+      setRacks(Array.isArray(racksRes.data?.data) ? racksRes.data.data : []);
+      setManufacturers(Array.isArray(manufacturersRes.data?.data) ? manufacturersRes.data.data : []);
+      setCategories(Array.isArray(categoriesRes.data?.data) ? categoriesRes.data.data : []);
+      setSuppliers(Array.isArray(suppliersRes.data?.data) ? suppliersRes.data.data : []);
     } catch (error) {
       message.error('Failed to fetch reference data');
     }
@@ -579,28 +591,6 @@ const PharmacyItems: React.FC = () => {
   return (
     <>
       <Breadcrumb pageName="Pharmacy Items" />
-
-      <div className="mb-5 rounded-sm border border-stroke bg-gray px-4 py-3 text-sm text-bodydark1 shadow-sm dark:border-strokedark dark:bg-meta-4 dark:text-bodydark1">
-        <p className="m-0 mb-2">
-          <span className="font-medium text-black dark:text-white">Sab authorized users ko items dikhte hain </span>
-          — poora hospital catalog + apni branch ki inventory ek list mein.
-        </p>
-        <p className="m-0 mb-2">
-          <strong>Stock add / purchase / inbound</strong> har branch khud karti hai:{' '}
-          <button
-            type="button"
-            className="font-semibold text-primary underline hover:no-underline"
-            onClick={() => navigate('/admin/pharmacy/stocks/new')}
-          >
-            Manage Stock
-          </button>
-          .
-        </p>
-        <p className="m-0 text-xs text-bodydark2 dark:text-bodydark">
-          <strong>Naya item / Excel upload / edit / delete / activate</strong> sirf <strong>super admin</strong>. Branches sirf list dekhti hain aur stock manage karti hain.
-        </p>
-      </div>
-
       {/* Add/Edit Modal */}
       <AddPharmacyItems
         isModalOpen={isAddEditModalOpen}

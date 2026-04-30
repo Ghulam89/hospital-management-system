@@ -38,11 +38,6 @@ async function syncTabsFromRoleDoc(actor, payload, existingUser) {
       : existingUser?.role;
   if (!String(rawRole || "").trim()) return { ok: true, payload };
 
-  const roleDoc = await findRoleDocForLogin(rawRole);
-  if (!roleDoc || roleDoc.isSystem) {
-    return { ok: true, payload };
-  }
-
   let effectiveBranchId = payload.branchId;
   if (existingUser && (effectiveBranchId === undefined || effectiveBranchId === null)) {
     effectiveBranchId = existingUser.branchId;
@@ -52,6 +47,11 @@ async function syncTabsFromRoleDoc(actor, payload, existingUser) {
   if (isBranchAdminRole(actorRole) && !isSuperAdminRole(actorRole)) {
     effectiveBranchId = actor.branchId;
     payload.branchId = actor.branchId;
+  }
+
+  const roleDoc = await findRoleDocForLogin(rawRole, effectiveBranchId);
+  if (!roleDoc || roleDoc.isSystem) {
+    return { ok: true, payload };
   }
 
   if (!isSuperAdminRole(actor.role)) {

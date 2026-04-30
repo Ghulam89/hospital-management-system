@@ -4,11 +4,12 @@ import { Table, message } from 'antd';
 import { Link } from 'react-router-dom';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 import axios from 'axios';
-import { FaRegEdit } from 'react-icons/fa';
 import { RiDeleteBin5Line } from 'react-icons/ri';
 import Swal from 'sweetalert2';
+import { Base_url } from '../../../utils/Base_url';
+import { canMenuAction, getStoredUserForPermissions } from '../../../utils/permissions';
 
-const columns = (handleDelete, handleEdit) => [
+const columns = (handleDelete, canDelete) => [
   {
     title: 'BED#',
     dataIndex: 'bedNo',
@@ -34,8 +35,9 @@ const columns = (handleDelete, handleEdit) => [
     key: 'action',
     render: (text, record) => (
       <div className="flex items-center gap-2">
-        {/* <FaRegEdit color="blue" size={20} onClick={() => handleEdit(record)} /> */}
-        <RiDeleteBin5Line color="red" size={20} onClick={() => handleDelete(record.key)} />
+        {canDelete && (
+          <RiDeleteBin5Line color="red" size={20} onClick={() => handleDelete(record.key)} />
+        )}
       </div>
     ),
   },
@@ -48,7 +50,7 @@ const BedDetails = () => {
   const [totalPages, setTotalPages] = useState(1);
 
   const fetchBedDetails = (page) => {
-    axios.get(`https://api.holisticare.pk/apis/bedDetail/get?page=${page}`)
+    axios.get(`${Base_url}/apis/bedDetail/get?page=${page}`)
       .then((res) => {
         console.log(res);
         setBedDetails(res.data.data.map(item => ({ ...item, key: item._id })));
@@ -76,7 +78,7 @@ const BedDetails = () => {
       confirmButtonText: "Yes, delete it!",
     }).then((result) => {
       if (result.isConfirmed) {
-        axios.delete(`https://api.holisticare.pk/apis/bedDetail/delete/${key}`)
+        axios.delete(`${Base_url}/apis/bedDetail/delete/${key}`)
           .then((res) => {
             if (res.data.status === 'ok') {
               Swal.fire("Deleted!", "Your file has been deleted.", "success");
@@ -110,6 +112,7 @@ const BedDetails = () => {
       <Breadcrumb pageName="Bed Details" />
       <div className="mb-5 flex justify-between items-center">
         <h1></h1>
+        {canBedCreate && (
         <Link
           to="/bed-details/new"
           className="inline-flex items-center justify-center gap-2.5 rounded-md bg-primary py-3 px-10 text-center font-medium text-white hover:bg-opacity-90 lg:px-8 xl:px-10"
@@ -123,11 +126,12 @@ const BedDetails = () => {
           </svg>
           Add Bed
         </Link>
+        )}
       </div>
       <div className="rounded-sm border border-stroke bg-white px-5 pt-6 pb-2.5 shadow-default dark:border-strokedark dark:bg-boxdark sm:px-7.5 xl:pb-1">
         <Table
           rowSelection={rowSelection}
-          columns={columns(handleDelete)}
+          columns={columns(handleDelete, canBedDelete)}
           dataSource={bedDetails}
           pagination={{ current: currentPage, pageSize: 10, total: totalPages * 10 }}
           onChange={handleTableChange}

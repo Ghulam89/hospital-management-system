@@ -365,11 +365,20 @@ function Routing() {
             </>
           }
         />
+        <Route
+          path="/admin/pharmacy/invoices"
+          element={
+            <>
+              <PageTitle title="Pharmacy POS | Hospital Management" />
+              <POSInvoice />
+            </>
+          }
+        />
          <Route
           path="/admin/pharmacy/invoices/new"
           element={
             <>
-              <PageTitle title="Signin | Hospital Management" />
+              <PageTitle title="Pharmacy POS | Hospital Management" />
               <POSInvoice />
             </>
           }

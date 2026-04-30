@@ -11,6 +11,7 @@ import { enrichInvoiceForPdf } from '../../utils/enrichInvoiceForPdf';
 import logoDataUrl from '../../images/logo-icon.png';
 import Breadcrumb from '../../components/Breadcrumbs/Breadcrumb';
 import { AsyncPaginate, type LoadOptions } from 'react-select-async-paginate';
+import { canMenuAction, getStoredUserForPermissions, hasAnyPermission } from '../../utils/permissions';
 
 import {
   PDFDownloadLink,
@@ -375,6 +376,11 @@ const Invoice = () => {
     'Insurance',
   ]);
   const navigate = useNavigate();
+  const permUser = getStoredUserForPermissions();
+  const canInvCreate = canMenuAction(permUser, 'invoices', 'create');
+  const canInvUpdate =
+    canMenuAction(permUser, 'invoices', 'update') || hasAnyPermission(permUser, 'editInvoice');
+  const canInvDelete = canMenuAction(permUser, 'invoices', 'delete');
   const tableRef = useRef();
   const [selectedDoctor, setSelectedDoctor] = useState<DoctorOption | null>(null);
   const [selectedDepartment, setSelectedDepartment] = useState<DepartmentOption | null>(null);
@@ -1594,26 +1600,32 @@ const Invoice = () => {
             className="text-red-500 text-xl cursor-pointer" 
             onClick={() => generatePdf(record)} 
           />
-          <RiPenNibFill
-            className="text-green-600 text-xl cursor-pointer"
-            onClick={() => openPaymentModal(record)}
-          />
-          <Button size="small" onClick={() => openRefundModal(record)}>
-            Refund
-          </Button>
-          <Link to={`/invoice/edit/${record._id}/${record.patientId?._id}`}>
-            <RiEdit2Fill 
-              className='text-primary' 
+          {canInvUpdate ? (
+            <>
+              <RiPenNibFill
+                className="text-green-600 text-xl cursor-pointer"
+                onClick={() => openPaymentModal(record)}
+              />
+              <Button size="small" onClick={() => openRefundModal(record)}>
+                Refund
+              </Button>
+              <Link to={`/invoice/edit/${record._id}/${record.patientId?._id}`}>
+                <RiEdit2Fill 
+                  className='text-primary' 
+                  size={20} 
+                  style={{ cursor: 'pointer' }}
+                />
+              </Link>
+            </>
+          ) : null}
+          {canInvDelete ? (
+            <RiDeleteBin5Line 
+              color='red' 
               size={20} 
+              onClick={() => handleDelete(record._id)} 
               style={{ cursor: 'pointer' }}
             />
-          </Link>
-          <RiDeleteBin5Line 
-            color='red' 
-            size={20} 
-            onClick={() => handleDelete(record._id)} 
-            style={{ cursor: 'pointer' }}
-          />
+          ) : null}
         </div>
       ),
       width: 240,
@@ -1640,6 +1652,7 @@ const Invoice = () => {
             <h1 className="text-xl font-semibold text-black">Invoices List</h1>
           </div>
 
+           {canInvCreate ? (
            <Link
             to="/invoice/new"
             className="inline-flex items-center justify-center gap-2.5 rounded-md bg-primary py-3 px-10 text-center font-medium text-white hover:bg-opacity-90 lg:px-8 xl:px-10"
@@ -1653,6 +1666,7 @@ const Invoice = () => {
             </svg>
             Create Invoice
           </Link>
+           ) : null}
          </div>
           <Row gutter={[16, 16]} style={{ marginBottom: '20px' }}>
             <Col xs={24} sm={12} md={8} lg={6}>

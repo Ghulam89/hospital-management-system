@@ -1044,7 +1044,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                           {canSeeSidebarMenu(permUser, 'pharm_pos') && (
                           <li>
                             <NavLink
-                              to="/admin/pharmacy/invoices/new"
+                              to="/admin/pharmacy/invoices"
                               className={({ isActive }) =>
                                 'group relative flex items-center gap-2.5 rounded-md px-4 font-medium text-bodydark2 duration-300 ease-in-out hover:text-white ' +
                                 (isActive && '!text-white')

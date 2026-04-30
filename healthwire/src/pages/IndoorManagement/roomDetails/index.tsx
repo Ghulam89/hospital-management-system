@@ -1,14 +1,15 @@
 import React, { useEffect, useState } from 'react';
-import { Table, message } from 'antd';
+import { Table } from 'antd';
 
 import { Link } from 'react-router-dom';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 import axios from 'axios';
-import { FaRegEdit } from 'react-icons/fa';
 import { RiDeleteBin5Line } from 'react-icons/ri';
 import Swal from 'sweetalert2';
+import { Base_url } from '../../../utils/Base_url';
+import { canMenuAction, getStoredUserForPermissions } from '../../../utils/permissions';
 
-const columns = (handleDelete, handleEdit) => [
+const columns = (handleDelete, canDelete) => [
   {
     title: 'ROOM#',
     dataIndex: 'roomNo',
@@ -34,18 +35,23 @@ const columns = (handleDelete, handleEdit) => [
     key: 'action',
     render: (text, record) => (
       <div className="flex items-center gap-2">
-        {/* <FaRegEdit color="blue" size={20} onClick={() => handleEdit(record)} /> */}
-        <RiDeleteBin5Line
-          color="red"
-          size={20}
-          onClick={() => handleDelete(record.key)}
-        />
+        {canDelete && (
+          <RiDeleteBin5Line
+            color="red"
+            size={20}
+            onClick={() => handleDelete(record.key)}
+          />
+        )}
       </div>
     ),
   },
 ];
 
 const RoomDetails = () => {
+  const permUser = getStoredUserForPermissions();
+  const canRoomCreate = canMenuAction(permUser, 'room_details', 'create');
+  const canRoomDelete = canMenuAction(permUser, 'room_details', 'delete');
+
   const [bedDetails, setBedDetails] = useState([]);
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
@@ -54,7 +60,7 @@ const RoomDetails = () => {
   const fetchBedDetails = (page: any) => {
     axios
       .get(
-        `https://api.holisticare.pk/apis/roomDetail/get?page=${page}`,
+        `${Base_url}/apis/roomDetail/get?page=${page}`,
       )
       .then((res) => {
         console.log(res);
@@ -117,6 +123,7 @@ const RoomDetails = () => {
       <Breadcrumb pageName="Room Details" />
       <div className="mb-5 flex justify-between items-center">
         <h1></h1>
+        {canRoomCreate && (
         <Link
           to="/room-details/new"
           className="inline-flex items-center justify-center gap-2.5 rounded-md bg-primary py-3 px-10 text-center font-medium text-white hover:bg-opacity-90 lg:px-8 xl:px-10"
@@ -135,11 +142,12 @@ const RoomDetails = () => {
           </svg>
           Add Room
         </Link>
+        )}
       </div>
       <div className="rounded-sm border border-stroke bg-white px-5 pt-6 pb-2.5 shadow-default dark:border-strokedark dark:bg-boxdark sm:px-7.5 xl:pb-1">
         <Table
           rowSelection={rowSelection}
-          columns={columns(handleDelete)}
+          columns={columns(handleDelete, canRoomDelete)}
           dataSource={bedDetails}
           pagination={{
             current: currentPage,

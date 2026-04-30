@@ -8,6 +8,7 @@ import { FiDownload, FiPrinter, FiPlus } from 'react-icons/fi';
 import Swal from 'sweetalert2';
 import { Base_url } from '../../../utils/Base_url';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
+import { canMenuAction, getStoredUserForPermissions } from '../../../utils/permissions';
 import { Link, useNavigate } from 'react-router-dom';
 import { AsyncPaginate, type LoadOptions } from 'react-select-async-paginate';
 // import dayjs from 'dayjs';
@@ -74,6 +75,11 @@ const PharmacyPurchaseOrders: React.FC = () => {
   const [selectedManufacturer, setSelectedManufacturer] = useState<ManufacturerOption | null>(null);
   const [dateRange, setDateRange] = useState<[any, any] | null>(null);
   const [grandTotal, setGrandTotal] = useState(0);
+
+  const permUser = getStoredUserForPermissions();
+  const canPoCreate = canMenuAction(permUser, 'pharm_po', 'create');
+  const canPoUpdate = canMenuAction(permUser, 'pharm_po', 'update');
+  const canPoDelete = canMenuAction(permUser, 'pharm_po', 'delete');
 
   // Table row selection
   const onSelectChange = (newSelectedRowKeys: React.Key[]) => {
@@ -286,7 +292,11 @@ const PharmacyPurchaseOrders: React.FC = () => {
             message.error('Failed to update status');
           }
         };
-        
+
+        if (!canPoUpdate) {
+          return <Tag color={colorMap[status] || 'default'}>{status}</Tag>;
+        }
+
         return (
           <Select
             value={status}
@@ -362,18 +372,22 @@ const PharmacyPurchaseOrders: React.FC = () => {
             onClick={() => handleView(record)}
             title="View"
           />
-          <Button
-            type="text"
-            icon={<FaRegEdit className="text-green-500" />}
-            onClick={() => handleEdit(record)}
-            title="Edit"
-          />
-          <Button
-            type="text"
-            icon={<RiDeleteBin5Line className="text-red-500" />}
-            onClick={() => handleDelete(record)}
-            title="Delete"
-          />
+          {canPoUpdate && (
+            <Button
+              type="text"
+              icon={<FaRegEdit className="text-green-500" />}
+              onClick={() => handleEdit(record)}
+              title="Edit"
+            />
+          )}
+          {canPoDelete && (
+            <Button
+              type="text"
+              icon={<RiDeleteBin5Line className="text-red-500" />}
+              onClick={() => handleDelete(record)}
+              title="Delete"
+            />
+          )}
         </Space>
       ),
     },
@@ -457,16 +471,17 @@ const PharmacyPurchaseOrders: React.FC = () => {
             >
               Print
             </Button>
+            {canPoCreate && (
             <Link to={'/admin/pharmacy/purchase-orders/add'}>
             <Button
               type="default"
               icon={<FiPlus />}
-              // onClick={handleAddPurchaseOrder}
               className="flex items-center gap-2"
             >
               + Add Purchase Order
             </Button>
             </Link>
+            )}
             {/* <Button
               type="default"
               icon={<FiPlus />}

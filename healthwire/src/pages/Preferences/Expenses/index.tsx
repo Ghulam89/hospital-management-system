@@ -9,6 +9,7 @@ import { RiDeleteBin5Line } from 'react-icons/ri';
 import Swal from 'sweetalert2';
 import AddExpense from './AddExpense';
 import moment from 'moment';
+import { canMenuAction, getStoredUserForPermissions, hasAnyPermission } from '../../../utils/permissions';
 
 const { Option } = Select;
 
@@ -28,6 +29,15 @@ const ExpenseList: React.FC<ExpenseListProps> = ({ module, pageName }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [categories, setCategories] = useState([]);
   const [filterCategory, setFilterCategory] = useState('');
+
+  const expenseMenuId = module === 'pharmacy' ? 'pharm_expenses' : 'expense';
+  const permUser = getStoredUserForPermissions();
+  const canExpCreate =
+    canMenuAction(permUser, expenseMenuId, 'create') || hasAnyPermission(permUser, 'editExpenses');
+  const canExpUpdate =
+    canMenuAction(permUser, expenseMenuId, 'update') || hasAnyPermission(permUser, 'editExpenses');
+  const canExpDelete =
+    canMenuAction(permUser, expenseMenuId, 'delete') || hasAnyPermission(permUser, 'editExpenses');
 
   const columns = [
     {
@@ -62,13 +72,7 @@ const ExpenseList: React.FC<ExpenseListProps> = ({ module, pageName }) => {
       width: 120,
       render: (text, record) => (
         <div className='flex items-center gap-4'> 
-          {/* <FaEye 
-            color='green' 
-            size={18} 
-            onClick={() => handleView(record)} 
-            className="cursor-pointer hover:text-green-600"
-            title="View Details"
-          /> */}
+          {canExpUpdate ? (
           <FaRegEdit 
             color='blue' 
             size={18} 
@@ -76,6 +80,8 @@ const ExpenseList: React.FC<ExpenseListProps> = ({ module, pageName }) => {
             className="cursor-pointer hover:text-blue-600"
             title="Edit Expense"
           />
+          ) : null}
+          {canExpDelete ? (
           <RiDeleteBin5Line 
             color='red' 
             size={18} 
@@ -83,6 +89,7 @@ const ExpenseList: React.FC<ExpenseListProps> = ({ module, pageName }) => {
             className="cursor-pointer hover:text-red-600"
             title="Delete Expense"
           />
+          ) : null}
         </div>
       ),
     },
@@ -244,6 +251,7 @@ const ExpenseList: React.FC<ExpenseListProps> = ({ module, pageName }) => {
             ))}
           </Select>
           
+          {canExpCreate ? (
           <button
             onClick={handleAdd}
             className="inline-flex items-center justify-center gap-2.5 rounded-md bg-primary py-3 px-6 text-center font-medium text-white hover:bg-opacity-90 transition-colors duration-200"
@@ -259,6 +267,7 @@ const ExpenseList: React.FC<ExpenseListProps> = ({ module, pageName }) => {
             </svg>
             Add Expense
           </button>
+          ) : null}
         </div>
       </div>
       

@@ -10,6 +10,7 @@ import AddStockReturnModal from './AddStockReturnModal';
 import * as XLSX from 'xlsx';
 import { useReactToPrint } from 'react-to-print';
 import { useNavigate } from 'react-router-dom';
+import { canMenuAction, getStoredUserForPermissions } from '../../../utils/permissions';
 
 const { Search } = Input;
 const { Option } = Select;
@@ -65,6 +66,11 @@ const StockReturn: React.FC = () => {
   const [editingStockReturn, setEditingStockReturn] = useState<StockReturn | null>(null);
   const [printPreviewVisible, setPrintPreviewVisible] = useState(false);
   const printRef = useRef<HTMLDivElement>(null);
+
+  const permUser = getStoredUserForPermissions();
+  const canSrCreate = canMenuAction(permUser, 'pharm_returns', 'create');
+  const canSrUpdate = canMenuAction(permUser, 'pharm_returns', 'update');
+  const canSrDelete = canMenuAction(permUser, 'pharm_returns', 'delete');
 
   const onSelectChange = (newSelectedRowKeys: React.Key[]) => {
     setSelectedRowKeys(newSelectedRowKeys);
@@ -211,18 +217,22 @@ const StockReturn: React.FC = () => {
             onClick={() => handleView(record)}
             title="View Details"
           />
-          <Button
-            type="text"
-            icon={<EditOutlined className="text-green-500" />}
-            onClick={() => handleEdit(record)} 
-            title="Edit"
-          />
-          <Button
-            type="text"
-            icon={<DeleteOutlined className="text-red-500" />}
-            onClick={() => handleDelete(record)}
-            title="Delete"
-          />
+          {canSrUpdate && (
+            <Button
+              type="text"
+              icon={<EditOutlined className="text-green-500" />}
+              onClick={() => handleEdit(record)}
+              title="Edit"
+            />
+          )}
+          {canSrDelete && (
+            <Button
+              type="text"
+              icon={<DeleteOutlined className="text-red-500" />}
+              onClick={() => handleDelete(record)}
+              title="Delete"
+            />
+          )}
         </Space>
       ),
     },
@@ -384,6 +394,7 @@ const StockReturn: React.FC = () => {
               >
                 Print
               </Button>
+              {canSrCreate && (
               <Button
                 type="primary"
                 icon={<PlusOutlined />}
@@ -392,6 +403,7 @@ const StockReturn: React.FC = () => {
               >
                 + Add Stock Return
               </Button>
+              )}
             </div>
           </div>
         </div>

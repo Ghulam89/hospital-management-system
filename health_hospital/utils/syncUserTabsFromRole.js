@@ -1,3 +1,4 @@
+const mongoose = require('mongoose');
 const User = require('../models/userModel');
 const Role = require('../models/roleModel');
 
@@ -17,10 +18,22 @@ function roleKeyCandidates(raw) {
   ];
 }
 
-async function findRoleDocForLogin(rawRole) {
+/**
+ * Resolve Role document for a user.role slug. Prefer branch-scoped row when `userBranchId` is set,
+ * then global template (branchId null), so each branch can define the same key independently.
+ */
+async function findRoleDocForLogin(rawRole, userBranchId) {
   for (const key of roleKeyCandidates(rawRole)) {
-    const doc = await Role.findOne({ key }).lean();
-    if (doc) return doc;
+    if (userBranchId && mongoose.Types.ObjectId.isValid(String(userBranchId))) {
+      const bid = new mongoose.Types.ObjectId(String(userBranchId));
+      const scoped = await Role.findOne({ key, branchId: bid }).lean();
+      if (scoped) return scoped;
+    }
+    const globalDoc = await Role.findOne({
+      key,
+      $or: [{ branchId: null }, { branchId: { $exists: false } }],
+    }).lean();
+    if (globalDoc) return globalDoc;
   }
   return null;
 }
@@ -33,7 +46,7 @@ async function refreshUserTabsFromRole(userDoc) {
   const uid = userDoc?._id || userDoc?.id;
   if (!uid) return userDoc;
 
-  const roleDoc = await findRoleDocForLogin(userDoc.role);
+  const roleDoc = await findRoleDocForLogin(userDoc.role, userDoc.branchId);
   if (!roleDoc || roleDoc.isSystem) return userDoc;
 
   if (roleDoc.branchId) {

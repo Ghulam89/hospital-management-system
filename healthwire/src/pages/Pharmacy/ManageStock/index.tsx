@@ -9,6 +9,7 @@ import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 import * as XLSX from 'xlsx';
 import { useReactToPrint } from 'react-to-print';
 import { Link, useNavigate } from 'react-router-dom';
+import { canMenuAction, getStoredUserForPermissions } from '../../../utils/permissions';
 
 const { Search } = Input;
 const { Option } = Select;
@@ -70,6 +71,11 @@ const PharmacyStocks: React.FC = () => {
   const [printPreviewVisible, setPrintPreviewVisible] = useState(false);
   const printRef = useRef<HTMLDivElement>(null);
   const navigate = useNavigate();
+
+  const permUser = getStoredUserForPermissions();
+  const canStockCreate = canMenuAction(permUser, 'pharm_stock', 'create');
+  const canStockUpdate = canMenuAction(permUser, 'pharm_stock', 'update');
+  const canStockDelete = canMenuAction(permUser, 'pharm_stock', 'delete');
 
   // Table row selection
   const onSelectChange = (newSelectedRowKeys: React.Key[]) => {
@@ -194,18 +200,22 @@ const PharmacyStocks: React.FC = () => {
             onClick={() => handleView(record)}
             title="View Details"
           />
-          <Button
-            type="text"
-            icon={<EditOutlined className="text-green-500" />}
-            onClick={() => handleEdit(record)}
-            title="Edit"
-          />
-          <Button
-            type="text"
-            icon={<DeleteOutlined className="text-red-500" />}
-            onClick={() => handleDelete(record)}
-            title="Delete"
-          />
+          {canStockUpdate ? (
+            <Button
+              type="text"
+              icon={<EditOutlined className="text-green-500" />}
+              onClick={() => handleEdit(record)}
+              title="Edit"
+            />
+          ) : null}
+          {canStockDelete ? (
+            <Button
+              type="text"
+              icon={<DeleteOutlined className="text-red-500" />}
+              onClick={() => handleDelete(record)}
+              title="Delete"
+            />
+          ) : null}
         </Space>
       ),
     },
@@ -467,6 +477,7 @@ const PharmacyStocks: React.FC = () => {
               >
                 Print
               </Button>
+              {canStockCreate ? (
               <Link to="/admin/pharmacy/stocks/new">
               <Button
                 type="primary"
@@ -477,6 +488,7 @@ const PharmacyStocks: React.FC = () => {
                 + Add New Stock 
               </Button>
               </Link>
+              ) : null}
              
             </div>
           </div>

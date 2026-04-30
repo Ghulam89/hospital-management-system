@@ -6,6 +6,7 @@ import Modal from '../../../components/modal';
 import { Table, Card, Row, Col, Input, DatePicker, Select, Button, Space, Tag, Statistic, Modal as AntdModal } from 'antd';
 import { DollarOutlined, RiseOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
+import { canMenuAction, getStoredUserForPermissions } from '../../../utils/permissions';
 
 type PosInvoice = {
   _id: string;
@@ -47,6 +48,10 @@ const formatDate = (iso?: string) => {
 
 export default function BillsList() {
   const navigate = useNavigate();
+  const permUser = getStoredUserForPermissions();
+  const canPosUpdate = canMenuAction(permUser, 'pharm_pos', 'update');
+  const canPosDelete = canMenuAction(permUser, 'pharm_pos', 'delete');
+
   const [list, setList] = useState<PosInvoice[]>([]);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(1);
@@ -293,10 +298,16 @@ export default function BillsList() {
       key: 'actions',
       render: (_: any, inv: PosInvoice) => (
         <Space>
-        {/* sd */}
-          <Button type="link" onClick={() => navigate(`/admin/pharmacy/invoices/edit/${inv._id}`)}>Edit</Button>
-          {/* <Button type="link" onClick={() => navigate(`/admin/pharmacy/invoices/receipt/${inv._id}`)}>Print</Button> */}
-          <Button danger type="link" onClick={() => deleteBill(inv)}>Delete</Button>
+          {canPosUpdate && (
+            <Button type="link" onClick={() => navigate(`/admin/pharmacy/invoices/edit/${inv._id}`)}>
+              Edit
+            </Button>
+          )}
+          {canPosDelete && (
+            <Button danger type="link" onClick={() => deleteBill(inv)}>
+              Delete
+            </Button>
+          )}
         </Space>
       ),
     },

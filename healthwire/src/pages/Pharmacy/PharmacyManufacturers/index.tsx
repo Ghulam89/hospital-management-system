@@ -6,10 +6,16 @@ import axios from 'axios';
 import Swal from 'sweetalert2';
 import { Base_url } from '../../../utils/Base_url';
 import AddPharmacyManufacturers from './AddPharmacyManufacturers';
+import { canMenuAction, getStoredUserForPermissions } from '../../../utils/permissions';
 
 const { Search } = Input;
 
 const PharmacyManufacturers = () => {
+  const permUser = getStoredUserForPermissions();
+  const canPmCreate = canMenuAction(permUser, 'pharm_manufacturers', 'create');
+  const canPmUpdate = canMenuAction(permUser, 'pharm_manufacturers', 'update');
+  const canPmDelete = canMenuAction(permUser, 'pharm_manufacturers', 'delete');
+
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
   const [manufacturers, setManufacturers] = useState([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -73,18 +79,22 @@ const PharmacyManufacturers = () => {
       width: 120,
       render: (_, record) => (
         <Space size="small">
-          <Button
-            type="text"
-            icon={<EditOutlined className="text-blue-500" />}
-            onClick={() => handleEdit(record)}
-            title="Edit Manufacturer"
-          />
-          <Button
-            type="text"
-            icon={<DeleteOutlined className="text-red-500" />}
-            onClick={() => handleDelete(record._id)}
-            title="Delete Manufacturer"
-          />
+          {canPmUpdate ? (
+            <Button
+              type="text"
+              icon={<EditOutlined className="text-blue-500" />}
+              onClick={() => handleEdit(record)}
+              title="Edit Manufacturer"
+            />
+          ) : null}
+          {canPmDelete ? (
+            <Button
+              type="text"
+              icon={<DeleteOutlined className="text-red-500" />}
+              onClick={() => handleDelete(record._id)}
+              title="Delete Manufacturer"
+            />
+          ) : null}
         </Space>
       ),
     },
@@ -93,7 +103,7 @@ const PharmacyManufacturers = () => {
   const fetchManufacturers = async (page, search = '') => {
     try {
       setLoading(true);
-      const url = `${Base_url}/apis/pharmManufacturer/get?page=${page}&search=${search}`;
+      const url = `${Base_url}/apis/pharmManufacturer/get?page=${page}&limit=10&search=${encodeURIComponent(search)}`;
       const res = await axios.get(url);
       
       setManufacturers(res.data.data || []);
@@ -207,6 +217,7 @@ const PharmacyManufacturers = () => {
             >
               Print
             </Button>
+            {canPmCreate ? (
             <Button
               type="default"
               icon={<PlusOutlined />}
@@ -215,6 +226,7 @@ const PharmacyManufacturers = () => {
             >
               + Add Manufacturer
             </Button>
+            ) : null}
           </div>
         </div>
 
@@ -259,7 +271,7 @@ const PharmacyManufacturers = () => {
           loading={loading}
           pagination={{
             current: currentPage,
-            total: totalPages * 10,
+            total: totalManufacturers,
             pageSize: 10,
             onChange: setCurrentPage,
             showSizeChanger: false,
