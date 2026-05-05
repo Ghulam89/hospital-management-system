@@ -1,1 +1,1 @@
-export const Base_url = "http://api.holisticare.pk"
+export const Base_url = "https://api.holisticare.pk"

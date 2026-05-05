@@ -14,6 +14,7 @@ import AddPharmacyItems from './AddPharmacyItems';
 import UploadPharmacyItem from './UploadPharmacyItem';
 import dayjs from 'dayjs';
 import { getUserDataFromStorage, isSuperAdminRole, buildAxiosBranchScopedParams } from '../../../utils/branchScope';
+import { canMenuAction } from '../../../utils/permissions';
 
 const { Search } = Input;
 const { RangePicker } = DatePicker;
@@ -56,9 +57,12 @@ const PharmacyItems: React.FC = () => {
   const navigate = useNavigate();
   const user = getUserDataFromStorage();
   const isSuperAdmin = isSuperAdminRole(user?.role);
-  /** Table actions mirror header: edit/delete/upload only for super admin (same as Manufacturers page fix pattern). */
-  const showPharmItemEdit = isSuperAdmin;
-  const showPharmItemDelete = isSuperAdmin;
+  /** Matrix `mp.pharm_items.*` — branch users are no longer hard-coded view-only */
+  const canCreatePharmItem = canMenuAction(user, 'pharm_items', 'create');
+  const canUpdatePharmItem = canMenuAction(user, 'pharm_items', 'update');
+  const canDeletePharmItem = canMenuAction(user, 'pharm_items', 'delete');
+  const showPharmItemEdit = canUpdatePharmItem;
+  const showPharmItemDelete = canDeletePharmItem;
 
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [items, setItems] = useState<PharmacyItem[]>([]);
@@ -120,8 +124,8 @@ const PharmacyItems: React.FC = () => {
   };
 
   const handleToggleActive = async (item: PharmacyItem) => {
-    if (!isSuperAdmin) {
-      message.warning('Sirf super admin activate/deactivate kar sakta hai.');
+    if (!canUpdatePharmItem) {
+      message.warning('You do not have permission to activate or deactivate items.');
       return;
     }
     try {
@@ -137,7 +141,7 @@ const PharmacyItems: React.FC = () => {
     }
   };
 
-  // Table columns (Toggle + Actions only for super admin — branches: view-only list)
+  // Table columns (Toggle / Actions follow Roles matrix — `mp.pharm_items.*`)
   const allColumns = [
     {
       title: 'Name',
@@ -276,7 +280,7 @@ const PharmacyItems: React.FC = () => {
   ];
 
   const columns = allColumns.filter((col) => {
-    if (!isSuperAdmin && col.dataIndex === 'toggle') {
+    if (!canUpdatePharmItem && col.dataIndex === 'toggle') {
       return false;
     }
     if (col.dataIndex === 'action' && !showPharmItemEdit && !showPharmItemDelete) {
@@ -668,7 +672,7 @@ const PharmacyItems: React.FC = () => {
         </button>
       </div>
         <div className="flex items-center gap-4">
-          {isSuperAdmin ? (
+          {canCreatePharmItem ? (
             <>
               <button
                 onClick={handleAddExcel}
