@@ -12,6 +12,8 @@ import {
   canEditUsers,
   getStoredUserForPermissions,
 } from '../../../utils/permissions';
+import { useBranchScopeEpoch } from '../../../context/BranchScopeEpochContext';
+import { buildAxiosBranchScopedParams } from '../../../utils/branchScope';
 
 const buildColumns = (showEdit: boolean, showDelete: boolean, onEdit: (r: any) => void, onDelete: (id: string) => void) => {
   const cols: any[] = [
@@ -40,6 +42,7 @@ const buildColumns = (showEdit: boolean, showDelete: boolean, onEdit: (r: any) =
 };
 
 const Staff = () => {
+  const branchEpoch = useBranchScopeEpoch();
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [users, setUsers] = useState<any[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
@@ -57,7 +60,11 @@ const Staff = () => {
   );
 
   function fetchUsersData(page: number) {
-    axios.get(`${Base_url}/apis/user/get`, { params: { page, role: 'staff', branchId: 'all' } }).then((res) => {
+    axios
+      .get(`${Base_url}/apis/user/get`, {
+        params: { page, role: 'staff', ...buildAxiosBranchScopedParams() },
+      })
+      .then((res) => {
       setUsers(res.data.data || []);
       setTotalCount(res.data.count || 0);
     });
@@ -86,7 +93,7 @@ const Staff = () => {
 
   useEffect(() => {
     fetchUsersData(currentPage);
-  }, [currentPage]);
+  }, [currentPage, branchEpoch]);
 
   return (
     <div className="rounded-sm border border-stroke bg-white px-5 pt-6 pb-2.5 shadow-default dark:border-strokedark dark:bg-boxdark sm:px-7.5 xl:pb-1">

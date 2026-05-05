@@ -9,6 +9,7 @@ import { getInvoiceHeaderForPdf } from '../../utils/branchPdfHeader';
 import { enrichInvoiceForPdf } from '../../utils/enrichInvoiceForPdf';
 import logoDataUrl from '../../images/logo-icon.png';
 import Breadcrumb from '../../components/Breadcrumbs/Breadcrumb';
+import { useBranchScopeEpoch } from '../../context/BranchScopeEpochContext';
 
 import {
   PDFDownloadLink,
@@ -312,6 +313,7 @@ const InvoicePdf = ({ invoice, patient }) => {
 };
 
 const HealthRecords = () => {
+  const branchEpoch = useBranchScopeEpoch();
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -369,7 +371,7 @@ const HealthRecords = () => {
 
   useEffect(() => {
     fetchInvoices();
-  }, []);
+  }, [branchEpoch]);
 
   const handleDelete = (id) => {
     Modal.confirm({

@@ -75,7 +75,7 @@ const AddAdmin = () => {
       }
      
       else if(!gender){
-        toast("Please checked your gender") 
+        toast("Please select your gender") 
       }
       else if(!state.phone){
         toast("Must enter phone!") 

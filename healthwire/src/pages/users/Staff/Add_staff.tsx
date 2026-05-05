@@ -45,7 +45,7 @@ const [loading, setLoading] = useState(false);
       }
      
       else if(!gender){
-        toast("Please checked your gender") 
+        toast("Please select your gender") 
       }
       else if(!state.phone){
         toast("Must enter phone!") 
@@ -103,7 +103,7 @@ const [loading, setLoading] = useState(false);
   }
   return (
     <>
-      <Breadcrumb pageName="Add Accountant" />
+      <Breadcrumb pageName="Add Staff" />
 
       <div className="">
         <div className="flex flex-col gap-9">
@@ -111,7 +111,7 @@ const [loading, setLoading] = useState(false);
           <div className="rounded-sm border border-stroke bg-white shadow-default dark:border-strokedark dark:bg-boxdark">
             <div className="border-b border-stroke py-4 px-6.5 dark:border-strokedark">
               <h3 className="font-medium text-black dark:text-white">
-                Add Accountant
+                Add Staff
               </h3>
             </div>
             <form onSubmit={SubmitFun} action="#">
@@ -245,7 +245,7 @@ const [loading, setLoading] = useState(false);
                                   Processing...
                                 </>
                               ) : (
-                                ' Add Accountant'
+                                ' Add Staff'
                               )}
                   
                    

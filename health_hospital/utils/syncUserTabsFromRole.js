@@ -76,10 +76,14 @@ async function refreshUserTabsFromRole(userDoc) {
   }
 
   const roleDoc = await findRoleDocForLogin(userDoc.role, effectiveBranchId);
-  if (!roleDoc || roleDoc.isSystem) return userDoc;
+  if (!roleDoc) return userDoc;
 
   if (roleDoc.branchId) {
     const userBr = effectiveBranchId || userDoc.branchId;
+    /** No branch on user — never clear tabs here (would empty sidebar incorrectly). Skip until branch is resolved. */
+    if (!branchOidMaybe(userBr)) {
+      return userDoc;
+    }
     if (!branchIdsMatch(roleDoc.branchId, userBr)) {
       return User.findByIdAndUpdate(uid, { tabs: [] }, { new: true }).lean().exec();
     }
@@ -94,7 +98,7 @@ async function refreshUserTabsFromRole(userDoc) {
  * without requiring re-login or relying on flaky string branch compares.
  */
 async function propagateTabsToUsersMatchingRole(roleDoc) {
-  if (!roleDoc || roleDoc.key == null || roleDoc.isSystem) return 0;
+  if (!roleDoc || roleDoc.key == null) return 0;
   const ck = [...new Set(roleKeyCandidates(roleDoc.key))];
   const orClause = ck.map((k) => ({ role: new RegExp(`^${escapeRegExp(k)}$`, 'i') }));
   let count = 0;

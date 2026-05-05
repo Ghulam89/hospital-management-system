@@ -1,4 +1,5 @@
 import React, { useMemo } from 'react';
+import { Link } from 'react-router-dom';
 import { Checkbox, Select } from 'antd';
 import type { MenuMatrixRow } from '../../../utils/menuPermissionCatalog';
 import {
@@ -19,6 +20,8 @@ type Props = {
   rolePermissions: string[];
   readOnly: boolean;
   onToggle: (menuId: string, action: MenuMatrixAction, checked: boolean) => void;
+  /** Prefer for column/row/header select-all — one parent update avoids stale matrix when looping `onToggle`. */
+  onMatrixMutate?: (mutate: (s: Set<string>) => void) => void;
 };
 
 const COL_LABEL: Record<MenuMatrixAction, string> = {
@@ -38,6 +41,7 @@ export default function SidebarCrudMatrix({
   rolePermissions,
   readOnly,
   onToggle,
+  onMatrixMutate,
 }: Props) {
   const tabSet = useMemo(() => new Set(rolePermissions), [rolePermissions]);
 
@@ -45,6 +49,17 @@ export default function SidebarCrudMatrix({
 
   const toggleColumn = (action: MenuMatrixAction, checked: boolean) => {
     if (readOnly || !selectedRole || selectedRole.isSystem) return;
+    if (onMatrixMutate) {
+      onMatrixMutate((cur) => {
+        for (const row of menuRows) {
+          if (!row.cells[action]) continue;
+          const key = menuPermissionKey(row.id, action);
+          if (checked) cur.add(key);
+          else cur.delete(key);
+        }
+      });
+      return;
+    }
     for (const row of menuRows) {
       if (!row.cells[action]) continue;
       onToggle(row.id, action, checked);
@@ -53,6 +68,17 @@ export default function SidebarCrudMatrix({
 
   const toggleRow = (row: MenuMatrixRow, checked: boolean) => {
     if (readOnly || !selectedRole || selectedRole.isSystem) return;
+    if (onMatrixMutate) {
+      onMatrixMutate((cur) => {
+        for (const action of MENU_MATRIX_ACTIONS) {
+          if (!row.cells[action]) continue;
+          const key = menuPermissionKey(row.id, action);
+          if (checked) cur.add(key);
+          else cur.delete(key);
+        }
+      });
+      return;
+    }
     for (const action of MENU_MATRIX_ACTIONS) {
       if (!row.cells[action]) continue;
       const key = menuPermissionKey(row.id, action);
@@ -64,6 +90,19 @@ export default function SidebarCrudMatrix({
 
   const toggleAllApplicable = (checked: boolean) => {
     if (readOnly || !selectedRole || selectedRole.isSystem) return;
+    if (onMatrixMutate) {
+      onMatrixMutate((cur) => {
+        for (const row of menuRows) {
+          for (const action of MENU_MATRIX_ACTIONS) {
+            if (!row.cells[action]) continue;
+            const key = menuPermissionKey(row.id, action);
+            if (checked) cur.add(key);
+            else cur.delete(key);
+          }
+        }
+      });
+      return;
+    }
     for (const row of menuRows) {
       for (const action of MENU_MATRIX_ACTIONS) {
         if (!row.cells[action]) continue;
@@ -131,13 +170,12 @@ export default function SidebarCrudMatrix({
 
   return (
     <div className="space-y-4">
-      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-       <div>
-        
-       </div>
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
         <Select
-          className="min-w-[220px]"
-          placeholder="Select role"
+          className="min-w-[220px] sm:max-w-md flex-1"
+          showSearch
+          optionFilterProp="label"
+          placeholder="Search or select role"
           value={selectedRoleId || undefined}
           options={roles.map((r) => ({
             value: r._id,
@@ -148,10 +186,16 @@ export default function SidebarCrudMatrix({
       </div>
 
       {!selectedRoleId ? (
-        <p className="text-sm text-bodydark2">Select a role to edit granular sidebar permissions.</p>
+        <p className="text-sm text-bodydark2">
+          Choose a role to configure which sidebar items appear for users with that role. Unticked rows stay hidden.
+        </p>
       ) : selectedRole?.isSystem ? (
         <p className="text-sm text-warning dark:text-meta-6">
-          System roles cannot change granular keys here — duplicate into a custom role if needed.
+          System roles cannot be changed on this screen. Create a custom role on{' '}
+          <Link to="/admin/roles/manage" className="font-medium text-primary underline-offset-2 hover:underline">
+            Roles (list)
+          </Link>{' '}
+          if you need different menu access.
         </p>
       ) : (
         <div className="overflow-x-auto rounded-sm border border-stroke bg-white dark:border-strokedark dark:bg-boxdark">
@@ -160,7 +204,7 @@ export default function SidebarCrudMatrix({
               <tr className="border-b border-stroke bg-gray dark:border-strokedark dark:bg-meta-4">
                 <th className="px-3 py-3 text-left font-semibold text-black dark:text-white">
                   <div className="flex flex-col gap-1.5">
-                    <span>Module / submenu</span>
+                    <span>Module / sub-menu</span>
                     {matrixSummary.applicable > 0 ? (
                         <div className="flex items-center gap-2">
                           <Checkbox

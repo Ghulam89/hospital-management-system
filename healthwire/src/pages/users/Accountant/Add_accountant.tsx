@@ -66,7 +66,7 @@ const [loading, setLoading] = useState(false);
       }
      
       else if(!gender){
-        toast("Please checked your gender") 
+        toast("Please select your gender") 
       }
       else if(!state.phone){
         toast("Must enter phone!") 
@@ -254,6 +254,7 @@ const [loading, setLoading] = useState(false);
                       Must match the slug from Admin → Roles & Permissions (e.g. accountant_access). Your matrix
                       permissions apply only when this key equals that role&apos;s key.
                     </p>
+                  </div>
                   <div className="w-full">
                     <label className="mb-2.5 block text-black dark:text-white">
                       Shift

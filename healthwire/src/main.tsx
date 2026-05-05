@@ -3,13 +3,7 @@ import ReactDOM from 'react-dom/client';
 import axios from 'axios';
 import { BrowserRouter as Router } from 'react-router-dom';
 import App from './App';
-import {
-  getSuperadminSelectedBranchId,
-  mergeAdminIdIntoAxiosParams,
-  mergeBranchIdIntoAxiosParams,
-  mergeBranchScopeIntoRequestUrl,
-  shouldSuggestBranchIdQuery,
-} from './utils/branchScope';
+import { applyBranchScopeToAxiosRequest } from './utils/branchScope';
 import { Base_url } from './utils/Base_url';
 
 axios.interceptors.request.use((config) => {
@@ -33,12 +27,7 @@ axios.interceptors.request.use((config) => {
     /* ignore */
   }
   try {
-    if (shouldSuggestBranchIdQuery()) {
-      const branchId = getSuperadminSelectedBranchId();
-      if (branchId) mergeBranchIdIntoAxiosParams(config, branchId);
-    }
-    mergeAdminIdIntoAxiosParams(config);
-    mergeBranchScopeIntoRequestUrl(config);
+    applyBranchScopeToAxiosRequest(config);
   } catch {
     /* ignore */
   }

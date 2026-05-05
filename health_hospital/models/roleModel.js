@@ -30,6 +30,11 @@ const roleSchema = new mongoose.Schema(
       ref: 'Branch',
       default: null,
     },
+    /** When true, Super Admin defined this row for a branch; branch admins do not list or edit it. Branch-created roles use false. */
+    createdBySuperAdmin: {
+      type: Boolean,
+      default: false,
+    },
   },
   { timestamps: true },
 );

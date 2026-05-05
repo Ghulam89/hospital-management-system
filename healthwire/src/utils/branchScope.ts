@@ -16,7 +16,10 @@ export function normalizeRole(role: unknown): string {
   } else {
     s = String(role);
   }
-  return s.toLowerCase().replace(/\s+/g, '');
+  const base = s.toLowerCase().replace(/\s+/g, '');
+  /** Align Role keys like `super_admin` / `super-admin` with backend branch scoping (`superadmin`). */
+  if (base.replace(/[_-]/g, '') === 'superadmin') return 'superadmin';
+  return base;
 }
 
 export function isSuperAdminRole(role: unknown): boolean {
@@ -66,12 +69,44 @@ export function clearSuperadminBranchSelectionIfNeeded(user: { role?: unknown } 
   }
 }
 
-export function shouldSuggestBranchIdQuery(): boolean {
+/** Superadmin + navbar branch picked → APIs should send `branchId`. */
+export function getSuperadminBranchScopeForApi(): string | null {
   const u = getUserDataFromStorage();
-  return !!u && isSuperAdminRole(u.role) && !!getSuperadminSelectedBranchId();
+  if (!u || !isSuperAdminRole(u.role)) return null;
+  return getSuperadminSelectedBranchId();
 }
 
-/** Merge `branchId` into axios `params` for superadmin scope (explicit `params.branchId` wins). */
+export function shouldSuggestBranchIdQuery(): boolean {
+  return !!getSuperadminBranchScopeForApi();
+}
+
+/** Axios interceptor: merge branch scope via `params` only (axios appends to URL once — avoids duplicate `branchId`). */
+export function applyBranchScopeToAxiosRequest(config: { url?: string; params?: unknown }): void {
+  const bid = getSuperadminBranchScopeForApi();
+  if (bid) mergeBranchIdIntoAxiosParams(config, bid);
+  mergeAdminIdIntoAxiosParams(config);
+}
+
+function pathnameFromRequestUrl(url: string): string | null {
+  try {
+    const parsed = url.includes('://') ? new URL(url) : new URL(url, 'http://127.0.0.1');
+    const p = parsed.pathname.replace(/\/+$/, '');
+    return p || '/';
+  } catch {
+    return null;
+  }
+}
+
+/** Branch catalogue must stay hospital-wide so the picker can search/select any branch. */
+function omitSuperadminBranchFilter(url: string): boolean {
+  const path = pathnameFromRequestUrl(String(url || ''));
+  return path === '/apis/branch/get';
+}
+
+/**
+ * Merge navbar `branchId` for scoped super-admin.
+ * Always overwrites any existing `branchId` so the header picker beats the user's own `branchId` / stale params.
+ */
 export function mergeBranchIdIntoAxiosParams(
   config: { url?: string; params?: unknown },
   branchId: string
@@ -79,12 +114,11 @@ export function mergeBranchIdIntoAxiosParams(
   const url = String(config.url || '');
   if (!url.includes('/apis/')) return;
   if (url.includes('/apis/login/')) return;
+  if (omitSuperadminBranchFilter(url)) return;
 
   const p = config.params;
   if (p instanceof URLSearchParams) {
-    if (!p.has('branchId') || p.get('branchId') === '') {
-      p.set('branchId', branchId);
-    }
+    p.set('branchId', branchId);
     config.params = p;
     return;
   }
@@ -92,10 +126,6 @@ export function mergeBranchIdIntoAxiosParams(
   let existing: Record<string, unknown> = {};
   if (p && typeof p === 'object' && !Array.isArray(p)) {
     existing = { ...(p as Record<string, unknown>) };
-  }
-  if (existing.branchId !== undefined && existing.branchId !== null && existing.branchId !== '') {
-    config.params = existing;
-    return;
   }
   existing.branchId = branchId;
   config.params = existing;
@@ -135,45 +165,24 @@ export function mergeAdminIdIntoAxiosParams(config: { url?: string; params?: unk
 }
 
 /**
- * When the URL itself carries query params (`.../get?page=1&...`), axios may still omit merging;
- * append branch scope onto `config.url` so appointments/dashboard/opd lists honor branch filters.
- */
-export function mergeBranchScopeIntoRequestUrl(config: { url?: string }): void {
-  const raw = config.url;
-  if (!raw || typeof raw !== 'string') return;
-  if (!raw.includes('/apis/') || raw.includes('/apis/login/')) return;
-
-  let parsed: URL;
-  try {
-    parsed = raw.includes('://') ? new URL(raw) : new URL(raw, 'http://127.0.0.1');
-  } catch {
-    return;
-  }
-
-  if (shouldSuggestBranchIdQuery()) {
-    const bid = getSuperadminSelectedBranchId();
-    if (bid && (!parsed.searchParams.has('branchId') || parsed.searchParams.get('branchId') === '')) {
-      parsed.searchParams.set('branchId', bid);
-    }
-  }
-
-  const u = getUserDataFromStorage();
-  if (u?._id && !isSuperAdminRole(u.role)) {
-    if (!parsed.searchParams.has('adminId') || parsed.searchParams.get('adminId') === '') {
-      parsed.searchParams.set('adminId', String(u._id));
-    }
-  }
-
-  config.url = raw.includes('://') ? parsed.toString() : `${parsed.pathname}${parsed.search}${parsed.hash}`;
-}
-
-/**
  * Superadmin: selected branch as explicit axios `params` (dashboard/cards must match header scope).
  * Other roles: empty (interceptor adds `adminId` separately).
  */
 export function buildAxiosBranchScopedParams(): Record<string, string> {
-  const u = getUserDataFromStorage();
-  if (!u || !isSuperAdminRole(u.role)) return {};
-  const bid = getSuperadminSelectedBranchId();
+  const bid = getSuperadminBranchScopeForApi();
   return bid ? { branchId: bid } : {};
+}
+
+/**
+ * When superadmin has a branch selected in the header, new staff must get that `branchId`
+ * or user lists (which filter by the same branch) will stay empty.
+ */
+export function mergeSuperadminBranchIdForCreate<T extends Record<string, unknown>>(body: T): T {
+  const bid = getSuperadminBranchScopeForApi();
+  if (!bid) return body;
+  const existing = body.branchId;
+  if (existing !== undefined && existing !== null && String(existing).trim() !== '') {
+    return body;
+  }
+  return { ...body, branchId: bid };
 }

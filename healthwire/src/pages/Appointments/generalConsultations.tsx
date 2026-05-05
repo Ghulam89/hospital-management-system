@@ -10,6 +10,7 @@ import Header from '../../components/Header';
 import Breadcrumb from '../../components/Breadcrumbs/Breadcrumb';
 import axios from 'axios';
 import { Base_url } from '../../utils/Base_url';
+import { useBranchScopeEpoch } from '../../context/BranchScopeEpochContext';
 import { toast } from 'react-toastify';
 import { Link } from 'react-router-dom';
 import EditTokenForm from './EditTokenForm';
@@ -176,6 +177,7 @@ function isCompletedTokenStatus(t: Token): boolean {
 }
 
 const GeneralConsultations: React.FC = () => {
+  const branchEpoch = useBranchScopeEpoch();
   const [doctors, setDoctors] = useState<Doctor[]>([]);
   const [statusScheduled, setStatusScheduled] = useState<string>('');
   const [statusCheckedIn, setStatusCheckedIn] = useState<string>('');
@@ -435,7 +437,7 @@ const GeneralConsultations: React.FC = () => {
     fetchDoctorAppointmentData();
     fetchDepartmentData();
     fetchStatusCounts();
-  }, []);
+  }, [branchEpoch]);
 
   const handleStatusUpdate = async (status: string, id: string) => {
     try {

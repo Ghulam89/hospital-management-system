@@ -87,11 +87,9 @@ export function canSeeUsersAdminSubtab(user: StoredUser): boolean {
 }
 
 /**
- * Old staff roles stored without `mp.*` keys — keep prior behaviour (full sidebar).
- * Custom roles created in Roles & Permissions use arbitrary keys (e.g. `amp_reception`);
- * those MUST rely on `mp.*` in JWT or the sidebar stays minimal / empty.
+ * Roles with no `mp.*` tabs — full sidebar (doctor/nurse baseline).
+ * Other legacy roles rely on PATH_RULES + tab keys (`pharmacist`, `staff`, …) for menu reachability.
  */
-/** Do not include `staff` / `accountant` — those strings collide with Roles matrix keys and broke granular sidebar. */
 const LEGACY_FULL_SIDEBAR_ROLES = new Set(['doctor', 'nurse']);
 
 function pathKey(pathname: string): string {
@@ -119,54 +117,6 @@ export function menuRowForPath(pathname: string): MenuMatrixRow | null {
 /** User JWT tabs include any granular sidebar key (`mp.`). */
 export function usesGranularMenuTabs(user: StoredUser): boolean {
   return coercePermissionsTabs(user).some((t) => t.startsWith('mp.'));
-}
-
-/** Sidebar link visibility — requires read or module when granular tabs are enabled. */
-export function canSeeSidebarMenu(user: StoredUser, menuId: string): boolean {
-  if (!user) return false;
-  const role = normalizeRole(user);
-  /** Branches: superadmin sees all; branch admins see own branch row only (API scoped); others need mp.branches.* */
-  if (menuId === 'branches') {
-    if (role === 'superadmin') return true;
-    if (isBranchStaffAdminSlug(user)) return true;
-    if (hasLegacyFullBranchAdminBypass(user)) return true;
-    const tabs = getTabs(user);
-    if (!usesGranularMenuTabs(user)) return false;
-    const mk = menuPermissionKey('branches', 'module');
-    const rk = menuPermissionKey('branches', 'read');
-    return tabs.has(mk) || tabs.has(rk);
-  }
-  /**
-   * Roles matrix: superadmin + legacy branch admins; granular users need mp.roles.read/module.
-   * Elevated role templates are hidden in the UI/API for non–super-admins.
-   */
-  if (menuId === 'roles') {
-    if (role === 'superadmin') return true;
-    if (hasLegacyFullBranchAdminBypass(user)) return true;
-    const tabs = getTabs(user);
-    if (!usesGranularMenuTabs(user)) return false;
-    const mk = menuPermissionKey('roles', 'module');
-    const rk = menuPermissionKey('roles', 'read');
-    return tabs.has(mk) || tabs.has(rk);
-  }
-  if (role === 'superadmin') return true;
-  if (hasLegacyFullBranchAdminBypass(user)) return true;
-  const tabs = getTabs(user);
-  if (!usesGranularMenuTabs(user)) {
-    if (LEGACY_FULL_SIDEBAR_ROLES.has(role)) return true;
-    /** No mp.* tabs (e.g. Role key mismatch before server fix): show Dashboard link only so menu is not blank */
-    if (tabs.size === 0 && menuId === 'dashboard') return true;
-    return false;
-  }
-  const mk = menuPermissionKey(menuId, 'module');
-  const rk = menuPermissionKey(menuId, 'read');
-  return tabs.has(mk) || tabs.has(rk);
-}
-
-/** Show a submenu section when at least one child route is permitted (group headers). */
-export function canSeeAnySidebarMenu(user: StoredUser, menuIds: string[]): boolean {
-  if (!menuIds.length) return false;
-  return menuIds.some((id) => canSeeSidebarMenu(user, id));
 }
 
 /**
@@ -391,6 +341,23 @@ const PATH_RULES: { prefix: string; anyOf: string[] }[] = [
     anyOf: ['createUsers', 'editUsers', 'administrator', 'superadmin', 'admin'],
   },
   {
+    prefix: '/quality-control-manager',
+    anyOf: ['createUsers', 'editUsers', 'administrator', 'superadmin', 'admin'],
+  },
+  {
+    prefix: '/pharmacist',
+    anyOf: [
+      'pharmacist',
+      'pharmacyOrders',
+      'viewPharmacyReports',
+      'createUsers',
+      'editUsers',
+      'administrator',
+      'superadmin',
+      'admin',
+    ],
+  },
+  {
     prefix: '/admin/roles',
     /** Role names only — granular users use `menuRowForPath` + `mp.roles.*`; avoid legacy tabs accidentally opening this screen. */
     anyOf: ['administrator', 'superadmin', 'admin'],
@@ -611,6 +578,20 @@ const SORTED_PATH_RULES = [...PATH_RULES].sort(
   (a, b) => b.prefix.length - a.prefix.length,
 );
 
+/**
+ * Add/edit user flows live under paths other than `/admin/users`. Users with Roles-matrix
+ * `mp.users.*` must still open these routes when they can open the Users module.
+ */
+function matchesUsersManagementExtendedPath(pathLower: string): boolean {
+  if (matchesPrefix(pathLower, '/nurse/')) return true;
+  if (matchesPrefix(pathLower, '/accountant/')) return true;
+  if (matchesPrefix(pathLower, '/staff/')) return true;
+  if (matchesPrefix(pathLower, '/pharmacist/')) return true;
+  if (matchesPrefix(pathLower, '/quality-control-manager/')) return true;
+  if (pathLower === '/doctor/new' || matchesPrefix(pathLower, '/doctor/update/')) return true;
+  return false;
+}
+
 function isAlwaysAllowedPath(path: string): boolean {
   return path === '/' || path === '/dashboard' || path === '/profile';
 }
@@ -640,6 +621,12 @@ export function canAccessPath(user: StoredUser, pathname: string): boolean {
     if (matchesPrefix(scoped, '/admin/branches') && isBranchStaffAdminSlug(user)) {
       return true;
     }
+    if (matchesUsersManagementExtendedPath(scoped)) {
+      return (
+        hasGranularMenuPermission(user, 'users', 'module') ||
+        hasGranularMenuPermission(user, 'users', 'read')
+      );
+    }
     const row = menuRowForPath(pathname);
     if (row) {
       return (
@@ -652,8 +639,11 @@ export function canAccessPath(user: StoredUser, pathname: string): boolean {
   const satisfies = (keys: string[]) =>
     keys.some((k) => {
       const asRole = k.toLowerCase().replace(/\s+/g, '');
-      if (role === asRole) return true;
+      if (!asRole) return false;
       if (tabs.has(k)) return true;
+      if (role === asRole) return true;
+      /** Custom Role keys reuse catalog bases (e.g. `pharmacist_dha`, `accountant_access`). */
+      if (role.startsWith(`${asRole}_`)) return true;
       return false;
     });
 
@@ -668,4 +658,55 @@ export function canAccessPath(user: StoredUser, pathname: string): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * Sidebar item visibility — uses `mp.*` matrix when enabled; otherwise mirrors `canAccessPath` for that row’s route prefix
+ * so legacy catalog roles (`pharmacist`, `staff`, …) aren’t stuck with Dashboard-only menus.
+ */
+export function canSeeSidebarMenu(user: StoredUser, menuId: string): boolean {
+  if (!user) return false;
+  const role = normalizeRole(user);
+  if (menuId === 'branches') {
+    if (role === 'superadmin') return true;
+    if (isBranchStaffAdminSlug(user)) return true;
+    if (hasLegacyFullBranchAdminBypass(user)) return true;
+    const tabs = getTabs(user);
+    if (!usesGranularMenuTabs(user)) return false;
+    const mk = menuPermissionKey('branches', 'module');
+    const rk = menuPermissionKey('branches', 'read');
+    return tabs.has(mk) || tabs.has(rk);
+  }
+  if (menuId === 'roles') {
+    if (role === 'superadmin') return true;
+    if (hasLegacyFullBranchAdminBypass(user)) return true;
+    const tabs = getTabs(user);
+    if (!usesGranularMenuTabs(user)) return false;
+    const mk = menuPermissionKey('roles', 'module');
+    const rk = menuPermissionKey('roles', 'read');
+    return tabs.has(mk) || tabs.has(rk);
+  }
+  if (role === 'superadmin') return true;
+  if (hasLegacyFullBranchAdminBypass(user)) return true;
+  const tabs = getTabs(user);
+  if (!usesGranularMenuTabs(user)) {
+    if (LEGACY_FULL_SIDEBAR_ROLES.has(role)) return true;
+    const row = MENU_ROWS.find((r) => r.id === menuId);
+    if (row) {
+      const p = row.pathPrefix.startsWith('/') ? row.pathPrefix : `/${row.pathPrefix}`;
+      if (canAccessPath(user, p)) return true;
+    }
+    /** Role key/API mismatch leaving empty tabs */
+    if (tabs.size === 0 && menuId === 'dashboard') return true;
+    return false;
+  }
+  const mk = menuPermissionKey(menuId, 'module');
+  const rk = menuPermissionKey(menuId, 'read');
+  return tabs.has(mk) || tabs.has(rk);
+}
+
+/** Show a submenu section when at least one child route is permitted (group headers). */
+export function canSeeAnySidebarMenu(user: StoredUser, menuIds: string[]): boolean {
+  if (!menuIds.length) return false;
+  return menuIds.some((id) => canSeeSidebarMenu(user, id));
 }

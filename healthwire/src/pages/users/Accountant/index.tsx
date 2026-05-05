@@ -10,6 +10,8 @@ import { RiDeleteBin5Line } from 'react-icons/ri';
 import Swal from 'sweetalert2';
 import { canCreateUsers, canDeleteUsers, canEditUsers, getStoredUserForPermissions } from '../../../utils/permissions';
 import { accountantRoleKeyQueryList } from '../utils/assignableRoles';
+import { useBranchScopeEpoch } from '../../../context/BranchScopeEpochContext';
+import { buildAxiosBranchScopedParams } from '../../../utils/branchScope';
 
 const authHeaders = () => {
   const t = localStorage.getItem('userToken') || '';
@@ -48,6 +50,7 @@ const columns = (handleDelete, handleEdit, canEdit, canDelete) => [
 ].filter(Boolean);
 
 const Accountant = () => {
+  const branchEpoch = useBranchScopeEpoch();
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
   const [users, setUsers] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
@@ -107,7 +110,7 @@ const Accountant = () => {
     const keys = accountantRoleKeys.length ? accountantRoleKeys : ['accountant'];
     try {
       const res = await axios.get(`${Base_url}/apis/user/get`, {
-        params: { page, roles: keys.join(','), branchId: 'all' },
+        params: { page, roles: keys.join(','), ...buildAxiosBranchScopedParams() },
       });
       const rows = Array.isArray(res.data?.data) ? res.data.data : [];
       const lowered = keys.map((k) => String(k).toLowerCase());
@@ -122,7 +125,7 @@ const Accountant = () => {
   useEffect(() => {
     fetchUsersData(currentPage);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPage, accountantRoleKeys]);
+  }, [currentPage, accountantRoleKeys, branchEpoch]);
 
   const handleTableChange = (pagination) => {
     setCurrentPage(pagination.current);

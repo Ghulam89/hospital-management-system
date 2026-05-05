@@ -1,10 +1,14 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/userModel');
 
-const normalizeRole = (role) =>
-  String(role || '')
+/** Lowercase slug; collapses `super_admin` / `super-admin` / `Super Admin` → `superadmin` for branch scoping. */
+const normalizeRole = (role) => {
+  const s = String(role || '')
     .toLowerCase()
     .replace(/\s+/g, '');
+  if (s.replace(/[_-]/g, '') === 'superadmin') return 'superadmin';
+  return s;
+};
 
 const auth = async (req, res, next) => {
   try {

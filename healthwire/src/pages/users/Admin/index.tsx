@@ -6,6 +6,8 @@ import axios from 'axios';
 import moment from 'moment';
 import { Base_url } from '../../../utils/Base_url';
 import { canCreateUsers, canDeleteUsers, canEditUsers, getStoredUserForPermissions } from '../../../utils/permissions';
+import { useBranchScopeEpoch } from '../../../context/BranchScopeEpochContext';
+import { buildAxiosBranchScopedParams } from '../../../utils/branchScope';
 
 import { RiDeleteBin5Line } from 'react-icons/ri';
 
@@ -41,6 +43,7 @@ const columns = (handleDelete, handleEdit, canEdit, canDelete) => [
 ].filter(Boolean);
 
 const Admin = () => {
+  const branchEpoch = useBranchScopeEpoch();
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
   const [users, setUsers] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
@@ -85,7 +88,9 @@ const Admin = () => {
 
   const fetchUsersData = (page) => {
     axios
-      .get(`${Base_url}/apis/user/get`, { params: { page, role: 'administrator', branchId: 'all' } })
+      .get(`${Base_url}/apis/user/get`, {
+        params: { page, role: 'administrator', ...buildAxiosBranchScopedParams() },
+      })
       .then((res) => {
         const rows = Array.isArray(res.data?.data) ? res.data.data : [];
         const administrators = rows.filter((user) => user.role === 'administrator');
@@ -100,7 +105,7 @@ const Admin = () => {
 
   useEffect(() => {
     fetchUsersData(currentPage);
-  }, [currentPage]);
+  }, [currentPage, branchEpoch]);
 
   const handleTableChange = (pagination) => {
     setCurrentPage(pagination.current);

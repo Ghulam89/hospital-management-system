@@ -69,7 +69,7 @@ export const MENU_ROWS: MenuMatrixRow[] = [
   { id: 'report_financial', label: 'Financial Report', group: 'Reports', parentLabel: 'Reports', pathPrefix: '/financial/financial-report', cells: { module: true, create: false, read: true, update: false, delete: false } },
 
   { id: 'users', label: 'Users', group: 'Administration', pathPrefix: '/admin/users', cells: { module: true, create: true, read: true, update: true, delete: true } },
-  { id: 'roles', label: 'Roles & Permissions', group: 'Administration', pathPrefix: '/admin/roles', cells: { module: true, create: true, read: true, update: true, delete: false } },
+  { id: 'roles', label: 'Menu permissions & roles list', group: 'Administration', pathPrefix: '/admin/roles', cells: { module: true, create: true, read: true, update: true, delete: false } },
 ];
 
 export function menuPermissionKey(menuId: string, action: MenuMatrixAction): string {

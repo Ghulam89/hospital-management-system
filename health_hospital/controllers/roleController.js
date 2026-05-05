@@ -84,25 +84,39 @@ function filterRolesHiddenFromBranchAdmin(req, rows) {
   return rows.filter((r) => !isElevatedRoleHiddenFromBranchViewer(r));
 }
 
-/** Branch admins see global templates (branchId null) + roles owned by their branch. Superadmin sees all. */
+/** Branch users: only branch roles explicitly marked `createdBySuperAdmin: false` (created by branch), plus global system rows.
+ *  Super Admin branch templates use `true`; legacy docs without the field are hidden (not treated as branch-owned).
+ */
 async function rolesFilterForUser(req) {
   if (isSuperAdmin(req.user)) return {};
   const bid = await resolveBranchIdForNonSuperAdmin(req);
   if (!bid) return { branchId: null };
-  return { $or: [{ branchId: null }, { branchId: bid }] };
+  return {
+    $or: [
+      { branchId: bid, createdBySuperAdmin: false },
+      { isSystem: true, branchId: null },
+    ],
+  };
 }
 
 async function assertBranchRoleRead(req, roleDoc, res) {
   if (isSuperAdmin(req.user)) return true;
-  if (!isBranchAdmin(req.user)) return true;
+  if (roleDoc.isSystem && !roleDoc.branchId) return true;
   const bid = await resolveBranchIdForNonSuperAdmin(req);
   if (!bid) {
+    if (!roleDoc.branchId) return true;
     res.status(403).json({ status: 'fail', message: 'Forbidden' });
     return false;
   }
-  if (!roleDoc.branchId) return true;
-  if (String(roleDoc.branchId) !== String(bid)) {
+  if (!roleDoc.branchId || String(roleDoc.branchId) !== String(bid)) {
     res.status(403).json({ status: 'fail', message: 'Forbidden' });
+    return false;
+  }
+  if (roleDoc.createdBySuperAdmin !== false) {
+    res.status(403).json({
+      status: 'fail',
+      message: 'This role was created by Super Admin for your branch and is managed at HQ only',
+    });
     return false;
   }
   return true;
@@ -124,6 +138,13 @@ async function assertBranchRoleMutate(req, roleDoc, res) {
     res.status(403).json({
       status: 'fail',
       message: 'You can only manage roles created for your branch',
+    });
+    return false;
+  }
+  if (roleDoc.createdBySuperAdmin !== false) {
+    res.status(403).json({
+      status: 'fail',
+      message: 'Only Super Admin can change roles created for your branch at HQ',
     });
     return false;
   }
@@ -198,7 +219,16 @@ const createRole = async (req, res) => {
       branchId = parseOptionalBranchObjectId(req.body.branchId);
     } else {
       branchId = await resolveBranchIdForNonSuperAdmin(req);
+      if (!branchId) {
+        return res.status(400).json({
+          status: 'fail',
+          message: 'Branch not assigned — only Super Admin can create global roles',
+        });
+      }
     }
+
+    /** Super Admin + branchId ⇒ HQ-only template; branch admins only list rows with explicit `false`. */
+    const createdBySuperAdmin = Boolean(isSuperAdmin(req.user) && branchId != null);
 
     const created = await Role.create({
       name,
@@ -207,6 +237,7 @@ const createRole = async (req, res) => {
       permissions,
       isSystem: false,
       branchId,
+      createdBySuperAdmin,
     });
 
     await propagateTabsToUsersMatchingRole(created);
@@ -262,6 +293,12 @@ const updateRole = async (req, res) => {
 
 const deleteRole = async (req, res) => {
   try {
+    if (!isSuperAdmin(req.user)) {
+      return res.status(403).json({
+        status: 'fail',
+        message: 'Only Super Admin can delete roles. Branch admins may create and edit branch roles only.',
+      });
+    }
     const role = await Role.findById(req.params.id);
     if (!role) {
       return res.status(404).json({ status: 'fail', message: 'Role not found' });
@@ -269,10 +306,6 @@ const deleteRole = async (req, res) => {
     if (role.isSystem) {
       return res.status(400).json({ status: 'fail', message: 'System roles cannot be deleted' });
     }
-    if (!isSuperAdmin(req.user) && isElevatedRoleHiddenFromBranchViewer(role)) {
-      return res.status(403).json({ status: 'fail', message: 'Forbidden' });
-    }
-    if (!(await assertBranchRoleMutate(req, role, res))) return;
 
     await Role.deleteOne({ _id: role._id });
     return res.status(200).json({ status: 'ok', message: 'Deleted' });

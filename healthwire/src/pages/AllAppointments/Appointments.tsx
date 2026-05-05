@@ -11,6 +11,7 @@ import * as XLSX from 'xlsx';
 import { useReactToPrint } from 'react-to-print';
 import EditAppointment from '../Appointments/EditAppointment';
 import { canMenuAction, getStoredUserForPermissions } from '../../utils/permissions';
+import { useBranchScopeEpoch } from '../../context/BranchScopeEpochContext';
 
 const { Option } = Select;
 
@@ -33,6 +34,7 @@ interface Appointment {
 }
 
 const AllAppointments = () => {
+  const branchEpoch = useBranchScopeEpoch();
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [appointments, setAppointments] = useState<Appointment[]>([]);
   const [loading, setLoading] = useState(false);
@@ -181,12 +183,12 @@ const [selectedAppointment, setSelectedAppointment] = useState<Appointment | nul
         message.error('Failed to fetch appointments');
         setLoading(false);
       });
-  }, [currentPage, pageSize, filters]);
+  }, [currentPage, pageSize, filters, branchEpoch]);
 
   useEffect(() => {
     fetchDoctors();
     fetchDepartments();
-  }, []);
+  }, [branchEpoch]);
 
   useEffect(() => {
     fetchAppointments();

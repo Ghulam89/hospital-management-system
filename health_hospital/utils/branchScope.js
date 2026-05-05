@@ -30,9 +30,9 @@ async function getScopedDepartmentIds(req) {
 
   const role = normalizeRole(req.user.role);
   if (role === 'superadmin' || role === 'super admin') {
-    const bid = req.query.branchId;
-    if (bid && mongoose.Types.ObjectId.isValid(String(bid))) {
-      const oid = new mongoose.Types.ObjectId(String(bid));
+    const bidStr = pickValidBranchOidString(req.query.branchId);
+    if (bidStr) {
+      const oid = new mongoose.Types.ObjectId(bidStr);
       const rows = await Department.find(departmentVisibilityOrFilter(oid)).select('_id').lean();
       return rows.map((r) => r._id);
     }
@@ -60,6 +60,27 @@ async function getScopedWardIds(req) {
   if (deptIds.length === 0) return [];
   const wards = await Ward.find({ departmentId: { $in: deptIds } }).select('_id').lean();
   return wards.map((w) => w._id);
+}
+
+/** First valid Mongo ObjectId from duplicated query (`branchId=a&branchId=b`), comma string, or `{ _id }`. */
+function pickValidBranchOidString(raw) {
+  if (raw == null || raw === '') return null;
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      const inner = pickValidBranchOidString(item);
+      if (inner) return inner;
+    }
+    return null;
+  }
+  if (typeof raw === 'object' && raw._id != null) {
+    return pickValidBranchOidString(raw._id);
+  }
+  const full = String(raw).trim();
+  if (!full) return null;
+  for (const token of full.split(',').map((x) => x.trim()).filter(Boolean)) {
+    if (mongoose.Types.ObjectId.isValid(token)) return token;
+  }
+  return null;
 }
 
 function idInList(id, list) {
@@ -122,9 +143,10 @@ async function resolveWriteBranchOid(req) {
   if (!req?.user) return null;
   const role = normalizeRole(req.user.role);
   if (role === 'superadmin' || role === 'super admin') {
-    const bid = req.query?.branchId ?? req.body?.branchId;
-    if (bid && mongoose.Types.ObjectId.isValid(String(bid))) {
-      return new mongoose.Types.ObjectId(String(bid));
+    const bidStr =
+      pickValidBranchOidString(req.query?.branchId) ?? pickValidBranchOidString(req.body?.branchId);
+    if (bidStr) {
+      return new mongoose.Types.ObjectId(bidStr);
     }
   }
   return null;
@@ -140,8 +162,9 @@ async function mergeBranchScopedQuery(req) {
   const role = normalizeRole(req.user.role);
   if (role === 'superadmin' || role === 'super admin') {
     const q = {};
-    if (req.query.branchId && mongoose.Types.ObjectId.isValid(String(req.query.branchId))) {
-      q.branchId = req.query.branchId;
+    const bidStr = pickValidBranchOidString(req.query.branchId);
+    if (bidStr) {
+      q.branchId = bidStr;
     }
     return Object.keys(q).length ? q : null;
   }
@@ -197,13 +220,13 @@ function assignBranchIdForCreate(req, payload) {
   if (!req?.user) return out;
   const role = normalizeRole(req.user.role);
   if (role === 'superadmin' || role === 'super admin') {
-    const bid = req.query?.branchId ?? req.body?.branchId;
+    const bidStr =
+      pickValidBranchOidString(req.query?.branchId) ?? pickValidBranchOidString(req.body?.branchId);
     if (
-      bid &&
-      mongoose.Types.ObjectId.isValid(String(bid)) &&
+      bidStr &&
       (out.branchId === undefined || out.branchId === null || out.branchId === '')
     ) {
-      out.branchId = new mongoose.Types.ObjectId(String(bid));
+      out.branchId = new mongoose.Types.ObjectId(bidStr);
     }
     return out;
   }
@@ -339,6 +362,7 @@ async function getScopedAdmitPatientIds(req) {
 }
 
 module.exports = {
+  pickValidBranchOidString,
   getScopedDepartmentIds,
   getScopedRoomIds,
   getScopedWardIds,

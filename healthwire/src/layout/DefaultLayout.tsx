@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { Spin } from 'antd';
 import Header from '../components/Header/index';
 import Sidebar from '../components/Sidebar/index';
@@ -8,31 +9,41 @@ import {
   getUserDataFromStorage,
   isSuperAdminRole,
 } from '../utils/branchScope';
+import { BranchScopeEpochContext } from '../context/BranchScopeEpochContext';
 
 const DefaultLayout: React.FC = () => {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   /** Remount active route when superadmin branch scope changes so lists refetch with new ?branchId (or all branches). */
   const [outletKey, setOutletKey] = useState(0);
+  /** Remount header (navbar search, notifications, etc.) so cached results clear when branch scope changes. */
+  const [headerKey, setHeaderKey] = useState(0);
+  /** Bump so branch-scoped tables can refetch even when React preserves component instance. */
+  const [branchEpoch, setBranchEpoch] = useState(0);
   const [branchSwitching, setBranchSwitching] = useState(false);
 
   useEffect(() => {
     const onBranchScopeChange = () => {
       if (!isSuperAdminRole(getUserDataFromStorage()?.role)) return;
-      setBranchSwitching(true);
-      setOutletKey((k) => k + 1);
-      window.setTimeout(() => setBranchSwitching(false), 700);
+      flushSync(() => {
+        setBranchSwitching(true);
+        setOutletKey((k) => k + 1);
+        setHeaderKey((k) => k + 1);
+        setBranchEpoch((n) => n + 1);
+      });
+      window.setTimeout(() => setBranchSwitching(false), 160);
     };
     window.addEventListener(BRANCH_CHANGED_EVENT, onBranchScopeChange);
     return () => window.removeEventListener(BRANCH_CHANGED_EVENT, onBranchScopeChange);
   }, []);
 
   return (
+    <BranchScopeEpochContext.Provider value={branchEpoch}>
     <div className="dark:bg-boxdark-2 dark:text-bodydark">
       <div className="flex h-screen overflow-hidden">
         <Sidebar sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen} />
 
         <div className="relative flex flex-1 flex-col overflow-y-auto overflow-x-hidden">
-          <Header sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen} />
+          <Header key={headerKey} sidebarOpen={sidebarOpen} setSidebarOpen={setSidebarOpen} />
 
           <main>
             <div className="mx-auto max-w-screen-2xl p-4 md:p-6 2xl:p-10">
@@ -55,6 +66,7 @@ const DefaultLayout: React.FC = () => {
         )}
       </div>
     </div>
+    </BranchScopeEpochContext.Provider>
   );
 };
 

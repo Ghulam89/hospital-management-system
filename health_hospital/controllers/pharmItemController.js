@@ -3,7 +3,7 @@ const PharmItem = require("../models/pharmItemModel");
 const PharmPos = require("../models/pharmPosModel");
 const PharmInboundStock = require("../models/pharmInboundStockModel");
 const mongoose = require("mongoose");
-const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible, resolveBranchIdForNonSuperAdmin } = require("../utils/branchScope");
+const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible, resolveBranchIdForNonSuperAdmin, pickValidBranchOidString } = require("../utils/branchScope");
 const { normalizeRole } = require("../middleware/auth");
 
 const escapeRegex = (s) => String(s || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -212,9 +212,9 @@ async function resolveCatalogMergeBranchOid(req) {
   if (!req?.user) return null;
   const role = normalizeRole(req.user.role);
   if (role === "superadmin" || role === "super admin") {
-    const bid = req.query.branchId;
-    if (bid && mongoose.Types.ObjectId.isValid(String(bid))) {
-      return new mongoose.Types.ObjectId(String(bid));
+    const bidStr = pickValidBranchOidString(req.query.branchId);
+    if (bidStr) {
+      return new mongoose.Types.ObjectId(bidStr);
     }
   }
   return null;

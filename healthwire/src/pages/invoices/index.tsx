@@ -12,6 +12,8 @@ import logoDataUrl from '../../images/logo-icon.png';
 import Breadcrumb from '../../components/Breadcrumbs/Breadcrumb';
 import { AsyncPaginate, type LoadOptions } from 'react-select-async-paginate';
 import { canMenuAction, getStoredUserForPermissions, hasAnyPermission } from '../../utils/permissions';
+import { useBranchScopeEpoch } from '../../context/BranchScopeEpochContext';
+import { buildAxiosBranchScopedParams } from '../../utils/branchScope';
 
 import {
   PDFDownloadLink,
@@ -358,6 +360,7 @@ const InvoicePdf = ({ invoice, patient }) => {
 };
 
 const Invoice = () => {
+  const branchEpoch = useBranchScopeEpoch();
  const [selectedRowKeys, setSelectedRowKeys] = useState([]);
   const [invoices, setInvoices] = useState([]);
   const [filteredInvoices, setFilteredInvoices] = useState([]);
@@ -673,6 +676,7 @@ const Invoice = () => {
         page,
         limit,
         ...(searchQuery ? { search: searchQuery } : {}),
+        ...buildAxiosBranchScopedParams(),
       },
     });
 
@@ -706,6 +710,7 @@ const Invoice = () => {
         page,
         limit,
         ...(searchQuery ? { search: searchQuery } : {}),
+        ...buildAxiosBranchScopedParams(),
       },
     });
 
@@ -741,6 +746,7 @@ const Invoice = () => {
         page,
         limit,
         ...(searchQuery ? { search: searchQuery } : {}),
+        ...buildAxiosBranchScopedParams(),
       },
     });
 
@@ -776,6 +782,7 @@ const Invoice = () => {
         page,
         limit,
         ...(searchQuery ? { search: searchQuery } : {}),
+        ...buildAxiosBranchScopedParams(),
       },
     });
 
@@ -894,84 +901,75 @@ const Invoice = () => {
   const fetchInvoices = async (page = 1, pageSize = 20) => {
     setLoading(true);
     try {
-    
+      const params: Record<string, string> = {};
 
-      const queryParams = new URLSearchParams();
-    
-    if (filters.doctor) queryParams.append('doctorId', filters.doctor);
-    if (filters.department) queryParams.append('departmentId', filters.department);
-    
-    // Handle date filtering - if same date, use exact same time range
-    if (filters.startDate && filters.endDate) {
-      const startDate = filters.startDate.clone();
-      const endDate = filters.endDate.clone();
-      
-      // If start and end dates are the same day, use exact same time range
-      if (startDate.isSame(endDate, 'day')) {
-        const sameDayStart = startDate.clone().startOf('day');
-        const sameDayEnd = startDate.clone().endOf('day');
-        queryParams.append('startDate', sameDayStart.toISOString());
-        queryParams.append('endDate', sameDayEnd.toISOString());
-        
-        // Debug log for same date scenario
-        console.log('Same date selected:', {
-          date: startDate.format('YYYY-MM-DD'),
-          startTime: sameDayStart.format('YYYY-MM-DD HH:mm:ss'),
-          endTime: sameDayEnd.format('YYYY-MM-DD HH:mm:ss')
-        });
-      } else {
-        queryParams.append('startDate', startDate.clone().startOf('day').toISOString());
-        queryParams.append('endDate', endDate.clone().endOf('day').toISOString());
-        
-        // Debug log for different dates
-        console.log('Different dates selected:', {
-          startDate: startDate.format('YYYY-MM-DD'),
-          endDate: endDate.format('YYYY-MM-DD')
-        });
-      }
-    }
-    
-    if (filters.patientMR) queryParams.append('patientMR', filters.patientMR);
-    if (filters.status) queryParams.append('status', filters.status);
-    if (filters.patientName) queryParams.append('patientName', filters.patientName);
-    if (filters.patientPhone) queryParams.append('patientPhone', filters.patientPhone);
-    if (filters.invoiceNumber) queryParams.append('invoiceNo', filters.invoiceNumber);
-    if (filters.paymentDateStart) queryParams.append('paymentDateStart', filters.paymentDateStart);
-    if (filters.paymentDateEnd) queryParams.append('paymentDateEnd', filters.paymentDateEnd);
-    // Doctor / procedure filter we do both backend + frontend now
-    if (filters.procedure) queryParams.append('procedureId', filters.procedure);
-    // Amount range: decide which field to filter (default = Paid)
-    // Note: we only need amountField here once; frontend also uses it below
-    const amountField = filters.amountField || 'paid';
-    if (filters.minAmount) {
-      const min = Number(filters.minAmount);
-      if (Number.isFinite(min)) {
-        if (amountField === 'total') queryParams.append('minTotalBill', String(min));
-        else if (amountField === 'discount') queryParams.append('minDiscountBill', String(min));
-        else if (amountField === 'due') queryParams.append('minDue', String(min));
-        else if (amountField === 'advance') queryParams.append('minAdvance', String(min));
-        else queryParams.append('minPaid', String(min)); // default = paid
-      }
-    }
-    if (filters.maxAmount) {
-      const max = Number(filters.maxAmount);
-      if (Number.isFinite(max)) {
-        if (amountField === 'total') queryParams.append('maxTotalBill', String(max));
-        else if (amountField === 'discount') queryParams.append('maxDiscountBill', String(max));
-        else if (amountField === 'due') queryParams.append('maxDue', String(max));
-        else if (amountField === 'advance') queryParams.append('maxAdvance', String(max));
-        else queryParams.append('maxPaid', String(max)); // default = paid
-      }
-    }
-    if (filters.paymentMode) queryParams.append('paymentMode', filters.paymentMode);
-    
-    // Add pagination parameters
-    queryParams.append('page', page.toString());
-    queryParams.append('limit', pageSize.toString());
+      if (filters.doctor) params.doctorId = filters.doctor;
+      if (filters.department) params.departmentId = filters.department;
 
-    const response = await axios.get(
-      `${Base_url}/apis/invoice/get?${queryParams.toString()}`,
-    );
+      if (filters.startDate && filters.endDate) {
+        const startDate = filters.startDate.clone();
+        const endDate = filters.endDate.clone();
+        if (startDate.isSame(endDate, 'day')) {
+          const sameDayStart = startDate.clone().startOf('day');
+          const sameDayEnd = startDate.clone().endOf('day');
+          params.startDate = sameDayStart.toISOString();
+          params.endDate = sameDayEnd.toISOString();
+          console.log('Same date selected:', {
+            date: startDate.format('YYYY-MM-DD'),
+            startTime: sameDayStart.format('YYYY-MM-DD HH:mm:ss'),
+            endTime: sameDayEnd.format('YYYY-MM-DD HH:mm:ss'),
+          });
+        } else {
+          params.startDate = startDate.clone().startOf('day').toISOString();
+          params.endDate = endDate.clone().endOf('day').toISOString();
+          console.log('Different dates selected:', {
+            startDate: startDate.format('YYYY-MM-DD'),
+            endDate: endDate.format('YYYY-MM-DD'),
+          });
+        }
+      }
+
+      if (filters.patientMR) params.patientMR = filters.patientMR;
+      if (filters.status) params.status = filters.status;
+      if (filters.patientName) params.patientName = filters.patientName;
+      if (filters.patientPhone) params.patientPhone = filters.patientPhone;
+      if (filters.invoiceNumber) params.invoiceNo = filters.invoiceNumber;
+      if (filters.paymentDateStart) params.paymentDateStart = filters.paymentDateStart;
+      if (filters.paymentDateEnd) params.paymentDateEnd = filters.paymentDateEnd;
+      if (filters.procedure) params.procedureId = filters.procedure;
+
+      const amountField = filters.amountField || 'paid';
+      if (filters.minAmount) {
+        const min = Number(filters.minAmount);
+        if (Number.isFinite(min)) {
+          if (amountField === 'total') params.minTotalBill = String(min);
+          else if (amountField === 'discount') params.minDiscountBill = String(min);
+          else if (amountField === 'due') params.minDue = String(min);
+          else if (amountField === 'advance') params.minAdvance = String(min);
+          else params.minPaid = String(min);
+        }
+      }
+      if (filters.maxAmount) {
+        const max = Number(filters.maxAmount);
+        if (Number.isFinite(max)) {
+          if (amountField === 'total') params.maxTotalBill = String(max);
+          else if (amountField === 'discount') params.maxDiscountBill = String(max);
+          else if (amountField === 'due') params.maxDue = String(max);
+          else if (amountField === 'advance') params.maxAdvance = String(max);
+          else params.maxPaid = String(max);
+        }
+      }
+      if (filters.paymentMode) params.paymentMode = filters.paymentMode;
+
+      params.page = String(page);
+      params.limit = String(pageSize);
+
+      const response = await axios.get(`${Base_url}/apis/invoice/get`, {
+        params: {
+          ...params,
+          ...buildAxiosBranchScopedParams(),
+        },
+      });
 
       const data = response?.data?.data || [];
       const paginationData = response?.data || {};
@@ -1385,7 +1383,7 @@ const Invoice = () => {
 
   useEffect(() => {
     fetchInvoices(1, pagination.pageSize);
-  }, [filters]);
+  }, [filters, branchEpoch]);
 
   // Reset to first page when filters change
   useEffect(() => {

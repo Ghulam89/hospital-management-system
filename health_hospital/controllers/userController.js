@@ -6,7 +6,7 @@ const {
   findRoleDocForLogin,
   refreshUserTabsFromRole,
 } = require("../utils/syncUserTabsFromRole");
-const { loadBranchIdFromUserDoc } = require("../utils/branchScope");
+const { loadBranchIdFromUserDoc, pickValidBranchOidString } = require("../utils/branchScope");
 
 const isSuperAdminRole = (role) => normalizeRole(role) === "superadmin";
 const isBranchAdminRole = (role) => {
@@ -39,7 +39,7 @@ const canManageTargetUser = async (actor, targetUser) => {
 };
 
 /**
- * Custom roles (Role doc, isSystem false) define access; tabs must mirror Role.permissions.
+ * Custom / template Role docs define matrix access; `tabs` must mirror Role.permissions.
  * Branch-scoped roles (branchId set) may only be assigned to users in that branch.
  */
 async function syncTabsFromRoleDoc(actor, payload, existingUser) {
@@ -69,7 +69,7 @@ async function syncTabsFromRoleDoc(actor, payload, existingUser) {
   }
 
   const roleDoc = await findRoleDocForLogin(rawRole, effectiveBranchId);
-  if (!roleDoc || roleDoc.isSystem) {
+  if (!roleDoc) {
     return { ok: true, payload };
   }
 
@@ -185,43 +185,60 @@ const getusers = async (req, res) => {
     let search = req.query.search || "";
     let page = parseInt(req.query.page) || 1;
     let limit = parseInt(req.query.limit) || 20;
+    const escapeRegex = (s) => String(s || '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-    // Build base query
-    const query = {};
+    /** Use $and so role + search $or never overwrite each other; superadmin branch filter can include unassigned users. */
+    const andParts = [];
 
     const actor = req.user;
     const actorRole = normalizeRole(actor?.role);
 
-    /** Comma-separated role keys (`accountant,accountant_access`) or single ?role */
     if (req.query.roles) {
       const arr = String(req.query.roles || '')
         .split(',')
         .map((s) => s.trim())
         .filter(Boolean);
       if (arr.length === 1) {
-        query.role = arr[0];
+        andParts.push({ role: new RegExp(`^${escapeRegex(arr[0])}$`, 'i') });
       } else if (arr.length > 1) {
-        query.role = { $in: arr };
+        andParts.push({
+          role: { $in: arr.map((k) => new RegExp(`^${escapeRegex(k)}$`, 'i')) },
+        });
       }
     } else if (req.query.role) {
-      query.role = req.query.role;
+      const r = String(req.query.role || '').trim();
+      if (r) {
+        const rl = r.toLowerCase();
+        if (rl === "nurse") {
+          andParts.push({ role: /^nurse(_.*)?$/i });
+        } else if (rl === "pharmacist") {
+          andParts.push({ role: /^pharmacist(_.*)?$/i });
+        } else if (rl === "quality_control_manager") {
+          andParts.push({ role: /^quality_control_manager(_.*)?$/i });
+        } else {
+          andParts.push({ role: new RegExp(`^${escapeRegex(r)}$`, 'i') });
+        }
+      }
     }
 
-    // Superadmin: all branches unless ?branchId is a real ObjectId (not "all").
-    // Branch scoping: use User.branchId or department → branch (legacy admins)
     let actorBranchId = actor?.branchId;
     if (!isSuperAdminRole(actorRole) && !actorBranchId && actor?._id) {
       actorBranchId = await loadBranchIdFromUserDoc(actor._id);
     }
 
     if (isSuperAdminRole(actorRole)) {
-      const raw = req.query.branchId;
-      const s = raw != null ? String(raw).trim() : "";
-      if (s && s !== "all" && mongoose.Types.ObjectId.isValid(s)) {
-        query.branchId = s;
+      const bidStr = pickValidBranchOidString(req.query.branchId);
+      if (bidStr) {
+        andParts.push({
+          $or: [
+            { branchId: bidStr },
+            { branchId: null },
+            { branchId: { $exists: false } },
+          ],
+        });
       }
     } else if (actorBranchId) {
-      query.branchId = actorBranchId;
+      andParts.push({ branchId: actorBranchId });
     } else if (!isSuperAdminRole(actorRole)) {
       return res.status(200).json({
         status: "ok",
@@ -235,14 +252,18 @@ const getusers = async (req, res) => {
       });
     }
 
-    // Search condition
     if (search) {
-      query.$or = [
-        { name: { $regex: search, $options: "i" } },
-        { phone: { $regex: search, $options: "i" } },
-        { email: { $regex: search, $options: "i" } },
-      ];
+      andParts.push({
+        $or: [
+          { name: { $regex: search, $options: "i" } },
+          { phone: { $regex: search, $options: "i" } },
+          { email: { $regex: search, $options: "i" } },
+        ],
+      });
     }
+
+    const query =
+      andParts.length === 0 ? {} : andParts.length === 1 ? andParts[0] : { $and: andParts };
 
     const users = await User.find(query).sort({createdAt:-1})
       .populate(['departmentId','branchId'])

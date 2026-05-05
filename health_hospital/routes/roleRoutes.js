@@ -2,7 +2,7 @@ const router = require('express').Router();
 const roleController = require('../controllers/roleController');
 const { auth, requireRole } = require('../middleware/auth');
 
-/** Branch admins may manage branch roles; elevated templates (admin/superadmin) excluded in controller for non–super-admins. */
+/** Branch admins manage branch-owned roles; delete is Super Admin only. List scope is enforced in controller. */
 const adminRoles = requireRole(
   'superadmin',
   'super admin',

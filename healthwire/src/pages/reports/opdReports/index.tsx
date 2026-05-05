@@ -9,11 +9,13 @@ import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 import * as XLSX from 'xlsx';
 import { useReactToPrint } from 'react-to-print';
 import { Link } from 'react-router-dom';
+import { useBranchScopeEpoch } from '../../../context/BranchScopeEpochContext';
 const { RangePicker } = DatePicker;
 
 const { Option } = Select;
 
 const OpdReports = () => {
+  const branchEpoch = useBranchScopeEpoch();
   const [appointments, setAppointments] = useState([]);
   const [loading, setLoading] = useState(false);
   const [doctors, setDoctors] = useState([]);
@@ -143,12 +145,12 @@ const OpdReports = () => {
     } finally {
       setLoading(false);
     }
-  }, [filters, departments]);
+  }, [filters, departments, branchEpoch]);
 
   useEffect(() => {
     fetchDoctors();
     fetchDepartments();
-  }, []);
+  }, [branchEpoch]);
 
   useEffect(() => {
     if (doctors.length > 0 && departments.length > 0) {

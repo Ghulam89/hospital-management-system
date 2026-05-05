@@ -148,6 +148,10 @@ const PharmacyReports: React.FC = () => {
     [],
   );
 
+  /** Pharmacy reports only use historical data — disable selecting dates after today in the calendar. */
+  const disableDatesAfterToday = (current: Dayjs | null) =>
+    !!current && current.startOf('day').isAfter(dayjs().startOf('day'));
+
   useEffect(() => {
     setCurrentPage(1);
     setSelectedRowKeys([]);
@@ -993,6 +997,7 @@ const PharmacyReports: React.FC = () => {
             <div className="flex gap-2">
               <RangePicker
                 value={dateRange}
+                disabledDate={disableDatesAfterToday}
                 onChange={(dates) => {
                   setDateRange(dates as [Dayjs | null, Dayjs | null]);
                   if (dates && dates[0] && dates[1]) {
@@ -1045,6 +1050,7 @@ const PharmacyReports: React.FC = () => {
                 <div className="flex gap-2">
                   <RangePicker
                     value={paymentDateRange}
+                    disabledDate={disableDatesAfterToday}
                     onChange={(dates) => {
                       setPaymentDateRange(dates as [Dayjs | null, Dayjs | null]);
                       if (dates && dates[0] && dates[1]) {

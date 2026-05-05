@@ -7,6 +7,8 @@ import { GiDisc } from "react-icons/gi";
 import { RiDeleteBin5Line } from 'react-icons/ri';
 
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
+import { Base_url } from '../../../utils/Base_url';
+import { useBranchScopeEpoch } from '../../../context/BranchScopeEpochContext';
 
 const { Search } = Input;
 const { Option } = Select;
@@ -52,6 +54,7 @@ const columns = (handleDelete, handleEdit) => [
 ];
 
 const AddmittedPatients = () => {
+  const branchEpoch = useBranchScopeEpoch();
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
   const [patientData, setPatientData] = useState([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -73,16 +76,16 @@ const AddmittedPatients = () => {
   const [patientSearch, setPatientSearch] = useState('');
 
   useEffect(() => {
-    axios.get('https://api.holisticare.pk/apis/ward/get').then(res => setWards(res.data.data));
-    axios.get('https://api.holisticare.pk/apis/room/get').then(res => setRooms(res.data.data));
-    axios.get('https://api.holisticare.pk/apis/user/get?role=doctor').then(res => setBeds(res.data.data));
-  }, []);
+    axios.get(`${Base_url}/apis/ward/get`).then(res => setWards(res.data.data));
+    axios.get(`${Base_url}/apis/room/get`).then(res => setRooms(res.data.data));
+    axios.get(`${Base_url}/apis/user/get`, { params: { role: 'doctor' } }).then(res => setBeds(res.data.data));
+  }, [branchEpoch]);
 
   // Fetch patients based on search term
   useEffect(() => {
     if (patientSearch.trim()) {
       const timer = setTimeout(() => {
-        axios.get(`https://api.holisticare.pk/apis/patient/get?search=${patientSearch}`)
+        axios.get(`${Base_url}/apis/patient/get`, { params: { search: patientSearch } })
           .then(res => {
             const formattedPatients = res.data.data.map(patient => ({
               ...patient,
@@ -137,7 +140,7 @@ const AddmittedPatients = () => {
     if (filters.roomId) params.append('roomId', filters.roomId);
     params.append('status',true)
     try {
-      const res = await axios.get(`https://api.holisticare.pk/apis/admitPatient/get?${params.toString()}`);
+      const res = await axios.get(`${Base_url}/apis/admitPatient/get?${params.toString()}`);
       setPatientData(res.data.data.map((item: { _id: any; }) => ({ ...item, key: item._id })));
       setTotalPages(res.data.totalPages);
     } catch (error) {
@@ -148,7 +151,7 @@ const AddmittedPatients = () => {
 
   useEffect(() => {
     fetchPatientData(currentPage);
-  }, [currentPage, filters]);
+  }, [currentPage, filters, branchEpoch]);
 
   const handleTableChange = (pagination: { current: React.SetStateAction<number>; }) => {
     setCurrentPage(pagination.current);
@@ -164,7 +167,7 @@ const AddmittedPatients = () => {
       centered: true,
       onOk: async () => {
         try {
-          await axios.delete(`https://api.holisticare.pk/apis/admitPatient/delete/${key}`);
+          await axios.delete(`${Base_url}/apis/admitPatient/delete/${key}`);
           message.success('Patient deleted successfully');
           fetchPatientData(currentPage);
         } catch (err) {

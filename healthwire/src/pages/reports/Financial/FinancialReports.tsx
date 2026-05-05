@@ -34,6 +34,7 @@ import { Link } from 'react-router-dom';
 import { getInvoiceHeaderForPdf } from '../../../utils/branchPdfHeader';
 import { enrichInvoiceForPdf } from '../../../utils/enrichInvoiceForPdf';
 import { Document, Image, Page, pdf, StyleSheet, Text, View } from '@react-pdf/renderer';
+import { useBranchScopeEpoch } from '../../../context/BranchScopeEpochContext';
 
 // TypeScript interfaces
 interface TransactionItem {
@@ -195,6 +196,7 @@ const { RangePicker } = DatePicker;
 const { Option } = Select;
 
 const FinancialReports = () => {
+  const branchEpoch = useBranchScopeEpoch();
   const [transactions, setTransactions] = useState<TransformedTransaction[]>([]);
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -1125,7 +1127,7 @@ const [filters, setFilters] = useState<Filters>({
     fetchDepartments();
     fetchDoctors();
     fetchProcedures();
-  }, []);
+  }, [branchEpoch]);
 
   // Fetch transactions + summary when filters change
   useEffect(() => {
@@ -1133,7 +1135,7 @@ const [filters, setFilters] = useState<Filters>({
       fetchTransactions(1, pagination.pageSize, 0);
       fetchSummaryData();
     }
-  }, [filters, departments, doctors, procedures]);
+  }, [filters, departments, doctors, procedures, branchEpoch]);
 
   // Reset to first page when filters change
   useEffect(() => {

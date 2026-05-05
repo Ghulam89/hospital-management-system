@@ -8,6 +8,8 @@ import { Base_url } from '../../../utils/Base_url';
 
 import { RiDeleteBin5Line } from 'react-icons/ri';
 import { canCreateUsers, canDeleteUsers, canEditUsers, getStoredUserForPermissions } from '../../../utils/permissions';
+import { useBranchScopeEpoch } from '../../../context/BranchScopeEpochContext';
+import { buildAxiosBranchScopedParams } from '../../../utils/branchScope';
 
 const columns = (handleDelete, canEdit, canDelete) => [
   {
@@ -54,6 +56,7 @@ const userData = getStoredUserForPermissions();
 const allowCreate = canCreateUsers(userData);
 const allowEdit = canEditUsers(userData);
 const allowDelete = canDeleteUsers(userData);
+  const branchEpoch = useBranchScopeEpoch();
 
   const onSelectChange = (newSelectedRowKeys) => {
     setSelectedRowKeys(newSelectedRowKeys);
@@ -89,7 +92,9 @@ const allowDelete = canDeleteUsers(userData);
 
   const fetchUsersData = (page) => {
     axios
-      .get(`${Base_url}/apis/user/get`, { params: { page, role: 'doctor', branchId: 'all' } })
+      .get(`${Base_url}/apis/user/get`, {
+        params: { page, role: 'doctor', ...buildAxiosBranchScopedParams() },
+      })
       .then((res) => {
         const rows = Array.isArray(res.data?.data) ? res.data.data : [];
         setUsers(rows);
@@ -105,7 +110,7 @@ const allowDelete = canDeleteUsers(userData);
 
   useEffect(() => {
     fetchUsersData(currentPage);
-  }, [currentPage]);
+  }, [currentPage, branchEpoch]);
 
   const handleTableChange = (pagination) => {
     setCurrentPage(pagination.current);

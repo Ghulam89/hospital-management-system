@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Table, message } from 'antd';
+import { Table } from 'antd';
 import { FaRegEdit } from 'react-icons/fa';
 import { Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
@@ -9,6 +9,8 @@ import { Base_url } from '../../../utils/Base_url';
 import { RiDeleteBin5Line } from 'react-icons/ri';
 import Swal from 'sweetalert2';
 import { canCreateUsers, canDeleteUsers, canEditUsers, getStoredUserForPermissions } from '../../../utils/permissions';
+import { useBranchScopeEpoch } from '../../../context/BranchScopeEpochContext';
+import { buildAxiosBranchScopedParams } from '../../../utils/branchScope';
 
 const columns = (handleDelete, handleEdit, canEdit, canDelete) => [
   {
@@ -42,15 +44,21 @@ const columns = (handleDelete, handleEdit, canEdit, canDelete) => [
 ].filter(Boolean);
 
 const Nurse = () => {
-  const [selectedRowKeys, setSelectedRowKeys] = useState([]);
+  const branchEpoch = useBranchScopeEpoch();
+  const [selectedRowKeys, setSelectedRowKeys] = useState([]);  
   const [users, setUsers] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
   const navigate = useNavigate();
   const userData = getStoredUserForPermissions();
   const allowCreate = canCreateUsers(userData);
   const allowEdit = canEditUsers(userData);
   const allowDelete = canDeleteUsers(userData);
+
+  const isNurseRole = (r) => {
+    const x = String(r || '').trim().toLowerCase();
+    return x === 'nurse' || x.startsWith('nurse_');
+  };
 
   const onSelectChange = (newSelectedRowKeys) => {
     setSelectedRowKeys(newSelectedRowKeys);
@@ -86,24 +94,27 @@ const Nurse = () => {
 
   const fetchUsersData = (page) => {
     axios
-      .get(`${Base_url}/apis/user/get`, { params: { page, role: 'nurse', branchId: 'all' } })
+      .get(`${Base_url}/apis/user/get`, {
+        params: { page, limit: 10, role: 'nurse', ...buildAxiosBranchScopedParams() },
+      })
       .then((res) => {
         const rows = Array.isArray(res.data?.data) ? res.data.data : [];
-        setUsers(rows.filter((user) => user.role === 'nurse'));
-        setTotalPages(res.data?.totalPages ?? 1);
+        setUsers(rows);
+        setTotalCount(Number(res.data?.count) || 0);
       })
       .catch(() => {
         setUsers([]);
-        setTotalPages(1);
+        setTotalCount(0);
       });
   };
 
   useEffect(() => {
     fetchUsersData(currentPage);
-  }, [currentPage]);
+  }, [currentPage, branchEpoch]);
 
   const handleTableChange = (pagination) => {
-    setCurrentPage(pagination.current);
+    const next = pagination?.current;
+    setCurrentPage(typeof next === 'number' && !Number.isNaN(next) ? next : 1);
   };
 
   const handleEdit = (record) => {
@@ -178,7 +189,8 @@ const Nurse = () => {
         rowSelection={rowSelection}
         columns={columns(handleDelete, handleEdit, allowEdit, allowDelete)}
         dataSource={users}
-        pagination={{ current: currentPage, pageSize: 10, total: totalPages * 10 }}
+        rowKey="_id"
+        pagination={{ current: currentPage, pageSize: 10, total: totalCount }}
         onChange={handleTableChange}
       />
     </div>

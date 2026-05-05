@@ -1,17 +1,22 @@
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
-import SelectGroupOne from '../../../components/Forms/SelectGroup/SelectGroupOne';
 
-import { FaTrashAlt } from 'react-icons/fa';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 import { Base_url } from '../../../utils/Base_url';
+
+const authHeaders = () => {
+  const token = localStorage.getItem('userToken') || '';
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
 
 const Edit_admin = () => {
   const { id } = useParams();
   const [gender, setGender] = useState('');
   const [user, setUser] = useState(null);
+  const [branches, setBranches] = useState<{ _id: string; name?: string }[]>([]);
+  const [branchId, setBranchId] = useState('');
   const [state, setState] = useState({
     name: '',
     phone: '',
@@ -20,15 +25,38 @@ const Edit_admin = () => {
     shift: '',
   });
 
+  const currentUser = useMemo(() => {
+    try {
+      const raw = localStorage.getItem('userData');
+      return raw ? JSON.parse(raw) : null;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  const currentRole = String(currentUser?.role || '')
+    .toLowerCase()
+    .replace(/\s+/g, '');
+
   useEffect(() => {
     axios
-      .get(`${Base_url}/apis/user/get/${id}`)
+      .get(`${Base_url}/apis/branch/get`, { headers: authHeaders(), params: { limit: 500, page: 1 } })
+      .then((res) => setBranches(Array.isArray(res.data?.data) ? res.data.data : []))
+      .catch(() => setBranches([]));
+  }, []);
+
+  useEffect(() => {
+    if (!id) return;
+    axios
+      .get(`${Base_url}/apis/user/get/${id}`, { headers: authHeaders() })
       .then((res) => {
         const u = res.data.data;
         setUser(u);
         if (u && ['Male', 'Female', 'Other'].includes(u.gender)) {
           setGender(u.gender);
         }
+        const bid = u?.branchId?._id || u?.branchId;
+        setBranchId(bid ? String(bid) : '');
         setState({
           name: u?.name || '',
           phone: u?.phone || '',
@@ -53,6 +81,14 @@ const Edit_admin = () => {
   const SubmitFun = (e) => {
     e.preventDefault();
 
+    const roleNorm = String(user?.role || 'administrator').trim().toLowerCase();
+    if (currentRole === 'superadmin' && (roleNorm === 'administrator' || roleNorm === 'admin')) {
+      if (!branchId) {
+        toast.error('Please select branch');
+        return;
+      }
+    }
+
     const params = {
       name: String(state.name || '').trim() || String(user?.name || '').trim(),
       gender: String(gender || '').trim() || String(user?.gender || '').trim(),
@@ -62,10 +98,14 @@ const Edit_admin = () => {
       role: String(user?.role || 'administrator').trim(),
       tabs: Array.isArray(user?.tabs) ? user.tabs : [],
     };
+    if (currentRole === 'superadmin' && branchId) {
+      params.branchId = branchId;
+    }
     const password = String(state.password || '').trim();
     if (password) params.password = password;
 
-        axios.put(`${Base_url}/apis/user/update/${id}`,params).then((res)=>{
+        axios.put(`${Base_url}/apis/user/update/${id}`, params, { headers: authHeaders() }).then((res)=>{
+
 
           console.log(res.data);
 
@@ -92,7 +132,7 @@ const Edit_admin = () => {
   }
   return (
     <>
-      <Breadcrumb pageName="Add Admin" />
+      <Breadcrumb pageName="Edit Admin" />
 
       <div className="">
         <div className="flex flex-col gap-9">
@@ -100,7 +140,7 @@ const Edit_admin = () => {
           <div className="rounded-sm border border-stroke bg-white shadow-default dark:border-strokedark dark:bg-boxdark">
             <div className="border-b border-stroke py-4 px-6.5 dark:border-strokedark">
               <h3 className="font-medium text-black dark:text-white">
-                Add Admin
+                Edit Admin
               </h3>
             </div>
             <form onSubmit={SubmitFun} action="#">
@@ -116,7 +156,7 @@ const Edit_admin = () => {
                       type="text"
                       placeholder=""
                       className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
-                      defaultValue={user?.name}
+                      value={state.name}
                     />
                   </div>
                   <div className="w-full">
@@ -175,7 +215,7 @@ const Edit_admin = () => {
                       type="text"
                       placeholder=""
                       className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
-                      defaultValue={user?.phone}
+                      value={state.phone}
                     />
                   </div>
                   <div className="w-full">
@@ -188,7 +228,7 @@ const Edit_admin = () => {
                       type="text"
                       placeholder=""
                       className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
-                      defaultValue={user?.email}
+                      value={state.email}
                     />
                   </div>
 
@@ -200,9 +240,9 @@ const Edit_admin = () => {
                       onChange={handleInputs}
                        name='password'
                       type="text"
-                      placeholder=""
+                      placeholder="Leave blank to keep current"
                       className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
-                      defaultValue={user?.password}
+                      value={state.password}
                     />
                   </div>
 
@@ -216,8 +256,36 @@ const Edit_admin = () => {
                       type="text"
                       placeholder=""
                       className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
-                      defaultValue={user?.shift}
+                      value={state.shift}
                     />
+                  </div>
+
+                  <div className="w-full">
+                    <label className="mb-2.5 block text-black dark:text-white">
+                      Branch
+                    </label>
+                    <select
+                      value={branchId}
+                      onChange={(e) => setBranchId(e.target.value)}
+                      className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                      disabled={currentRole !== 'superadmin'}
+                    >
+                      <option value="">Select Branch</option>
+                      {branchId &&
+                      !branches.some((b) => String(b._id) === String(branchId)) ? (
+                        <option value={branchId}>Assigned branch</option>
+                      ) : null}
+                      {branches.map((b) => (
+                        <option key={b._id} value={b._id}>
+                          {b.name || b._id}
+                        </option>
+                      ))}
+                    </select>
+                    {currentRole !== 'superadmin' ? (
+                      <p className="mt-1 text-xs text-bodydark2">
+                        Only Super Admin can change branch assignment.
+                      </p>
+                    ) : null}
                   </div>
                 </div>
                 <div className="mt-4.5">

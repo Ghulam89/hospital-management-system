@@ -2,10 +2,10 @@ const { Types } = require("mongoose");
 const Invoice = require("../models/invoiceModel");
 const moment = require("moment");
 const {
-  getScopedPatientIds,
   assignBranchIdForCreate,
   mergeBranchScopedQuery,
   branchDocumentVisible,
+  applyStrictBranchListFilter,
 } = require("../utils/branchScope");
 
 // 1. Create invoice
@@ -61,12 +61,31 @@ const getinvoices = async (req, res) => {
     const limit = Number.isFinite(requestedLimit) && requestedLimit > 0 ? requestedLimit : 20;
     const query = {};
 
-    const scopedPatientIds = await getScopedPatientIds(req);
-    if (scopedPatientIds !== null) {
-      query.patientId = scopedPatientIds.length === 0 ? { $in: [] } : { $in: scopedPatientIds };
-    } else {
-      const branchInv = await mergeBranchScopedQuery(req);
-      if (branchInv) Object.assign(query, branchInv);
+    const branchStrict = await applyStrictBranchListFilter(req, query);
+    if (branchStrict === "empty") {
+      const emptySummary = {
+        totalSubTotal: 0,
+        totalDiscount: 0,
+        totalTax: 0,
+        grandTotal: 0,
+        totalDue: 0,
+        totalAdvance: 0,
+        totalPaid: 0,
+        totalRemaining: 0,
+        totalDoctorShare: 0,
+        totalHospitalShare: 0,
+      };
+      return res.status(200).json({
+        status: "ok",
+        data: [],
+        search,
+        page,
+        summary: emptySummary,
+        count: 0,
+        totalPages: 0,
+        currentPage: parseInt(page, 10) || 1,
+        limit,
+      });
     }
 
     // Basic filters

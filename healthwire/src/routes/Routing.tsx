@@ -29,6 +29,7 @@ import DischargedPatients from '../pages/IndoorManagement/dischargedPatients';
 import Department from '../pages/Preferences/Departments';
 import Branches from '../pages/Branches';
 import RolesAndPermissions from '../pages/Admin/RolesAndPermissions';
+import RolesManage from '../pages/Admin/RolesManage';
 import AddRoomDetails from '../pages/IndoorManagement/roomDetails/AddRoomDetails';
 import Edit_accountant from '../pages/users/Accountant/Edit_accountant';
 import AddmittedPatients from '../pages/IndoorPatients/addmittedPatients';
@@ -61,6 +62,10 @@ import PatientAppointments from '../pages/AllAppointments/PatientAppointment';
 import PatientTokens from '../pages/Tokens/PatientTokens';
 import AddNurse from '../pages/users/Nurse/AddNurse';
 import EditNurse from '../pages/users/Nurse/EditNurse';
+import AddPharmacist from '../pages/users/Pharmacist/AddPharmacist';
+import EditPharmacist from '../pages/users/Pharmacist/EditPharmacist';
+import AddQualityControlManager from '../pages/users/QualityControlManager/AddQualityControlManager';
+import EditQualityControlManager from '../pages/users/QualityControlManager/EditQualityControlManager';
 import PatientReports from '../pages/reports/patientReports';
 import OpdReports from '../pages/reports/opdReports';
 import FinancialReports from '../pages/reports/Financial/FinancialReports';
@@ -894,10 +899,19 @@ function Routing() {
           }
         />
         <Route
+          path="/admin/roles/manage"
+          element={
+            <>
+              <PageTitle title="Roles (list) | Holistic Care Hospital Management System" />
+              <RolesManage />
+            </>
+          }
+        />
+        <Route
           path="/admin/roles"
           element={
             <>
-              <PageTitle title="Roles &amp; permissions | Holistic Care Hospital Management System" />
+              <PageTitle title="Menu permissions | Holistic Care Hospital Management System" />
               <RolesAndPermissions />
             </>
           }
@@ -956,6 +970,42 @@ function Routing() {
             <>
               <PageTitle title="Nurse | Hospital Management" />
               <EditNurse />
+            </>
+          }
+        />
+        <Route
+          path="/pharmacist/new_user"
+          element={
+            <>
+              <PageTitle title="Pharmacist | Hospital Management" />
+              <AddPharmacist />
+            </>
+          }
+        />
+        <Route
+          path="/pharmacist/edit_user/:id"
+          element={
+            <>
+              <PageTitle title="Pharmacist | Hospital Management" />
+              <EditPharmacist />
+            </>
+          }
+        />
+        <Route
+          path="/quality-control-manager/new_user"
+          element={
+            <>
+              <PageTitle title="Quality Control Manager | Hospital Management" />
+              <AddQualityControlManager />
+            </>
+          }
+        />
+        <Route
+          path="/quality-control-manager/edit_user/:id"
+          element={
+            <>
+              <PageTitle title="Quality Control Manager | Hospital Management" />
+              <EditQualityControlManager />
             </>
           }
         />

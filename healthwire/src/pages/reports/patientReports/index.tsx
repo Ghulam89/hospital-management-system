@@ -13,10 +13,12 @@ import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 import * as XLSX from 'xlsx';
 import { useReactToPrint } from 'react-to-print';
 import { Link } from 'react-router-dom';
+import { useBranchScopeEpoch } from '../../../context/BranchScopeEpochContext';
 
 const { Option } = Select;
 
 const PatientReports = () => {
+  const branchEpoch = useBranchScopeEpoch();
   const [patients, setPatients] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
   const [filteredPatients, setFilteredPatients] = useState<any[]>([]);
@@ -167,12 +169,7 @@ const PatientReports = () => {
     }, 500); // Add slight delay to avoid too many requests while typing
     
     return () => clearTimeout(timer);
-  }, [filters]); // Fetch whenever filters change
-
-  // Initial fetch on component mount
-  useEffect(() => {
-    fetchPatients(1, 20);
-  }, []); // Empty dependency array for initial load
+  }, [filters, branchEpoch]); // Fetch whenever filters or superadmin branch scope change
 
   const handleDelete = (id) => {
     Modal.confirm({

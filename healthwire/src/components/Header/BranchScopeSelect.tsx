@@ -57,12 +57,20 @@ const BranchScopeSelect = () => {
         className="w-full"
         loading={loading}
         value={value}
-        optionFilterProp="label"
+        virtual={false}
+        filterOption={(input, option) => {
+          const q = String(input || '').trim().toLowerCase();
+          if (!q) return true;
+          const label = String(option?.label ?? '').toLowerCase();
+          return label.includes(q);
+        }}
         notFoundContent={loading ? <Spin size="small" /> : null}
-        options={branches.map((b) => ({
-          value: b._id,
-          label: b.code ? `${b.name} (${b.code})` : b.name,
-        }))}
+        options={branches
+          .filter((b) => b._id != null && String(b._id).trim() !== '')
+          .map((b) => ({
+            value: String(b._id),
+            label: b.code ? `${b.name} (${b.code})` : b.name,
+          }))}
         onChange={(v) => {
           const next = v != null && v !== '' ? String(v) : '';
           setValue(next || undefined);

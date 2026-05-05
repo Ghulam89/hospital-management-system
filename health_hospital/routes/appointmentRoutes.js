@@ -1,10 +1,10 @@
 const express = require('express');
 const router = express.Router();
 const appointmentController = require('../controllers/appointmentController');
-const { optionalAuth } = require('../middleware/auth');
+const { optionalAuth, auth } = require('../middleware/auth');
 
 router.post('/create', optionalAuth, appointmentController.addAppointment);
-router.get('/get', optionalAuth, appointmentController.getAppointments);
+router.get('/get', auth, appointmentController.getAppointments);
 router.get('/opdReport', optionalAuth, appointmentController.getAppointmentsOpdReport);
 router.get('/opdOverallReport', optionalAuth, appointmentController.getDoctorsWithAppointmentCount);
 router.get('/countStatus', optionalAuth, appointmentController.getAppointmentStatusLength);
