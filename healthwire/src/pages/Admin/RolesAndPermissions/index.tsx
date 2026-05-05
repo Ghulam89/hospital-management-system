@@ -239,16 +239,7 @@ const RolesAndPermissions = () => {
           <div className="min-w-0 flex-1 space-y-3">
             <div className="border-l-4 border-primary pl-4">
               <p className="text-xs font-semibold uppercase tracking-wide text-primary">Menu access</p>
-              <p className="mt-2 max-w-2xl text-sm leading-relaxed text-bodydark2">
-                Pick a role your account can manage (Super Admin: all branches; branch admins: this branch only), tick
-                Access / Create / Read / Update / Delete, then{' '}
-                <span className="font-medium text-bodydark1 dark:text-bodydark">Save matrix</span>. Add or edit role
-                names on{' '}
-                <Link to="/admin/roles/manage" className="font-medium text-primary hover:underline">
-                  Roles (list)
-                </Link>{' '}
-                — only Super Admin can delete a role there.
-              </p>
+              
             </div>
             <div className="flex flex-wrap gap-2 pl-1 lg:pl-[calc(1rem+4px)]">
               <span className="inline-flex items-center gap-1.5 rounded-md border border-stroke bg-gray-2 px-3 py-1.5 text-xs font-medium text-bodydark1 dark:border-strokedark dark:bg-meta-4 dark:text-bodydark2">
@@ -294,14 +285,8 @@ const RolesAndPermissions = () => {
         <header className="border-b border-stroke bg-gray-2 px-4 py-4 dark:border-strokedark dark:bg-meta-4 sm:px-6">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h2 className="text-base font-semibold text-black dark:text-white">Sidebar permission matrix</h2>
-              <p className="mt-0.5 max-w-2xl text-xs leading-relaxed text-bodydark2">
-                Select a role above, then use the checkboxes for each menu row.{' '}
-                <span className="font-medium text-bodydark1 dark:text-bodydark">Access</span> opens the module in the
-                sidebar; <span className="font-medium text-bodydark1 dark:text-bodydark">Create / Read / Update / Delete</span>{' '}
-                control actions inside that area. Rows include main menus and sub-menus as listed. System roles are
-                read-only here.
-              </p>
+              <h2 className="text-lg font-semibold text-black dark:text-white">Sidebar permission matrix</h2>
+             
             </div>
             {matrixDirty && (
               <span className="inline-flex shrink-0 items-center rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium text-amber-800 dark:border-amber-400/35 dark:bg-amber-500/15 dark:text-amber-200">

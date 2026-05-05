@@ -354,20 +354,10 @@ const RolesManage = () => {
           <p>
             <span className="font-medium text-bodydark1 dark:text-white">Super Admin</span> sees roles for all branches.
             <span className="font-medium text-bodydark1 dark:text-white"> Branch admins</span> only see{' '}
-            <span className="font-medium">roles they add themselves</span> for their branch and read-only system templates —
-            roles created for the branch by Super Admin stay visible only to Super Admin. They can{' '}
-            <span className="font-medium">create</span> and <span className="font-medium">edit</span> their own branch roles,
-            and open{' '}
-            <Link to="/admin/roles" className="font-medium text-primary hover:underline">
-              Menu permissions
-            </Link>{' '}
-            to set sidebar access. <span className="font-medium">Deleting</span> a role is{' '}
-            <span className="font-medium">Super Admin only</span>.
+          
+  
           </p>
-          <p className="text-xs leading-relaxed">
-            New roles start with no menu rights until permissions are set under Menu permissions. Who may open Roles /
-            Menu screens is controlled by the Super Admin via each user&apos;s role matrix.
-          </p>
+          
         </div>
         <div className="flex flex-wrap gap-3">
           <Link
