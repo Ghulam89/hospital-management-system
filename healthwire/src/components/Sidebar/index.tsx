@@ -10,7 +10,6 @@ import {
   getStoredUserForPermissions,
   usesGranularMenuTabs,
 } from '../../utils/permissions';
-
 interface SidebarProps {
   sidebarOpen: boolean;
   setSidebarOpen: (arg: boolean) => void;

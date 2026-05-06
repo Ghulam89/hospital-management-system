@@ -405,7 +405,14 @@ const RolesManage = () => {
             <Link to="/admin/roles" className="font-medium text-primary hover:underline">
               Menu permissions
             </Link>{' '}
-            and tick the menus and actions this role should have.
+            {isSuperAdmin ? (
+              <span>and tick the menus and actions this role should have.</span>
+            ) : (
+              <span>
+                to assign <span className="font-medium text-bodydark1 dark:text-bodydark">Branches</span> sidebar
+                access for this branch. Other menus stay with Super Admin.
+              </span>
+            )}
           </p>
           <div className="mb-4.5 grid grid-cols-1 gap-6 sm:grid-cols-2">
             <div className="w-full">
@@ -528,11 +535,11 @@ const RolesManage = () => {
           <form onSubmit={submitEdit}>
             <p className="mb-4 rounded-sm border border-stroke bg-gray-2 px-4 py-3 text-xs leading-relaxed text-bodydark2 dark:border-strokedark dark:bg-meta-4">
               The <span className="font-mono font-medium text-bodydark1 dark:text-bodydark">key name</span> is fixed
-              because it is stored on user records. To change sidebar access for this role, use{' '}
+              because it is stored on user records. To change sidebar access, use{' '}
               <Link to="/admin/roles" className="font-medium text-primary hover:underline">
                 Menu permissions
               </Link>
-              .
+              {isSuperAdmin ? '.' : ' (Branches access only on your branch — other menus: Super Admin).'}
             </p>
             <div className="mb-4.5 grid grid-cols-1 gap-6 sm:grid-cols-2">
               <div className="w-full">

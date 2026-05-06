@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const roleController = require('../controllers/roleController');
-const { auth, requireRole } = require('../middleware/auth');
+const { auth, requireRole, requireSuperAdmin } = require('../middleware/auth');
 
 /** Branch admins manage branch-owned roles; delete is Super Admin only. List scope is enforced in controller. */
 const adminRoles = requireRole(
@@ -12,7 +12,7 @@ const adminRoles = requireRole(
   'branch_admin',
 );
 
-router.get('/catalog', auth, adminRoles, roleController.getCatalog);
+router.get('/catalog', auth, requireSuperAdmin, roleController.getCatalog);
 router.get('/get', auth, adminRoles, roleController.getRoles);
 router.get('/get/:id', auth, adminRoles, roleController.getRoleById);
 router.post('/create', auth, adminRoles, roleController.createRole);

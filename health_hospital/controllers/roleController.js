@@ -266,7 +266,19 @@ const updateRole = async (req, res) => {
 
     const name = String(req.body.name || '').trim();
     const description = String(req.body.description || '').trim();
-    const permissions = sanitizePermissions(req.body.permissions);
+    const incomingPerms = sanitizePermissions(req.body.permissions || []);
+    const baselinePerms = sanitizePermissions(Array.isArray(role.permissions) ? [...role.permissions] : []);
+
+    /** Non–super admins may only submit changes for Branches sidebar keys; all other mp.* preserved from DB. */
+    let nextPermissions;
+    if (isSuperAdmin(req.user)) {
+      nextPermissions = incomingPerms;
+    } else {
+      const PREFIX = 'mp.branches.';
+      const fromIncomingBranches = incomingPerms.filter((k) => k.startsWith(PREFIX));
+      const preserved = baselinePerms.filter((k) => !k.startsWith(PREFIX));
+      nextPermissions = sanitizePermissions([...preserved, ...fromIncomingBranches]);
+    }
 
     if (!name) {
       return res.status(400).json({ status: 'fail', message: 'Role name is required' });
@@ -277,7 +289,7 @@ const updateRole = async (req, res) => {
     }
     role.name = name;
     role.description = description;
-    role.permissions = permissions;
+    role.permissions = nextPermissions;
     if (isSuperAdmin(req.user) && req.body.branchId !== undefined) {
       role.branchId = parseOptionalBranchObjectId(req.body.branchId);
     }

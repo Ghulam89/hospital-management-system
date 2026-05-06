@@ -19,6 +19,8 @@ type Props = {
   /** Full permission strings for the selected role (includes legacy + mp.*). */
   rolePermissions: string[];
   readOnly: boolean;
+  /** When true (e.g. branch portal), role is fixed by parent — hide search/select role. */
+  hideRoleSelect?: boolean;
   onToggle: (menuId: string, action: MenuMatrixAction, checked: boolean) => void;
   /** Prefer for column/row/header select-all — one parent update avoids stale matrix when looping `onToggle`. */
   onMatrixMutate?: (mutate: (s: Set<string>) => void) => void;
@@ -40,6 +42,7 @@ export default function SidebarCrudMatrix({
   onSelectRole,
   rolePermissions,
   readOnly,
+  hideRoleSelect = false,
   onToggle,
   onMatrixMutate,
 }: Props) {
@@ -170,6 +173,7 @@ export default function SidebarCrudMatrix({
 
   return (
     <div className="space-y-4">
+      {!hideRoleSelect ? (
       <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center sm:justify-between">
         <Select
           className="min-w-[220px] sm:max-w-md flex-1"
@@ -184,18 +188,33 @@ export default function SidebarCrudMatrix({
           onChange={(v) => onSelectRole(String(v))}
         />
       </div>
+      ) : null}
 
       {!selectedRoleId ? (
         <p className="text-sm text-bodydark2">
-          Choose a role to configure which sidebar items appear for users with that role. Unticked rows stay hidden.
+          {hideRoleSelect ? (
+            <>No editable role scope was returned for your branch yet. Ask Super Admin to add or assign one.</>
+          ) : (
+            <>
+              Choose a role to configure which sidebar items appear for users with that role. Unticked rows stay
+              hidden.
+            </>
+          )}
         </p>
       ) : selectedRole?.isSystem ? (
         <p className="text-sm text-warning dark:text-meta-6">
-          System roles cannot be changed on this screen. Create a custom role on{' '}
-          <Link to="/admin/roles/manage" className="font-medium text-primary underline-offset-2 hover:underline">
-            Roles (list)
-          </Link>{' '}
-          if you need different menu access.
+          System roles cannot be changed on this screen.{' '}
+          {hideRoleSelect ? (
+            <>Ask Super Admin to adjust access if needed.</>
+          ) : (
+            <>
+              Create a custom role on{' '}
+              <Link to="/admin/roles/manage" className="font-medium text-primary underline-offset-2 hover:underline">
+                Roles (list)
+              </Link>{' '}
+              if you need different menu access.
+            </>
+          )}
         </p>
       ) : (
         <div className="overflow-x-auto rounded-sm border border-stroke bg-white dark:border-strokedark dark:bg-boxdark">

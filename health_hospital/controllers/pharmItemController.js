@@ -498,20 +498,28 @@ const updatepharmItem = async (req, res) => {
     const role = normalizeRole(req.user.role);
     const isSuperAdmin = role === "superadmin" || role === "super admin";
 
-    /** Branches may only PATCH pricing fields on their own inventory rows (e.g. Manage Stock inbound). Full edits are super admin only. */
+    /** Branches may only PATCH pricing + active flag on their own inventory rows. Master catalog rows (`branchId` null) stay super-admin only. Full master edits remain super admin only. */
     if (!isSuperAdmin) {
-      const ALLOW = new Set(["retailPrice", "pieceCost"]);
+      const hasBranchRow =
+        existing.branchId != null &&
+        existing.branchId !== "";
+      const ALLOW_BASE = hasBranchRow ? new Set(["retailPrice", "pieceCost", "active"]) : new Set(["retailPrice", "pieceCost"]);
       const cleaned = {};
       for (const k of Object.keys(req.body || {})) {
-        if (!ALLOW.has(k)) continue;
+        if (!ALLOW_BASE.has(k)) continue;
         const v = req.body[k];
-        if (v !== undefined && v !== null && v !== "") cleaned[k] = v;
+        if (v === undefined) continue;
+        if (k === "active" && typeof v === "boolean") {
+          cleaned[k] = v;
+          continue;
+        }
+        if (v !== null && v !== "") cleaned[k] = v;
       }
       if (Object.keys(cleaned).length === 0) {
         return res.status(403).json({
           status: "error",
           message:
-            "Only super admin can edit item master data. Branches may only update retail price / piece cost on their inventory.",
+            "Only super admin can edit catalog master rows. Branches may update retail price / piece cost, and activate or deactivate items on their own branch stock.",
         });
       }
       req.body = cleaned;

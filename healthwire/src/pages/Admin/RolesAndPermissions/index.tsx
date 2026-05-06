@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, Navigate } from 'react-router-dom';
 import { Button, ConfigProvider } from 'antd';
 import { flushSync } from 'react-dom';
 import axios from 'axios';
@@ -9,6 +9,7 @@ import { Base_url } from '../../../utils/Base_url';
 import SidebarCrudMatrix from './SidebarCrudMatrix';
 import { MENU_ROWS, menuPermissionKey, type MenuMatrixAction, type MenuMatrixRow } from '../../../utils/menuPermissionCatalog';
 import { getUserDataFromStorage, isSuperAdminRole } from '../../../utils/branchScope';
+import { canSeeSidebarMenu, getStoredUserForPermissions } from '../../../utils/permissions';
 
 type AppRole = {
   _id: string;
@@ -63,6 +64,9 @@ function permSetsEqual(a: string[], b: string[]): boolean {
   return a.every((x) => sb.has(x));
 }
 
+/** Branch / non–HQ users: matrix shows only these menu rows (Assign Branches sidebar access). */
+const BRANCH_PORTAL_MATRIX_ROW_IDS = new Set<string>(['branches']);
+
 const APP_THEME_PRIMARY = '#3CBEB7';
 
 const RolesAndPermissions = () => {
@@ -71,9 +75,25 @@ const RolesAndPermissions = () => {
   const [sidebarRoleId, setSidebarRoleId] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [savingMatrix, setSavingMatrix] = useState(false);
+  const [matrix, setMatrix] = useState<Record<string, string[]>>({});
+  const [dirtyRoleIds, setDirtyRoleIds] = useState<Set<string>>(new Set());
 
   const currentUser = useMemo(() => getUserDataFromStorage(), []);
   const isSuperAdmin = useMemo(() => isSuperAdminRole(currentUser?.role), [currentUser?.role]);
+  const permUser = useMemo(() => getStoredUserForPermissions(), []);
+  const canOpenMenuPermissions = useMemo(
+    () => isSuperAdmin || canSeeSidebarMenu(permUser, 'roles'),
+    [isSuperAdmin, permUser],
+  );
+
+  const hqMenuRows = useMemo((): MenuMatrixRow[] => {
+    return menuMatrix.length ? menuMatrix : MENU_ROWS;
+  }, [menuMatrix]);
+
+  const effectiveMenuRows = useMemo((): MenuMatrixRow[] => {
+    if (isSuperAdmin) return hqMenuRows;
+    return MENU_ROWS.filter((r) => BRANCH_PORTAL_MATRIX_ROW_IDS.has(r.id));
+  }, [isSuperAdmin, hqMenuRows]);
 
   const rolesVisibleForMatrix = useMemo(() => {
     if (isSuperAdmin) return roles;
@@ -82,9 +102,6 @@ const RolesAndPermissions = () => {
       return !isElevatedRoleHiddenFromBranchClient(r);
     });
   }, [roles, isSuperAdmin]);
-
-  const [matrix, setMatrix] = useState<Record<string, string[]>>({});
-  const [dirtyRoleIds, setDirtyRoleIds] = useState<Set<string>>(new Set());
 
   const fetchMenuMatrix = useCallback(() => {
     axios
@@ -116,9 +133,13 @@ const RolesAndPermissions = () => {
   }, []);
 
   useEffect(() => {
-    fetchMenuMatrix();
     fetchRoles();
-  }, [fetchMenuMatrix, fetchRoles]);
+  }, [fetchRoles]);
+
+  useEffect(() => {
+    if (!isSuperAdmin) return;
+    fetchMenuMatrix();
+  }, [fetchMenuMatrix, isSuperAdmin]);
 
   useEffect(() => {
     const next: Record<string, string[]> = {};
@@ -219,9 +240,13 @@ const RolesAndPermissions = () => {
     setDirtyRoleIds(new Set());
   };
 
-  const menuRowCount = (menuMatrix.length ? menuMatrix : MENU_ROWS).length;
+  const menuRowCount = effectiveMenuRows.length;
   const editableRoles = rolesVisibleForMatrix.filter((r) => !r.isSystem).length;
   const rolesCountBadge = isSuperAdmin ? roles.length : rolesVisibleForMatrix.length;
+
+  if (!canOpenMenuPermissions) {
+    return <Navigate to="/admin/roles/manage" replace />;
+  }
 
   return (
     <ConfigProvider
@@ -239,12 +264,19 @@ const RolesAndPermissions = () => {
           <div className="min-w-0 flex-1 space-y-3">
             <div className="border-l-4 border-primary pl-4">
               <p className="text-xs font-semibold uppercase tracking-wide text-primary">Menu access</p>
-              
+              {!isSuperAdmin ? (
+                <p className="mt-1 text-xs text-bodydark2">
+                  Branches only: assign who can see the Branches screen in the sidebar. Other menus are managed by Super
+                  Admin.
+                </p>
+              ) : null}
             </div>
             <div className="flex flex-wrap gap-2 pl-1 lg:pl-[calc(1rem+4px)]">
               <span className="inline-flex items-center gap-1.5 rounded-md border border-stroke bg-gray-2 px-3 py-1.5 text-xs font-medium text-bodydark1 dark:border-strokedark dark:bg-meta-4 dark:text-bodydark2">
                 <span className="text-black dark:text-white">{rolesCountBadge}</span>
-                <span className="text-bodydark2">roles</span>
+                <span className="text-bodydark2">
+                  {isSuperAdmin ? 'roles' : 'branch roles'}
+                </span>
               </span>
               <span className="inline-flex items-center gap-1.5 rounded-md border border-stroke bg-gray-2 px-3 py-1.5 text-xs font-medium text-bodydark1 dark:border-strokedark dark:bg-meta-4 dark:text-bodydark2">
                 <span className="text-black dark:text-white">{menuRowCount}</span>
@@ -285,8 +317,12 @@ const RolesAndPermissions = () => {
         <header className="border-b border-stroke bg-gray-2 px-4 py-4 dark:border-strokedark dark:bg-meta-4 sm:px-6">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <h2 className="text-lg font-semibold text-black dark:text-white">Sidebar permission matrix</h2>
-             
+              <h2 className="text-lg font-semibold text-black dark:text-white">
+                Sidebar permission matrix
+                {!isSuperAdmin ? (
+                  <span className="mt-1 block text-xs font-normal text-bodydark2">Showing Branches permissions only.</span>
+                ) : null}
+              </h2>
             </div>
             {matrixDirty && (
               <span className="inline-flex shrink-0 items-center rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 text-[11px] font-medium text-amber-800 dark:border-amber-400/35 dark:bg-amber-500/15 dark:text-amber-200">
@@ -299,7 +335,7 @@ const RolesAndPermissions = () => {
           <SidebarCrudMatrix
             loading={loading}
             roles={rolesVisibleForMatrix}
-            menuRows={menuMatrix.length ? menuMatrix : MENU_ROWS}
+            menuRows={effectiveMenuRows}
             selectedRoleId={sidebarRoleId}
             onSelectRole={setSidebarRoleId}
             rolePermissions={sidebarRoleId ? matrix[sidebarRoleId] ?? [] : []}

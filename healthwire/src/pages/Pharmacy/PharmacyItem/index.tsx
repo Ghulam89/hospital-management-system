@@ -128,6 +128,11 @@ const PharmacyItems: React.FC = () => {
       message.warning('You do not have permission to activate or deactivate items.');
       return;
     }
+    const meta = item as PharmacyItem & { catalogMasterOnly?: boolean };
+    if (meta.catalogMasterOnly && !isSuperAdmin) {
+      message.info('Pehle branch par stock add karein (Manage Stock). Phir apni branch ki row par activate/deactivate karain.');
+      return;
+    }
     try {
       const newStatus = !item.active;
       await axios.put(`${Base_url}/apis/pharmItem/update/${item._id}`, {
@@ -233,6 +238,10 @@ const PharmacyItems: React.FC = () => {
       title: 'Toggle',
       dataIndex: 'toggle',
       render: (_: any, record: PharmacyItem) => {
+        const meta = record as PharmacyItem & { catalogMasterOnly?: boolean };
+        if (meta.catalogMasterOnly && !isSuperAdmin) {
+          return <span className="text-xs text-bodydark2">—</span>;
+        }
         return (
           <button
             type="button"
@@ -254,9 +263,12 @@ const PharmacyItems: React.FC = () => {
       dataIndex: 'action',
       fixed: 'right' as 'right',
       width: 100,
-      render: (_: any, record: PharmacyItem) => (
+      render: (_: any, record: PharmacyItem) => {
+        const meta = record as PharmacyItem & { catalogMasterOnly?: boolean };
+        const blockCatalogOnly = meta.catalogMasterOnly && !isSuperAdmin;
+        return (
         <div className="flex items-center gap-4">
-          {showPharmItemEdit ? (
+          {showPharmItemEdit && !blockCatalogOnly ? (
             <FaRegEdit
               color="blue"
               size={18}
@@ -265,7 +277,7 @@ const PharmacyItems: React.FC = () => {
               title="Edit Item"
             />
           ) : null}
-          {showPharmItemDelete ? (
+          {showPharmItemDelete && !blockCatalogOnly ? (
             <RiDeleteBin5Line
               color="red"
               size={18}
@@ -275,7 +287,8 @@ const PharmacyItems: React.FC = () => {
             />
           ) : null}
         </div>
-      ),
+      );
+      },
     },
   ];
 
