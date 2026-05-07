@@ -22,6 +22,8 @@ type ProcedureItem = {
   procedureId: string;
   procedure: string;
   description: string;
+  /** Service / procedure performed date — lines without a date count as advance-only */
+  procedureDate: string;
   rate: number;
   quantity: number;
   amount: number;
@@ -91,6 +93,7 @@ export default function InvoiceCreation() {
       procedureId: '',
       procedure: '',
       description: '',
+      procedureDate: '',
       rate: 0,
       quantity: 1,
       amount: 0,
@@ -144,10 +147,34 @@ export default function InvoiceCreation() {
     e.currentTarget.blur();
   };
 
+  const isProcDated = (item: ProcedureItem) =>
+    !!(item.procedureDate && String(item.procedureDate).trim());
+
+  const lineNetAfterDiscount = (item: ProcedureItem) => {
+    const disc =
+      item.discountType === 0 ? item.discount : item.amount * (item.discount / 100);
+    return Math.max(0, item.amount - disc);
+  };
+
+  const undatedProcedureAdvance = () =>
+    procedures.filter((p) => !isProcDated(p)).reduce((sum, p) => sum + lineNetAfterDiscount(p), 0);
+
+  const expenseAddOnTotal = (procedureRowId: number | null) => {
+    const bundle = localExpenses.find((e) => e.procedureRowId === procedureRowId);
+    if (!bundle?.expenses) return 0;
+    return bundle.expenses
+      .filter((row: { deductBeforeDoctorShare?: boolean }) => !row.deductBeforeDoctorShare)
+      .reduce((s: number, row: { amount?: number }) => s + (Number(row.amount) || 0), 0);
+  };
+
   const calculateDoctorShareBase = () => {
     const procedureTotal = calculateSubTotal() - calculateTotalDiscount();
     const preDoctorShareDeductExpenses = localExpenses
-      .filter(expense => expense.procedureRowId != null)
+      .filter((expense) => {
+        if (expense.procedureRowId == null) return false;
+        const proc = procedures.find((p) => p.id === expense.procedureRowId);
+        return proc ? isProcDated(proc) : false;
+      })
       .reduce((sum, expense) => {
       const deductSum = expense.expenses
         ?.filter((exp: any) => exp.deductBeforeDoctorShare)
@@ -160,7 +187,11 @@ export default function InvoiceCreation() {
   const calculateDoctorSharesTotal = () => {
     const base = calculateDoctorShareBase();
     return localExpenses
-      .filter(expense => expense.procedureRowId != null)
+      .filter((expense) => {
+        if (expense.procedureRowId == null) return false;
+        const proc = procedures.find((p) => p.id === expense.procedureRowId);
+        return proc ? isProcDated(proc) : false;
+      })
       .reduce((sum, expense) => {
       const sharesTotal =
         expense.doctorShares
@@ -303,6 +334,7 @@ export default function InvoiceCreation() {
         procedureId: '',
         procedure: '',
         description: '',
+        procedureDate: '',
         rate: 0,
         quantity: 1,
         amount: 0,
@@ -321,21 +353,6 @@ export default function InvoiceCreation() {
   const removeProcedure = (id: number) => {
     setProcedures(procedures.filter((item) => item.id !== id));
   };
-  const handleLocalExpenseAdd = (procedureRowId: number | null, bundle: any) => {
-    setLocalExpenses(prev => {
-      const idx = prev.findIndex(e => e.procedureRowId === procedureRowId);
-      const proc = procedureRowId != null ? procedures.find(p => p.id === procedureRowId) : null;
-      const payload = { procedureRowId, procedureId: proc?.procedureId || '', ...bundle };
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = payload;
-        return next;
-      }
-      return [...prev, payload];
-    });
-    setIsProcedureExpenseModalOpen(false);
-    setEditingExpense(null);
-  };
   useEffect(() => {
     const fetchCategories = async () => {
       try {
@@ -350,7 +367,7 @@ export default function InvoiceCreation() {
     fetchCategories();
   }, []);
 
- const calculateShares = (item: ProcedureItem) => {
+  const calculateShares = (item: ProcedureItem) => {
   const totalAmount = item.rate * item.quantity;
   let discountAmount = item.discount;
 
@@ -361,7 +378,6 @@ export default function InvoiceCreation() {
   const remainingAmount = totalAmount - discountAmount;
 
   const selectedDoctor = usersList.find(user => user._id === item.performedBy);
-    console.log(selectedDoctor);
     
   let doctorShare = 0;
   let hospitalShare = remainingAmount; 
@@ -406,6 +422,39 @@ export default function InvoiceCreation() {
     hospitalAmount: parseFloat(hospitalShare.toFixed(2)),
   };
 };
+
+  const handleLocalExpenseAdd = (procedureRowId: number | null, bundle: any) => {
+    setLocalExpenses((prev) => {
+      const idx = prev.findIndex((e) => e.procedureRowId === procedureRowId);
+      const proc = procedureRowId != null ? procedures.find((p) => p.id === procedureRowId) : null;
+      const payload = { procedureRowId, procedureId: proc?.procedureId || '', ...bundle };
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = payload;
+        return next;
+      }
+      return [...prev, payload];
+    });
+    if (procedureRowId != null) {
+      const firstDoc = bundle?.doctorShares?.find(
+        (s: any) =>
+          s.doctorId && /^[0-9a-fA-F]{24}$/.test(String(s.doctorId).trim()),
+      );
+      const docId = firstDoc?.doctorId ? String(firstDoc.doctorId).trim() : '';
+      if (docId) {
+        setProcedures((prev) =>
+          prev.map((p) => {
+            if (p.id !== procedureRowId) return p;
+            const next = { ...p, performedBy: docId };
+            const sh = calculateShares(next);
+            return { ...next, doctorAmount: sh.doctorAmount, hospitalAmount: sh.hospitalAmount };
+          }),
+        );
+      }
+    }
+    setIsProcedureExpenseModalOpen(false);
+    setEditingExpense(null);
+  };
 
   const updateProcedure = (
     id: number,
@@ -529,11 +578,11 @@ export default function InvoiceCreation() {
   };
 
   const calculateSubTotal = () => {
-    return procedures.reduce((sum, item) => sum + item.amount, 0);
+    return procedures.filter(isProcDated).reduce((sum, item) => sum + item.amount, 0);
   };
 
   const calculateTotalDiscount = () => {
-    return procedures.reduce((sum, item) => {
+    return procedures.filter(isProcDated).reduce((sum, item) => {
       if (item.discountType === 0) {
         return sum + item.discount;
       } else {
@@ -543,18 +592,20 @@ export default function InvoiceCreation() {
   };
 
   const calculateGrandTotal = () => {
-    const procedureTotal = calculateSubTotal() - calculateTotalDiscount();
-    const expensesTotal =
-      localExpenses.reduce((sum, expense) => {
-        const e = expense.expenses || [];
-        return (
-          sum +
-          e
-            .filter((row: any) => !row.deductBeforeDoctorShare)
-            .reduce((s: number, row: any) => s + (Number(row.amount) || 0), 0)
-        );
-      }, 0);
-    return procedureTotal + expensesTotal;
+    let procedureNet = 0;
+    let expenseFromRows = 0;
+    for (const p of procedures) {
+      if (!isProcDated(p)) continue;
+      procedureNet += lineNetAfterDiscount(p);
+      expenseFromRows += expenseAddOnTotal(p.id);
+    }
+    const invBundle = localExpenses.find((e) => e.procedureRowId == null);
+    const invoiceExtra = Array.isArray(invBundle?.expenses)
+      ? invBundle.expenses
+          .filter((row: { deductBeforeDoctorShare?: boolean }) => !row.deductBeforeDoctorShare)
+          .reduce((s: number, row: { amount?: number }) => s + (Number(row.amount) || 0), 0)
+      : 0;
+    return procedureNet + expenseFromRows + invoiceExtra;
   };
 
   const calculateTotalPaid = () => {
@@ -599,6 +650,14 @@ export default function InvoiceCreation() {
       return;
     }
 
+    const procedureDateToIso = (ds: string) => {
+      const t = String(ds || '').trim();
+      if (!t) return undefined;
+      const [y, m, d] = t.split('-').map(Number);
+      if (!y || !m || !d) return undefined;
+      return new Date(y, m - 1, d, 12, 0, 0, 0).toISOString();
+    };
+
    // Validate procedures
     for (const item of procedures) {
       if (!item.procedureId) {
@@ -606,9 +665,14 @@ export default function InvoiceCreation() {
         setIsSubmitting(false);
         return;
       }
-      // Validate doctor selection
-      if (!item.performedBy || item.performedBy.trim() === '') {
-        toast.error(`Please select a doctor for procedure ${item.id}`);
+      const costing = localExpenses.find((b) => b.procedureRowId === item.id);
+      const hasDoctor = costing?.doctorShares?.some(
+        (s: any) => s.doctorId && /^[0-9a-fA-F]{24}$/i.test(String(s.doctorId)),
+      );
+      if (!hasDoctor) {
+        toast.error(
+          `Procedure "${item.procedure || item.id}": open costing (document icon) and add at least one doctor`,
+        );
         setIsSubmitting(false);
         return;
       }
@@ -620,14 +684,23 @@ export default function InvoiceCreation() {
         return;
       }
     }
-    
-    // Validate doctorId
-    const doctorId = procedures[0]?.performedBy;
-    if (!doctorId || doctorId.trim() === '') {
-      toast.error('Doctor must be selected');
+
+    const firstProc = procedures[0];
+    const firstBundle = localExpenses.find((b) => b.procedureRowId === firstProc?.id) || {};
+    const doctorId =
+      firstBundle.doctorShares?.find(
+        (s: any) => s.doctorId && /^[0-9a-fA-F]{24}$/i.test(String(s.doctorId)),
+      )?.doctorId || procedures[0]?.performedBy;
+    if (!doctorId || String(doctorId).trim() === '') {
+      toast.error('Add at least one doctor in costing for the first procedure');
       setIsSubmitting(false);
       return;
     }
+
+    const billingTotal = calculateGrandTotal();
+    const paidSum = calculateTotalPaid();
+    const undatedAdv = undatedProcedureAdvance();
+    const rawDue = billingTotal - paidSum;
     
     // Require at least one payment installment
     // if (!paymentInstallments || paymentInstallments.length === 0) {
@@ -670,9 +743,17 @@ export default function InvoiceCreation() {
               amount,
             };
           });
+        const primaryDoc =
+          (bundle.doctorShares || []).find((s: any) =>
+            s.doctorId && /^[0-9a-fA-F]{24}$/i.test(String(s.doctorId)),
+          )?.doctorId || item.performedBy;
         return ({
         procedureId: item.procedureId,
-        description: item.description,
+        description:
+          [item.procedure, item.procedureDate].filter(Boolean).join(' — ') ||
+          item.description ||
+          item.procedure,
+        procedureDate: procedureDateToIso(item.procedureDate),
         rate: item.rate,
         quantity: item.quantity,
         amount: item.amount,
@@ -684,7 +765,13 @@ export default function InvoiceCreation() {
           (item.discountType === 0
             ? item.discount
             : item.amount * (item.discount / 100)),
-        performedBy: item.performedBy,
+        performedBy: primaryDoc,
+        assistedBy: (bundle.assistedBy || [])
+          .map((x: { userId?: string }) => x?.userId)
+          .filter(Boolean),
+        receptionStaff: (bundle.receptionStaff || [])
+          .map((x: { userId?: string }) => x?.userId)
+          .filter(Boolean),
         doctorAmount: item.doctorAmount,
         hospitalAmount: item.hospitalAmount,
          expenses: shownExpenses,
@@ -698,9 +785,9 @@ export default function InvoiceCreation() {
       discountBill: calculateTotalDiscount(),
       taxBill: 0,
        invoiceDate: invoiceDate,
-      totalBill: calculateGrandTotal(),
-      duePay: calculateDue() > 0 ? calculateDue() : 0,
-      advancePay: calculateDue() < 0 ? Math.abs(calculateDue()) : 0,
+      totalBill: billingTotal,
+      duePay: rawDue > 0 ? rawDue : 0,
+      advancePay: undatedAdv + (rawDue < 0 ? Math.abs(rawDue) : 0),
       totalPay: calculateTotalPaid(),
       payment: paymentInstallments.map((payment) => ({
         method: payment.method,
@@ -915,7 +1002,7 @@ export default function InvoiceCreation() {
                     Procedure
                   </th>
                   <th className="px-4 py-3 text-left text-sm font-medium text-gray-500  whitespace-nowrap tracking-wider">
-                    Description
+                    Procedure date
                   </th>
                   <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 whitespace-nowrap  tracking-wider">
                     Rate
@@ -942,9 +1029,6 @@ export default function InvoiceCreation() {
                   <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 whitespace-nowrap  tracking-wider">
                     Hospital Share
                   </th> */}
-                  <th className="px-4 py-3 text-left text-sm font-medium text-gray-500   tracking-wider whitespace-nowrap">
-                    Performed By
-                  </th>
                   <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 whitespace-nowrap  tracking-wider">
                     Action
                   </th>
@@ -978,6 +1062,7 @@ export default function InvoiceCreation() {
         procedureId: option.value,
         procedure: option.procedureData?.name || '',
         description: option.procedureData?.name || '',
+        procedureDate: item.procedureDate,
         rate: option.procedureData?.amount || 0,
         amount: (option.procedureData?.amount || 0) * item.quantity,
         cost: option.procedureData?.cost || 0
@@ -1028,15 +1113,12 @@ export default function InvoiceCreation() {
                     </td>
                     <td className="px-1 py-3 whitespace-nowrap">
                       <input
-                        type="text"
-                        className="rounded border-[1.5px] border-stroke bg-transparent py-2 px-1 w-40 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
-                        value={item.description}
+                        type="date"
+                        title="Procedure date bills this row; rows without date count toward advance only"
+                        className="rounded border-[1.5px] border-stroke bg-transparent py-2 px-1 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                        value={item.procedureDate}
                         onChange={(e) =>
-                          updateProcedure(
-                            item.id,
-                            'description',
-                            e.target.value,
-                          )
+                          updateProcedure(item.id, 'procedureDate', e.target.value)
                         }
                       />
                     </td>
@@ -1150,51 +1232,6 @@ export default function InvoiceCreation() {
                       />
                     </td> */}
                     <td className="px-1 py-3 whitespace-nowrap">
- <div className=' w-49'>
-   <AsyncPaginate
-    key={`doctor-select-${item.id}-${item.performedBy}`}
-    name={`performedBy-${item.id}`}
-    value={
-      item.performedBy
-        ? {
-            value: item.performedBy,
-            label: usersList.find(u => u._id === item.performedBy)?.name || 'Select Doctor',
-          }
-        : null
-    }
-    loadOptions={loadDoctorOptions}
-    onChange={(option: any) => {
-      updateProcedure(item.id, 'performedBy', option?.value || '');
-    }}
-    getOptionLabel={(option: any) => option.label}
-    getOptionValue={(option: any) => option.value}
-    placeholder="Select a doctor..."
-    additional={{ page: 1 }}
-    classNamePrefix="react-select"
-    className="w-full"
-    menuPortalTarget={document.body}
-    menuPosition="fixed"
-    styles={{
-      menuPortal: base => ({ ...base, zIndex: 9999 }),
-      control: provided => ({ ...provided, minHeight: '42px' })
-    }}
-    cacheUniqs={[usersList]}
-    debounceTimeout={500}
-    keepSelectedInList={true}
-    closeMenuOnSelect={true}
-    defaultOptions={usersList.slice(0, 20).map(u => ({
-      value: u._id,
-      label: u.name,
-    }))}
-    isOptionSelected={(option) => option.value === item.performedBy}
-    onMenuOpen={() => {
-      // Force refresh of options when menu opens
-      loadDoctorOptions('', [], { page: 1 });
-    }}
-  />
- </div>
-</td>
-                    <td className="px-1 py-3 whitespace-nowrap">
                       <div className=' flex gap-3 items-center'>
                         <button
                         onClick={() => removeProcedure(item.id)}
@@ -1230,6 +1267,10 @@ export default function InvoiceCreation() {
                 ))}
               </tbody>
             </table>
+            <p className="text-sm text-gray-600 mt-2">
+              Rows with a procedure date count toward this invoice&apos;s bill. Rows without a date are treated as
+              advance-only until you add a date.
+            </p>
           </div>
           <div className="py-3 flex justify-end gap-3">
             <button

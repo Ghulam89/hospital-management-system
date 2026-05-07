@@ -1871,7 +1871,13 @@ const generatePdf = async (invoice) => {
         onClick={() => generatePdf(record)} 
       />
     
-      <Link to={`/invoice/edit/${record._id}/${record.patientId?._id}`}>              
+      <Link
+        to={`/invoice/edit/${record._id}/${
+          record.patientId && typeof record.patientId === 'object' && record.patientId !== null
+            ? (record.patientId as { _id?: string })._id ?? ''
+            : String(record.patientId ?? '')
+        }`}
+      >
         <RiEdit2Fill
           className='text-primary' 
           size={20} 

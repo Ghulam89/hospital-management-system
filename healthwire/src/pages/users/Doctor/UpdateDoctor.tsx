@@ -109,7 +109,7 @@ const UpdateDoctor = () => {
         name: doctorData.name || '',
         phone: doctorData.phone || '',
         email: doctorData.email || '',
-        password: '', // Don't pre-fill password for security
+        password: doctorData.password != null ? String(doctorData.password) : '',
         shift: doctorData.shift || '',
         OPD: doctorData.OPD || false,
         IPD: doctorData.IPD || false,

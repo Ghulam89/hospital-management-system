@@ -84,8 +84,8 @@ function filterRolesHiddenFromBranchAdmin(req, rows) {
   return rows.filter((r) => !isElevatedRoleHiddenFromBranchViewer(r));
 }
 
-/** Branch users: only branch roles explicitly marked `createdBySuperAdmin: false` (created by branch), plus global system rows.
- *  Super Admin branch templates use `true`; legacy docs without the field are hidden (not treated as branch-owned).
+/** Branch users: branch-owned roles only (`createdBySuperAdmin !== true`) plus global system rows.
+ *  HQ-authored branch templates (`createdBySuperAdmin: true`) are Super Admin-only in list/API.
  */
 async function rolesFilterForUser(req) {
   if (isSuperAdmin(req.user)) return {};
@@ -93,7 +93,7 @@ async function rolesFilterForUser(req) {
   if (!bid) return { branchId: null };
   return {
     $or: [
-      { branchId: bid, createdBySuperAdmin: false },
+      { branchId: bid, createdBySuperAdmin: { $ne: true } },
       { isSystem: true, branchId: null },
     ],
   };
@@ -112,10 +112,10 @@ async function assertBranchRoleRead(req, roleDoc, res) {
     res.status(403).json({ status: 'fail', message: 'Forbidden' });
     return false;
   }
-  if (roleDoc.createdBySuperAdmin !== false) {
+  if (roleDoc.createdBySuperAdmin === true) {
     res.status(403).json({
       status: 'fail',
-      message: 'This role was created by Super Admin for your branch and is managed at HQ only',
+      message: 'This role is managed by Super Admin and is not available to branch users',
     });
     return false;
   }
@@ -141,7 +141,7 @@ async function assertBranchRoleMutate(req, roleDoc, res) {
     });
     return false;
   }
-  if (roleDoc.createdBySuperAdmin !== false) {
+  if (roleDoc.createdBySuperAdmin === true) {
     res.status(403).json({
       status: 'fail',
       message: 'Only Super Admin can change roles created for your branch at HQ',
@@ -267,17 +267,13 @@ const updateRole = async (req, res) => {
     const name = String(req.body.name || '').trim();
     const description = String(req.body.description || '').trim();
     const incomingPerms = sanitizePermissions(req.body.permissions || []);
-    const baselinePerms = sanitizePermissions(Array.isArray(role.permissions) ? [...role.permissions] : []);
 
-    /** Non–super admins may only submit changes for Branches sidebar keys; all other mp.* preserved from DB. */
-    let nextPermissions;
-    if (isSuperAdmin(req.user)) {
-      nextPermissions = incomingPerms;
-    } else {
-      const PREFIX = 'mp.branches.';
-      const fromIncomingBranches = incomingPerms.filter((k) => k.startsWith(PREFIX));
-      const preserved = baselinePerms.filter((k) => !k.startsWith(PREFIX));
-      nextPermissions = sanitizePermissions([...preserved, ...fromIncomingBranches]);
+    /** Branch saves cannot grant `mp.roles.*` (screens are Super Admin-only). */
+    let nextPermissions = incomingPerms;
+    if (!isSuperAdmin(req.user)) {
+      nextPermissions = sanitizePermissions(
+        incomingPerms.filter((k) => !String(k).startsWith('mp.roles.')),
+      );
     }
 
     if (!name) {

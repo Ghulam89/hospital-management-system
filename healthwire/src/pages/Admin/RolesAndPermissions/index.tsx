@@ -64,9 +64,6 @@ function permSetsEqual(a: string[], b: string[]): boolean {
   return a.every((x) => sb.has(x));
 }
 
-/** Branch / non–HQ users: matrix shows only these menu rows (Assign Branches sidebar access). */
-const BRANCH_PORTAL_MATRIX_ROW_IDS = new Set<string>(['branches']);
-
 const APP_THEME_PRIMARY = '#3CBEB7';
 
 const RolesAndPermissions = () => {
@@ -90,18 +87,32 @@ const RolesAndPermissions = () => {
     return menuMatrix.length ? menuMatrix : MENU_ROWS;
   }, [menuMatrix]);
 
+  /** Branch matrix: hide Administration row for Menu permissions / Roles list (HQ + Super Admin only). */
   const effectiveMenuRows = useMemo((): MenuMatrixRow[] => {
     if (isSuperAdmin) return hqMenuRows;
-    return MENU_ROWS.filter((r) => BRANCH_PORTAL_MATRIX_ROW_IDS.has(r.id));
+    return hqMenuRows.filter((r) => r.id !== 'roles');
   }, [isSuperAdmin, hqMenuRows]);
 
   const rolesVisibleForMatrix = useMemo(() => {
     if (isSuperAdmin) return roles;
     return roles.filter((r) => {
       if (r.isSystem) return false;
+      if (r.createdBySuperAdmin === true) return false;
       return !isElevatedRoleHiddenFromBranchClient(r);
     });
   }, [roles, isSuperAdmin]);
+
+  const selectedSidebarRole = useMemo(() => {
+    if (!sidebarRoleId) return undefined;
+    return roles.find((x) => x._id === sidebarRoleId);
+  }, [sidebarRoleId, roles]);
+
+  /** Branch picker only lists branch-owned roles; Super Admin picks system/non-system excluding read-only elevated. */
+  const sidebarMatrixReadOnly = useMemo(() => {
+    if (isSuperAdmin) return !!selectedSidebarRole?.isSystem;
+    if (!selectedSidebarRole || selectedSidebarRole.isSystem) return true;
+    return false;
+  }, [isSuperAdmin, selectedSidebarRole]);
 
   const fetchMenuMatrix = useCallback(() => {
     axios
@@ -266,8 +277,9 @@ const RolesAndPermissions = () => {
               <p className="text-xs font-semibold uppercase tracking-wide text-primary">Menu access</p>
               {!isSuperAdmin ? (
                 <p className="mt-1 text-xs text-bodydark2">
-                  Branches only: assign who can see the Branches screen in the sidebar. Other menus are managed by Super
-                  Admin.
+                  {
+                    'Only roles your branch added appear in the picker. The Administration row "Menu permissions & roles list" is Super Admin only. Sidebar access Super Admin assigns to HQ-only branch roles is changed from the Super Admin account.'
+                  }
                 </p>
               ) : null}
             </div>
@@ -319,9 +331,6 @@ const RolesAndPermissions = () => {
             <div>
               <h2 className="text-lg font-semibold text-black dark:text-white">
                 Sidebar permission matrix
-                {!isSuperAdmin ? (
-                  <span className="mt-1 block text-xs font-normal text-bodydark2">Showing Branches permissions only.</span>
-                ) : null}
               </h2>
             </div>
             {matrixDirty && (
@@ -339,7 +348,7 @@ const RolesAndPermissions = () => {
             selectedRoleId={sidebarRoleId}
             onSelectRole={setSidebarRoleId}
             rolePermissions={sidebarRoleId ? matrix[sidebarRoleId] ?? [] : []}
-            readOnly={false}
+            readOnly={sidebarMatrixReadOnly}
             onToggle={toggleMpPermission}
             onMatrixMutate={mutateSidebarMpMatrix}
           />

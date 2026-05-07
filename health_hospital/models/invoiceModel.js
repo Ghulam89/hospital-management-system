@@ -8,6 +8,7 @@ const invoiceSchema = new mongoose.Schema({
                 ref: 'Procedure',
             },
             description: { type: String, allowNull: true },
+            procedureDate: { type: Date, allowNull: true },
             rate: { type: Number, allowNull: true },
             quantity: { type: Number, allowNull: true },
             amount: { type: Number, allowNull: true },
@@ -22,6 +23,14 @@ const invoiceSchema = new mongoose.Schema({
                 type: mongoose.Schema.Types.ObjectId,
                 ref: 'User',
             },
+            assistedBy: [{
+                type: mongoose.Schema.Types.ObjectId,
+                ref: 'User',
+            }],
+            receptionStaff: [{
+                type: mongoose.Schema.Types.ObjectId,
+                ref: 'User',
+            }],
             expenses: [
                 {
                     expenseCategoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'ExpenseCategory' },
@@ -50,6 +59,10 @@ const invoiceSchema = new mongoose.Schema({
             ],
         }
     ],
+    invoiceDate: {
+        type: Date,
+        allowNull: true,
+    },
     invoiceNo: {
         type: String,
         allowNull: true,

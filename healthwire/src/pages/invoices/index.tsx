@@ -224,7 +224,11 @@ const InvoicePdf = ({ invoice, patient }) => {
         </View>
         <View style={styles.infoRow}>
           <Text style={styles.infoLabel}>Date:</Text>
-          <Text>{moment(invoice.date).format('DD/MM/YYYY HH:mm')}</Text>
+          <Text>
+            {moment(invoice.invoiceDate || invoice.date || invoice.createdAt).format(
+              'DD/MM/YYYY',
+            )}
+          </Text>
         </View>
         <View style={styles.infoRow}>
           <Text style={styles.infoLabel}>Patient:</Text>
@@ -333,6 +337,17 @@ const InvoicePdf = ({ invoice, patient }) => {
                 <Text style={{fontSize:12}}>Balance Due:</Text>
                 <Text style={{fontSize:12}}>Rs. {Number(invoice.due || 0).toFixed(2)}</Text>
               </View>
+              {(Number(invoice.advance || invoice.advancePay || 0) > 0) && (
+                <View style={[styles.totalRow, { marginTop: 4 }]}>
+                  <Text style={{ fontSize: 11, color: '#333' }}>
+                    Advance / balance credited / change returned to customer:
+                  </Text>
+                  <Text style={{ fontSize: 11, fontWeight: 'bold' }}>
+                    Rs.{' '}
+                    {Number(invoice.advance ?? invoice.advancePay ?? 0).toFixed(2)}
+                  </Text>
+                </View>
+              )}
             </>
           );
         })()}
@@ -421,7 +436,7 @@ const Invoice = () => {
     {
       method: 'Cash',
       paid: '',
-      payDate: dayjs().format('YYYY-MM-DD'),
+      payDate: dayjs().format('YYYY-MM-DDTHH:mm'),
       reference: '',
       chequeNo: '',
       bankName: '',
@@ -520,7 +535,7 @@ const Invoice = () => {
       {
         method: 'Cash',
         paid: '',
-        payDate: dayjs().format('YYYY-MM-DD'),
+        payDate: dayjs().format('YYYY-MM-DDTHH:mm'),
         reference: '',
         chequeNo: '',
         bankName: '',
@@ -627,28 +642,20 @@ const Invoice = () => {
     return d.isValid() ? d.valueOf() : null;
   };
 
-  const parsePayDateToTsWithFallback = (payDate: any, fallbackDateTime: any) => {
+  const parsePayDateToTsWithFallback = (payDate: any, _fallbackDateTime: any) => {
     if (!payDate) return null;
-    if (
-      typeof payDate === 'string' &&
-      /^\d{4}-\d{2}-\d{2}T00:00:00(\.000)?Z$/.test(payDate)
-    ) {
-      return parsePayDateToTsWithFallback(payDate.slice(0, 10), fallbackDateTime);
+    const s = String(payDate);
+    if (/^\d{4}-\d{2}-\d{2}T/.test(s) || /^\d{4}-\d{2}-\d{2} /.test(s)) {
+      const t = dayjs(payDate);
+      return t.isValid() ? t.valueOf() : null;
     }
-    if (typeof payDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(payDate)) {
-      const baseTs = parsePayDateToTs(payDate);
-      if (!baseTs) return baseTs;
-      const fb = dayjs(fallbackDateTime);
-      if (!fb.isValid()) return baseTs;
-      const base = dayjs(baseTs);
-      return base
-        .hour(fb.hour())
-        .minute(fb.minute())
-        .second(fb.second())
-        .millisecond(fb.millisecond())
-        .valueOf();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+      const [y, m, d] = s.split('-').map((v) => Number(v));
+      if (!y || !m || !d) return null;
+      return new Date(y, m - 1, d, 12, 0, 0, 0).getTime();
     }
-    return parsePayDateToTs(payDate);
+    const t = dayjs(payDate);
+    return t.isValid() ? t.valueOf() : null;
   };
 
   const formatPayDate = (payDate: any) => {
@@ -817,22 +824,19 @@ const Invoice = () => {
         method: p.method,
         paid: Number(p.paid) || 0,
         payDate: (() => {
-          if (!p.payDate) return p.payDate;
-          if (typeof p.payDate === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(p.payDate)) {
-            const [y, m, d] = p.payDate.split('-').map((v) => Number(v));
-            if (!y || !m || !d) return p.payDate;
-            const now = new Date();
-            return new Date(
-              y,
-              m - 1,
-              d,
-              now.getHours(),
-              now.getMinutes(),
-              now.getSeconds(),
-              now.getMilliseconds(),
-            ).toISOString();
+          const v = p.payDate;
+          if (!v) return v;
+          const s = String(v);
+          if (s.includes('T')) {
+            const parsed = dayjs(s);
+            return parsed.isValid() ? parsed.toISOString() : v;
           }
-          return p.payDate;
+          if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+            const parsed = dayjs(s + 'T12:00');
+            return parsed.isValid() ? parsed.toISOString() : v;
+          }
+          const parsed = dayjs(v);
+          return parsed.isValid() ? parsed.toISOString() : v;
         })(),
         reference: p.reference,
         chequeNo: p.chequeNo,
@@ -991,10 +995,11 @@ const Invoice = () => {
             ? (filters.startDate as any).isSame(filters.endDate, 'day')
             : false
       });
-      console.log('Raw data from API:', data.map(item => ({
+        console.log('Raw data from API:', data.map(item => ({
         invoiceNo: item.invoiceNo,
-        date: item.createdAt,
-        formattedDate: moment(item.createdAt).format('YYYY-MM-DD')
+        invoiceDate: item.invoiceDate,
+        createdAt: item.createdAt,
+        formattedDate: moment(item.invoiceDate || item.createdAt).format('YYYY-MM-DD')
       })));
       
       // Additional frontend filtering for exact date match when same date is selected
@@ -1004,8 +1009,9 @@ const Invoice = () => {
       if (filters.startDate && filters.endDate && filters.startDate.isSame(filters.endDate, 'day')) {
         const selectedDate = filters.startDate.format('YYYY-MM-DD');
         filteredData = data.filter((invoice) => {
-          const invoiceDate = moment(invoice.createdAt).format('YYYY-MM-DD');
-          return invoiceDate === selectedDate;
+          const eff = invoice.invoiceDate || invoice.createdAt;
+          const invoiceDateStr = eff ? moment(eff).format('YYYY-MM-DD') : '';
+          return invoiceDateStr === selectedDate;
         });
         
         console.log('Filtered data for same day:', filteredData.map(item => ({
@@ -1029,8 +1035,9 @@ const Invoice = () => {
         const endDate = filters.endDate.format('YYYY-MM-DD');
         
         filteredData = data.filter((invoice) => {
-          const invoiceDate = moment(invoice.createdAt).format('YYYY-MM-DD');
-          return invoiceDate >= startDate && invoiceDate <= endDate;
+          const eff = invoice.invoiceDate || invoice.createdAt;
+          const invoiceDateStr = eff ? moment(eff).format('YYYY-MM-DD') : '';
+          return invoiceDateStr >= startDate && invoiceDateStr <= endDate;
         });
         
         console.log('Filtered data for date range:', filteredData.map(item => ({
@@ -1154,7 +1161,8 @@ const Invoice = () => {
           
           _id: invoice._id,
           invoiceNo: invoice.invoiceNo,
-          date: invoice.createdAt,
+          date: invoice.invoiceDate || invoice.createdAt,
+          invoiceDate: invoice.invoiceDate || null,
           createdAt: invoice.createdAt,
           updatedAt: invoice.updatedAt,
           patientId: invoice.patientId,
@@ -1403,6 +1411,17 @@ const Invoice = () => {
       sortDirections: ['ascend', 'descend'],
     },
     {
+      title: 'INVOICE DATE',
+      dataIndex: 'date',
+      key: 'invoiceEffectiveDate',
+      width: 125,
+      render: (value) =>
+        value ? moment(value).format('DD/MM/YYYY') : 'N/A',
+      sorter: (a, b) =>
+        moment(a.date || a.createdAt).valueOf() - moment(b.date || b.createdAt).valueOf(),
+      sortDirections: ['ascend', 'descend'],
+    },
+    {
       title: 'MR#',
       dataIndex: 'patientMR',
       key: 'patientMR',
@@ -1608,7 +1627,13 @@ const Invoice = () => {
               <Button size="small" onClick={() => openRefundModal(record)}>
                 Refund
               </Button>
-              <Link to={`/invoice/edit/${record._id}/${record.patientId?._id}`}>
+              <Link
+                to={`/invoice/edit/${record._id}/${
+                  record.patientId && typeof record.patientId === 'object' && record.patientId !== null
+                    ? (record.patientId as { _id?: string })._id ?? ''
+                    : String(record.patientId ?? '')
+                }`}
+              >
                 <RiEdit2Fill 
                   className='text-primary' 
                   size={20} 
@@ -2097,9 +2122,11 @@ const Invoice = () => {
                 </div>
 
                 <div>
-                  <div className="mb-1 text-xs font-medium text-bodydark">Pay Date</div>
+                  <div className="mb-1 text-xs font-medium text-bodydark">
+                    Payment date &amp; time
+                  </div>
                   <input
-                    type="date"
+                    type="datetime-local"
                     value={row.payDate}
                     onChange={(e) => {
                       const v = e.target.value;
@@ -2197,7 +2224,7 @@ const Invoice = () => {
                 {
                   method: 'Cash',
                   paid: '',
-                  payDate: new Date().toISOString().slice(0, 10),
+                  payDate: dayjs().format('YYYY-MM-DDTHH:mm'),
                   reference: '',
                   chequeNo: '',
                   bankName: '',

@@ -202,21 +202,24 @@ const getinvoices = async (req, res) => {
       }
     }
 
-    // Date range filter
-    if (startDate || endDate) {
-      query['createdAt'] = {};
+    // Date range filter — use document invoice date when set, else fallback to system createdAt
+    if ((startDate && startDate.trim() !== '') || (endDate && endDate.trim() !== '')) {
+      const exprParts = [];
       if (startDate && startDate.trim() !== '') {
-        // Parse incoming ISO string date and use it directly
         const parsedStartDate = new Date(startDate);
-        query['createdAt'].$gte = parsedStartDate;
-        console.log('Start date filter applied:', parsedStartDate, 'ISO:', parsedStartDate.toISOString());
+        exprParts.push({
+          $gte: [{ $ifNull: ['$invoiceDate', '$createdAt'] }, parsedStartDate],
+        });
+        console.log('Start date filter (invoiceDate || createdAt):', parsedStartDate.toISOString());
       }
       if (endDate && endDate.trim() !== '') {
-        // Parse incoming ISO string date and use it directly
         const parsedEndDate = new Date(endDate);
-        query['createdAt'].$lte = parsedEndDate;
-        console.log('End date filter applied:', parsedEndDate, 'ISO:', parsedEndDate.toISOString());
+        exprParts.push({
+          $lte: [{ $ifNull: ['$invoiceDate', '$createdAt'] }, parsedEndDate],
+        });
+        console.log('End date filter (invoiceDate || createdAt):', parsedEndDate.toISOString());
       }
+      query['$expr'] = exprParts.length === 1 ? exprParts[0] : { $and: exprParts };
     }
 
     // Text search
@@ -579,13 +582,37 @@ invoices.forEach(invoice => {
 // 3. Get invoice by id
 const getinvoiceById = async (req, res) => {
   try {
-    const id = req.params.id;
-    const data = await Invoice.findById(id)
-      .populate({ path: 'branchId', select: 'name address location phone email' })
-      .populate('patientId')
-      .populate({ path: 'doctorId', populate: { path: 'departmentId' } })
-      .populate('departmentId')
-      .populate({ path: 'item.procedureId', model: 'Procedure' });
+    const rawId = req.params.id;
+    const id = rawId != null ? String(rawId).trim() : "";
+    if (!id || !Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ status: "fail", message: "Invalid invoice id" });
+    }
+
+    const basePopulates = () =>
+      Invoice.findById(id)
+        .populate({ path: "branchId", select: "name address location phone email" })
+        .populate("patientId")
+        .populate({ path: "doctorId", populate: { path: "departmentId" } })
+        .populate("departmentId");
+
+    let data;
+    try {
+      data = await basePopulates()
+        .populate({ path: "item.procedureId", model: "Procedure" })
+        .populate({ path: "item.performedBy", select: "name" })
+        .exec();
+    } catch (popErr) {
+      console.error("getinvoiceById nested populate failed:", popErr?.message || popErr);
+      try {
+        data = await basePopulates()
+          .populate({ path: "item.procedureId", model: "Procedure" })
+          .exec();
+      } catch (popErr2) {
+        console.error("getinvoiceById procedure populate failed:", popErr2?.message || popErr2);
+        data = await basePopulates().exec();
+      }
+    }
+
     if (!data || !(await branchDocumentVisible(req, data.branchId))) {
       return res.status(404).json({ status: "fail", message: "Invoice not found" });
     }
@@ -908,15 +935,20 @@ const getInvoiceSummary = async (req, res) => {
       }
     }
 
-    // Date range filter
-    if (startDate || endDate) {
-      matchQuery['createdAt'] = {};
-      if (startDate) {
-        matchQuery['createdAt'].$gte = new Date(startDate);
+    // Date range filter — invoiceDate when set, else createdAt
+    if ((startDate && String(startDate).trim() !== '') || (endDate && String(endDate).trim() !== '')) {
+      const exprParts = [];
+      if (startDate && String(startDate).trim() !== '') {
+        exprParts.push({
+          $gte: [{ $ifNull: ['$invoiceDate', '$createdAt'] }, new Date(startDate)],
+        });
       }
-      if (endDate) {
-        matchQuery['createdAt'].$lte = new Date(endDate);
+      if (endDate && String(endDate).trim() !== '') {
+        exprParts.push({
+          $lte: [{ $ifNull: ['$invoiceDate', '$createdAt'] }, new Date(endDate)],
+        });
       }
+      matchQuery['$expr'] = exprParts.length === 1 ? exprParts[0] : { $and: exprParts };
     }
 
     console.log('📊 Calculating invoice summary with filters:', matchQuery);

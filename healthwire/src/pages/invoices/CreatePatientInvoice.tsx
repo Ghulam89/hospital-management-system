@@ -27,6 +27,7 @@ type ProcedureItem = {
   procedureId: string;
   procedure: string;
   description: string;
+  procedureDate: string;
   rate: number;
   quantity: number;
   amount: number;
@@ -126,6 +127,7 @@ const [isSubmitting, setIsSubmitting] = useState(false);
       procedureId: '',
       procedure: '',
       description: '',
+      procedureDate: '',
       rate: 0,
       quantity: 1,
       amount: 0,
@@ -359,6 +361,7 @@ const [isSubmitting, setIsSubmitting] = useState(false);
       procedureId: '',
       procedure: '',
       description: '',
+      procedureDate: '',
       rate: 0,
       quantity: 1,
       amount: 0,
@@ -463,33 +466,34 @@ const [isSubmitting, setIsSubmitting] = useState(false);
     setPaymentInstallments(updatedPayments);
   };
 
+  const isProcDated = (item: ProcedureItem) =>
+    !!(item.procedureDate && String(item.procedureDate).trim());
+
+  const lineNetAfterDiscount = (item: ProcedureItem) => {
+    const disc =
+      item.discountType === 0 ? item.discount : item.amount * (item.discount / 100);
+    return Math.max(0, item.amount - disc);
+  };
+
+  const undatedProcedureAdvance = () =>
+    procedures.filter((p) => !isProcDated(p)).reduce((sum, p) => sum + lineNetAfterDiscount(p), 0);
+
   const calculateSubTotal = () => {
-    return procedures.reduce((sum, item) => sum + item.amount, 0);
+    return procedures.filter(isProcDated).reduce((sum, item) => sum + item.amount, 0);
   };
 
   const calculateTotalDiscount = () => {
-    return procedures.reduce((sum, item) => {
+    return procedures.filter(isProcDated).reduce((sum, item) => {
       if (item.discountType === 0) {
         return sum + item.discount;
       } else {
-        return sum + (item.amount * (item.discount / 100));
+        return sum + item.amount * (item.discount / 100);
       }
     }, 0);
   };
 
   const calculateGrandTotal = () => {
-    const procedureTotal = calculateSubTotal() - calculateTotalDiscount();
-    const expensesTotal =
-      localExpenses.reduce((sum, expense) => {
-        const e = expense.expenses || [];
-        return (
-          sum +
-          e
-            .filter((row: any) => !row.deductBeforeDoctorShare)
-            .reduce((s: number, row: any) => s + (Number(row.amount) || 0), 0)
-        );
-      }, 0);
-    return procedureTotal + expensesTotal;
+    return calculateSubTotal() - calculateTotalDiscount();
   };
 
   const calculateTotalPaid = () => {
@@ -589,15 +593,40 @@ const [isSubmitting, setIsSubmitting] = useState(false);
       setIsSubmitting(false);
       return;
     }
+
+    const procedureDateToIso = (ds: string) => {
+      const t = String(ds || '').trim();
+      if (!t) return undefined;
+      const [y, m, d] = t.split('-').map(Number);
+      if (!y || !m || !d) return undefined;
+      return new Date(y, m - 1, d, 12, 0, 0, 0).toISOString();
+    };
+
+    const billingTotal = calculateGrandTotal();
+    const paidSum = calculateTotalPaid();
+    const undatedAdv = undatedProcedureAdvance();
+    const rawDue = billingTotal - paidSum;
+
+    const invoiceDateIso = (() => {
+      const t = String(invoiceDate || '').trim();
+      if (!t) return undefined;
+      const [y, m, d] = t.split('-').map(Number);
+      if (!y || !m || !d) return undefined;
+      return new Date(y, m - 1, d, 12, 0, 0, 0).toISOString();
+    })();
   
     const invoicePayload = {
       patientId: patientInfo._id,
       patientMr: patientInfo.mr,
-      invoiceDate: invoiceDate,
+      invoiceDate: invoiceDateIso || invoiceDate,
       doctorId: doctorId,
       item: procedures.map(item => ({
         procedureId: item.procedureId,
-        description: item.description,
+        description:
+          [item.procedure, item.procedureDate].filter(Boolean).join(' — ') ||
+          item.description ||
+          item.procedure,
+        procedureDate: procedureDateToIso(item.procedureDate),
         rate: item.rate,
         quantity: item.quantity,
         amount: item.amount,
@@ -612,9 +641,9 @@ const [isSubmitting, setIsSubmitting] = useState(false);
       subTotalBill: calculateSubTotal(),
       discountBill: calculateTotalDiscount(),
       taxBill: 0,
-      totalBill: calculateGrandTotal(),
-      duePay: calculateDue() > 0 ? calculateDue() : 0,
-      advancePay: calculateDue() < 0 ? Math.abs(calculateDue()) : 0,
+      totalBill: billingTotal,
+      duePay: rawDue > 0 ? rawDue : 0,
+      advancePay: undatedAdv + (rawDue < 0 ? Math.abs(rawDue) : 0),
       totalPay: calculateTotalPaid(),
       payment: paymentInstallments.map(payment => ({
         method: payment.method,
@@ -761,8 +790,28 @@ const [isSubmitting, setIsSubmitting] = useState(false);
       loadOptions={loadProcedureOptions}
       onChange={(option: ProcedureOption | null) => {
         if (option) {
-          updateProcedure(item.id, 'procedureId', option.value);
-          // Also update the proceduresList if this is a new procedure
+          setProcedures((prev) =>
+            prev.map((p) =>
+              p.id === item.id
+                ? (() => {
+                    const sel = proceduresList.find((x) => x._id === option.value);
+                    const name = option.procedureData?.name || sel?.name || '';
+                    const amt = option.procedureData?.amount ?? sel?.amount ?? 0;
+                    const next = {
+                      ...p,
+                      procedureId: option.value,
+                      procedure: name,
+                      description: name,
+                      procedureDate: p.procedureDate,
+                      rate: amt,
+                      amount: amt * p.quantity,
+                    };
+                    const shares = calculateShares(next);
+                    return { ...next, doctorAmount: shares.doctorAmount, hospitalAmount: shares.hospitalAmount };
+                  })()
+                : p,
+            ),
+          );
           if (!proceduresList.some(p => p._id === option.value)) {
             setProceduresList(prev => [...prev, option.procedureData]);
           }
@@ -798,15 +847,12 @@ const [isSubmitting, setIsSubmitting] = useState(false);
                     </td>
                     <td className="px-1 py-3 whitespace-nowrap">
                       <input
-                        type="text"
-                        className="rounded border-[1.5px] border-stroke bg-transparent py-2 px-1 w-40 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
-                        value={item.description}
+                        type="date"
+                        title="Procedure date bills this row; empty counts as advance-only"
+                        className="rounded border-[1.5px] border-stroke bg-transparent py-2 px-1 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                        value={item.procedureDate}
                         onChange={(e) =>
-                          updateProcedure(
-                            item.id,
-                            'description',
-                            e.target.value,
-                          )
+                          updateProcedure(item.id, 'procedureDate', e.target.value)
                         }
                       />
                     </td>

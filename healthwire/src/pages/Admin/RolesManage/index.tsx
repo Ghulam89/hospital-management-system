@@ -20,7 +20,7 @@ type AppRole = {
   permissions: string[];
   isSystem?: boolean;
   branchId?: string | { _id: string } | null;
-  /** Super Admin–authored row for this branch; hidden from branch admins in API list */
+  /** Super Admin–authored branch template (`true`); omitted from branch user API lists */
   createdBySuperAdmin?: boolean;
 };
 
@@ -353,11 +353,11 @@ const RolesManage = () => {
         <div className="max-w-3xl space-y-2 text-sm text-bodydark2">
           <p>
             <span className="font-medium text-bodydark1 dark:text-white">Super Admin</span> sees roles for all branches.
-            <span className="font-medium text-bodydark1 dark:text-white"> Branch admins</span> only see{' '}
-          
-  
+            <span className="font-medium text-bodydark1 dark:text-white"> Branch admins</span> see{' '}
+            <span className="font-medium text-bodydark1 dark:text-white">their own branch roles</span> (roles created on
+            that branch account) plus global system defaults — roles Super Admin wires up for your branch stay on the Super Admin
+            side only for listing and edits.
           </p>
-          
         </div>
         <div className="flex flex-wrap gap-3">
           <Link
@@ -409,8 +409,9 @@ const RolesManage = () => {
               <span>and tick the menus and actions this role should have.</span>
             ) : (
               <span>
-                to assign <span className="font-medium text-bodydark1 dark:text-bodydark">Branches</span> sidebar
-                access for this branch. Other menus stay with Super Admin.
+                tick menus under{' '}
+                <span className="font-medium text-bodydark1 dark:text-bodydark">Menu permissions</span> for your
+                branch-created roles.
               </span>
             )}
           </p>
@@ -539,7 +540,9 @@ const RolesManage = () => {
               <Link to="/admin/roles" className="font-medium text-primary hover:underline">
                 Menu permissions
               </Link>
-              {isSuperAdmin ? '.' : ' (Branches access only on your branch — other menus: Super Admin).'}
+              {isSuperAdmin
+                ? '.'
+                : '. You cannot assign who can open Menu permissions & roles list (Super Admin only).'}
             </p>
             <div className="mb-4.5 grid grid-cols-1 gap-6 sm:grid-cols-2">
               <div className="w-full">

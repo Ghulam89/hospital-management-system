@@ -96,6 +96,11 @@ const pharmItemSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Branch',
     },
+    /** Set true when branch staff creates the row via Add Item (not HQ master / seeded catalog). Limits branch PATCH. */
+    branchAuthoredCatalog: {
+        type: Boolean,
+        default: false,
+    },
     
 }, { timestamps: true });
 

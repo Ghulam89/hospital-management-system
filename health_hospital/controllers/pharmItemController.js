@@ -8,6 +8,70 @@ const { normalizeRole } = require("../middleware/auth");
 
 const escapeRegex = (s) => String(s || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+/** Non–Super Admin updates: own branch inventory row only; never `active` / `branchId` (those stay HQ-managed). */
+const BRANCH_INVENTORY_PATCH_KEYS = new Set([
+  "name",
+  "barcode",
+  "alternateBarcodes",
+  "pharmRackId",
+  "pharmManufacturerId",
+  "pharmSupplierId",
+  "pharmCategoryId",
+  "unit",
+  "conversionUnit",
+  "reOrderLevel",
+  "retailPrice",
+  "openingStock",
+  "drugInteraction",
+  "genericName",
+  "unitCost",
+  "pieceCost",
+  "availableQuantity",
+  "expiredQuantity",
+  "narcotic",
+  "status",
+]);
+
+function cleanBranchPharmInventoryBody(body) {
+  const cleaned = {};
+  for (const k of Object.keys(body || {})) {
+    if (!BRANCH_INVENTORY_PATCH_KEYS.has(k)) continue;
+    if (body[k] === undefined) continue;
+    cleaned[k] = body[k];
+  }
+  return cleaned;
+}
+
+/** Whether a global (branchId null) catalog row shares the merged catalog key with `doc`. */
+async function sharesGlobalCatalogMaster(docLean) {
+  const id = docLean._id;
+  const globalBranch = { $or: [{ branchId: null }, { branchId: { $exists: false } }] };
+  const bc = docLean.barcode != null ? String(docLean.barcode).trim() : "";
+  if (bc) {
+    const bcRx = new RegExp(`^${escapeRegex(bc)}$`, "i");
+    const m = await PharmItem.findOne({
+      _id: { $ne: id },
+      $and: [globalBranch, { $or: [{ barcode: bcRx }, { alternateBarcodes: bc }] }],
+    })
+      .select("_id")
+      .lean()
+      .exec();
+    return Boolean(m);
+  }
+  const name = String(docLean.name || "").trim();
+  const rp = Number(docLean.retailPrice) || 0;
+  if (!name) return false;
+  const nameRx = new RegExp(`^${escapeRegex(name)}$`, "i");
+  const m = await PharmItem.findOne({
+    _id: { $ne: id },
+    $and: [globalBranch, { name: nameRx, retailPrice: rp }],
+  })
+    .select("_id")
+    .lean()
+    .exec();
+  return Boolean(m);
+}
+
 // 1. Create pharmItem
 const addpharmItem = async (req, res) => {
   try {
@@ -54,7 +118,12 @@ const addpharmItem = async (req, res) => {
       }
     }
 
-    const data = await PharmItem.create(assignBranchIdForCreate(req, cleanedBody));
+    const payload = assignBranchIdForCreate(req, cleanedBody);
+    const creatorRole = normalizeRole(req.user?.role);
+    const creatorIsSuperAdmin = creatorRole === "superadmin" || creatorRole === "super admin";
+    payload.branchAuthoredCatalog = Boolean(!creatorIsSuperAdmin && payload.branchId);
+
+    const data = await PharmItem.create(payload);
     return res.status(200).json({ status: "ok", data: data });
 
   } catch (err) {
@@ -63,7 +132,7 @@ const addpharmItem = async (req, res) => {
   }
 };
 
-// 1. Create pharmItem
+// Excel import: create pharmacy item
 const addExcelpharmItem = async (req, res) => {
   try {
 
@@ -74,10 +143,14 @@ const addExcelpharmItem = async (req, res) => {
         .json({ status: "fail", message: "Must add department name!" });
     }
 
-    let departmentId = await Department.findOne({ name: req.body.departmentName })
+    let departmentId = await Department.findOne({ name: req.body.departmentName });
 
+    const payload = assignBranchIdForCreate(req, { ...req.body, departmentId: departmentId?._id });
+    const creatorRole = normalizeRole(req.user?.role);
+    const creatorIsSuperAdmin = creatorRole === "superadmin" || creatorRole === "super admin";
+    payload.branchAuthoredCatalog = Boolean(!creatorIsSuperAdmin && payload.branchId);
 
-    const data = await PharmItem.create(assignBranchIdForCreate(req, { ...req.body, departmentId:departmentId?._id }));
+    const data = await PharmItem.create(payload);
     return res.status(200).json({ status: "ok", data: data });
 
   } catch (err) {
@@ -128,6 +201,7 @@ function mergeUnifiedCatalogBranchStock(rows, branchOid) {
         sellablePharmItemId: String(own._id),
         catalogMasterOnly: false,
         catalogMasterId: master ? String(master._id) : null,
+        branchAuthoredCatalog: own.branchAuthoredCatalog === true,
       });
       continue;
     }
@@ -159,7 +233,9 @@ function mergeUnifiedCatalogBranchStock(rows, branchOid) {
 /**
  * Single catalog view when no branch is selected (e.g. super admin): one row per product.
  * Prefers global master (branchId null/missing); otherwise any branch copy as display template.
- * Quantities are 0 here — pick a branch in the header to see that branch's stock.
+ * Stock = sum of `availableQuantity` / `expiredQuantity` across all branch inventory rows for that key;
+ * if there are no branch rows, falls back to the template document's quantities.
+ * When a branch is selected in the header, `mergeUnifiedCatalogBranchStock` is used instead.
  */
 function dedupePharmCatalogAllBranches(rows) {
   const plain = rows.map((r) => (typeof r.toObject === 'function' ? r.toObject({ virtuals: true }) : { ...r }));
@@ -171,6 +247,9 @@ function dedupePharmCatalogAllBranches(rows) {
     const rp = Number(r.retailPrice) || 0;
     return `nm:${name}:${rp}`;
   };
+
+  const isBranchRow = (r) =>
+    r.branchId != null && r.branchId !== undefined && String(r.branchId).trim() !== '';
 
   const groups = new Map();
   for (const r of plain) {
@@ -184,8 +263,14 @@ function dedupePharmCatalogAllBranches(rows) {
     const master = group.find((r) => r.branchId == null || r.branchId === undefined);
     const template = master || group[0];
     const plainRow = { ...template };
-    plainRow.availableQuantity = 0;
-    plainRow.expiredQuantity = plainRow.expiredQuantity || 0;
+    const branchRows = group.filter(isBranchRow);
+    if (branchRows.length > 0) {
+      plainRow.availableQuantity = branchRows.reduce((s, r) => s + (Number(r.availableQuantity) || 0), 0);
+      plainRow.expiredQuantity = branchRows.reduce((s, r) => s + (Number(r.expiredQuantity) || 0), 0);
+    } else {
+      plainRow.availableQuantity = Number(template.availableQuantity) || 0;
+      plainRow.expiredQuantity = Number(template.expiredQuantity) || 0;
+    }
     const masterId = master ? String(master._id) : null;
 
     out.push({
@@ -498,28 +583,40 @@ const updatepharmItem = async (req, res) => {
     const role = normalizeRole(req.user.role);
     const isSuperAdmin = role === "superadmin" || role === "super admin";
 
-    /** Branches may only PATCH pricing + active flag on their own inventory rows. Master catalog rows (`branchId` null) stay super-admin only. Full master edits remain super admin only. */
+    /** Branch: full edit allowed only on their inventory row (`branchId` set), not global master (`branchId` null). */
     if (!isSuperAdmin) {
-      const hasBranchRow =
-        existing.branchId != null &&
-        existing.branchId !== "";
-      const ALLOW_BASE = hasBranchRow ? new Set(["retailPrice", "pieceCost", "active"]) : new Set(["retailPrice", "pieceCost"]);
-      const cleaned = {};
-      for (const k of Object.keys(req.body || {})) {
-        if (!ALLOW_BASE.has(k)) continue;
-        const v = req.body[k];
-        if (v === undefined) continue;
-        if (k === "active" && typeof v === "boolean") {
-          cleaned[k] = v;
-          continue;
-        }
-        if (v !== null && v !== "") cleaned[k] = v;
+      const isGlobalMaster =
+        existing.branchId == null || existing.branchId === "";
+      if (isGlobalMaster) {
+        return res.status(403).json({
+          status: "error",
+          message:
+            "Global catalog rows can only be edited by Super Admin. Branches edit items added for their branch (inventory row only).",
+        });
       }
+
+      let allowBranchEdit = false;
+      if (existing.branchAuthoredCatalog === true) {
+        allowBranchEdit = true;
+      } else if (existing.branchAuthoredCatalog === false) {
+        allowBranchEdit = false;
+      } else {
+        allowBranchEdit = !(await sharesGlobalCatalogMaster(existing));
+      }
+      if (!allowBranchEdit) {
+        return res.status(403).json({
+          status: "error",
+          message:
+            "You can only edit pharmacy items your branch created with Add Item. Items from the shared catalog are updated by Super Admin.",
+        });
+      }
+
+      const cleaned = cleanBranchPharmInventoryBody(req.body);
       if (Object.keys(cleaned).length === 0) {
         return res.status(403).json({
           status: "error",
           message:
-            "Only super admin can edit catalog master rows. Branches may update retail price / piece cost, and activate or deactivate items on their own branch stock.",
+            "No permitted fields to update on this inventory row (active status and HQ catalog are Super Admin only).",
         });
       }
       req.body = cleaned;
@@ -627,6 +724,15 @@ const deletepharmItem = async (req, res) => {
     if (!doc || !(await branchDocumentVisible(req, doc.branchId))) {
       return res.status(404).json({ status: "fail", message: "Item not found" });
     }
+    const role = normalizeRole(req.user.role);
+    const isSuperAdmin = role === "superadmin" || role === "super admin";
+    if (!isSuperAdmin) {
+      return res.status(403).json({
+        status: "fail",
+        message: "Only Super Admin can delete pharmacy items.",
+      });
+    }
+
     await PharmItem.findByIdAndDelete(id);
     return res
       .status(200)

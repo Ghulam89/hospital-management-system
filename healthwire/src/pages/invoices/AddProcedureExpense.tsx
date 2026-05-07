@@ -19,6 +19,16 @@ type Doctor = {
   shareType?: string;
 };
 
+type StaffUser = {
+  _id: string;
+  name: string;
+};
+
+type StaffRefRow = {
+  id: number;
+  userId: string;
+};
+
 type Batch = {
   batchNumber: string;
   remainingQuantity: number;
@@ -56,6 +66,7 @@ type ConsumptionRow = {
 };
 
 type DoctorOption = { value: string; label: string; doctorData: Doctor };
+type StaffOption = { value: string; label: string; staffData: StaffUser };
 type ItemOption = { value: string; label: string; itemData: PharmItem };
 type CategoryOption = { value: string; label: string; categoryData: Category };
 
@@ -78,9 +89,12 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
 }) => {
   const [isSaving, setIsSaving] = useState(false);
   const [doctors, setDoctors] = useState<Doctor[]>([]);
+  const [staffList, setStaffList] = useState<StaffUser[]>([]);
   const [items, setItems] = useState<PharmItem[]>([]);
   const [expenses, setExpenses] = useState<ExpenseRow[]>([]);
   const [doctorShares, setDoctorShares] = useState<DoctorShareRow[]>([]);
+  const [assistedByRows, setAssistedByRows] = useState<StaffRefRow[]>([]);
+  const [receptionRows, setReceptionRows] = useState<StaffRefRow[]>([]);
   const [consumptions, setConsumptions] = useState<ConsumptionRow[]>([]);
 
   useEffect(() => {
@@ -123,12 +137,38 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
               availableBatches: Array.isArray(c.availableBatches) ? c.availableBatches : (Array.isArray(c.batches) ? c.batches : []),
             }))
           : [];
+        const extractStaffId = (x: unknown): string => {
+          if (x == null || x === '') return '';
+          if (typeof x === 'string') return x;
+          if (typeof x === 'object' && x !== null) {
+            const o = x as Record<string, unknown>;
+            if (o._id != null && o._id !== '') return String(o._id);
+            if (typeof o.userId === 'string') return o.userId;
+          }
+          return '';
+        };
+        const normalizedAssisted: StaffRefRow[] = Array.isArray(selectedExpense.assistedBy)
+          ? selectedExpense.assistedBy.map((row: unknown, i: number) => ({
+              id: i + 1,
+              userId: extractStaffId(row),
+            }))
+          : [];
+        const normalizedReception: StaffRefRow[] = Array.isArray(selectedExpense.receptionStaff)
+          ? selectedExpense.receptionStaff.map((row: unknown, i: number) => ({
+              id: i + 1,
+              userId: extractStaffId(row),
+            }))
+          : [];
         setExpenses(normalizedExpenses);
         setDoctorShares(normalizedDoctorShares);
+        setAssistedByRows(normalizedAssisted);
+        setReceptionRows(normalizedReception);
         setConsumptions(normalizedConsumptions);
       } else {
         setExpenses([]);
         setDoctorShares([]);
+        setAssistedByRows([]);
+        setReceptionRows([]);
         setConsumptions([]);
       }
     }
@@ -197,6 +237,72 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
       ensureDoctors();
     }
   }, [isModalOpen, doctorShares, doctors]);
+
+  const loadStaffOptions: LoadOptions<StaffOption, never, { page: number }> = async (
+    searchQuery,
+    loadedOptions,
+    additional
+  ) => {
+    try {
+      const response = await axios.get(`${Base_url}/apis/user/get`, {
+        params: {
+          page: additional?.page || 1,
+          limit: 20,
+          search: searchQuery || '',
+        },
+      });
+      const responseData = response.data;
+      const list = Array.isArray(responseData?.data) ? responseData.data : [];
+      const totalPages = responseData?.totalPages || 1;
+      const currentPage = responseData?.currentPage || 1;
+      const incoming: StaffUser[] = list.map((u: { _id: string; name: string }) => ({
+        _id: u._id,
+        name: u.name || 'Staff',
+      }));
+      setStaffList((prev) => {
+        const merged = [...prev];
+        for (const u of incoming) {
+          if (!merged.some((x) => x._id === u._id)) merged.push(u);
+        }
+        return merged;
+      });
+      const options = incoming.map((staff: StaffUser) => ({
+        value: staff._id,
+        label: staff.name,
+        staffData: staff,
+      }));
+      return {
+        options,
+        hasMore: currentPage < totalPages,
+        additional: { page: currentPage + 1 },
+      };
+    } catch (error) {
+      console.error('Error loading staff:', error);
+      return { options: [], hasMore: false };
+    }
+  };
+
+  const loadStaffById = async (staffId: string): Promise<StaffUser | null> => {
+    try {
+      const response = await axios.get(`${Base_url}/apis/user/get/${staffId}`);
+      const u = response.data?.data;
+      if (u) {
+        const su: StaffUser = { _id: u._id, name: u.name };
+        setStaffList((prev) => (prev.some((x) => x._id === su._id) ? prev : [...prev, su]));
+        return su;
+      }
+    } catch {
+      /* skip */
+    }
+    return null;
+  };
+
+  useEffect(() => {
+    const ids = [...assistedByRows, ...receptionRows].map((r) => r.userId).filter(Boolean);
+    const missing = ids.filter((id) => !staffList.some((s) => s._id === id));
+    if (!isModalOpen || missing.length === 0) return;
+    Promise.all(missing.map((id) => loadStaffById(id))).catch(() => {});
+  }, [isModalOpen, assistedByRows, receptionRows]);
 
   const loadItemOptions: LoadOptions<ItemOption, never, { page: number }> = async (
     searchQuery,
@@ -274,6 +380,28 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
       { id: prev.length ? prev[prev.length - 1].id + 1 : 1, doctorId: '', share: NaN, shareType: 'value' },
     ]);
   };
+
+  const addAssistedRow = () => {
+    setAssistedByRows((prev) => [
+      ...prev,
+      { id: prev.length ? prev[prev.length - 1].id + 1 : 1, userId: '' },
+    ]);
+  };
+
+  const removeAssistedRow = (id: number) => setAssistedByRows((prev) => prev.filter((r) => r.id !== id));
+  const updateAssistedRow = (id: number, userId: string) =>
+    setAssistedByRows((prev) => prev.map((r) => (r.id === id ? { ...r, userId } : r)));
+
+  const addReceptionRow = () => {
+    setReceptionRows((prev) => [
+      ...prev,
+      { id: prev.length ? prev[prev.length - 1].id + 1 : 1, userId: '' },
+    ]);
+  };
+
+  const removeReceptionRow = (id: number) => setReceptionRows((prev) => prev.filter((r) => r.id !== id));
+  const updateReceptionRow = (id: number, userId: string) =>
+    setReceptionRows((prev) => prev.map((r) => (r.id === id ? { ...r, userId } : r)));
 
   const removeDoctorShareRow = (id: number) => {
     setDoctorShares((prev) => prev.filter((r) => r.id !== id));
@@ -356,10 +484,22 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
     return null;
   };
 
+  const hexId = (id: string) => /^[0-9a-fA-F]{24}$/.test(String(id || '').trim());
+
   const handleSave = () => {
-    const invalidExpense = expenses.some((e) => !e.expenseCategoryId || e.amount <= 0);
+    const invalidExpense = expenses.some((e) => {
+      const touched =
+        !!(e.expenseCategoryId || String(e.description || '').trim() || (Number.isFinite(e.amount) && e.amount > 0));
+      if (!touched) return false;
+      return !e.expenseCategoryId || !Number.isFinite(e.amount) || e.amount <= 0;
+    });
     if (invalidExpense) {
-      toast.error('Expense category and amount are required');
+      toast.error('Each expense row needs a category and a positive amount (or leave rows empty)');
+      return;
+    }
+    const hasDoctor = doctorShares.some((d) => hexId(String(d.doctorId || '').trim()));
+    if (!hasDoctor) {
+      toast.error('Add at least one doctor under Doctor (procedure share)');
       return;
     }
     const enrichedExpenses = expenses.map((e) => ({
@@ -370,9 +510,24 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
       ...d,
       doctorName: doctors.find((doc) => doc._id === d.doctorId)?.name || '',
     }));
+    const assistedByClean = assistedByRows
+      .filter((r) => hexId(r.userId))
+      .map((r) => ({
+        userId: r.userId.trim(),
+        userName: staffList.find((s) => s._id === r.userId)?.name || '',
+      }));
+    const receptionClean = receptionRows
+      .filter((r) => hexId(r.userId))
+      .map((r) => ({
+        userId: r.userId.trim(),
+        userName: staffList.find((s) => s._id === r.userId)?.name || '',
+      }));
+
     const bundle = {
       expenses: enrichedExpenses,
       doctorShares: enrichedDoctorShares,
+      assistedBy: assistedByClean,
+      receptionStaff: receptionClean,
       consumptions,
       _id: selectedExpense?._id || Date.now().toString(),
     };
@@ -464,7 +619,8 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
           <button type="button" onClick={addExpenseRow} className="px-3 py-2 bg-primary text-white rounded-md w-fit">Add Expense</button>
         </div>
 
-        <div className="grid grid-cols-1 gap-4">
+        <div className="grid grid-cols-1 gap-4 rounded-lg border border-stroke dark:border-strokedark p-4">
+          <h2 className="text-sm font-semibold text-gray-800 dark:text-white">Doctor (procedure share)</h2>
           {doctorShares.length > 0 ? doctorShares.map((row) => (
             <div key={row.id} className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
               <div className="md:col-span-2">
@@ -513,8 +669,108 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
               </button>
             </div>
           )) : null}
-          <button type="button" onClick={addDoctorShareRow} className="px-3 py-2 bg-primary text-white rounded-md w-fit">Add Doctor Share</button>
-          <span className="text-xs text-red-500 mt-1">Doctor Share on per item quantity</span>
+          <button type="button" onClick={addDoctorShareRow} className="px-3 py-2 bg-primary text-white rounded-md w-fit">
+            Add doctor
+          </button>
+          <span className="text-xs text-gray-500 mt-1">One or more doctors with share splits. Shown as &quot;Doctor&quot; on the invoice.</span>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 rounded-lg border border-stroke dark:border-strokedark p-4">
+          <h2 className="text-sm font-semibold text-gray-800 dark:text-white">Assisted By</h2>
+          {assistedByRows.length > 0
+            ? assistedByRows.map((row) => (
+                <div key={row.id} className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+                  <div className="md:col-span-3">
+                    <label className="block mb-2 text-sm text-gray-700 dark:text-gray-300">Staff</label>
+                    <AsyncPaginate
+                      value={
+                        row.userId
+                          ? {
+                              value: row.userId,
+                              label:
+                                staffList.find((s) => s._id === row.userId)?.name || 'Select staff',
+                              staffData: staffList.find((s) => s._id === row.userId),
+                            }
+                          : null
+                      }
+                      loadOptions={loadStaffOptions}
+                      onChange={(option) => updateAssistedRow(row.id, option?.value || '')}
+                      getOptionLabel={(option) => option.label}
+                      getOptionValue={(option) => option.value}
+                      placeholder="Search staff..."
+                      additional={{ page: 1 }}
+                      classNamePrefix="react-select"
+                      className="w-full"
+                      menuPortalTarget={document.body}
+                      menuPosition="fixed"
+                      styles={{
+                        menuPortal: (base) => ({ ...base, zIndex: 9999 }),
+                        menu: (base) => ({ ...base, zIndex: 9999 }),
+                      }}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeAssistedRow(row.id)}
+                    className="text-red-500 hover:text-red-700 mb-3"
+                  >
+                    <FaTrashAlt size={16} />
+                  </button>
+                </div>
+              ))
+            : null}
+          <button type="button" onClick={addAssistedRow} className="px-3 py-2 bg-gray-700 bg-primary text-white rounded-md w-fit">
+            Add assistant
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 gap-4 rounded-lg border border-stroke dark:border-strokedark p-4">
+          <h2 className="text-sm font-semibold text-gray-800 dark:text-white">Reception</h2>
+          {receptionRows.length > 0
+            ? receptionRows.map((row) => (
+                <div key={row.id} className="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+                  <div className="md:col-span-3">
+                    <label className="block mb-2 text-sm text-gray-700 dark:text-gray-300">Reception staff</label>
+                    <AsyncPaginate
+                      value={
+                        row.userId
+                          ? {
+                              value: row.userId,
+                              label:
+                                staffList.find((s) => s._id === row.userId)?.name || 'Select staff',
+                              staffData: staffList.find((s) => s._id === row.userId),
+                            }
+                          : null
+                      }
+                      loadOptions={loadStaffOptions}
+                      onChange={(option) => updateReceptionRow(row.id, option?.value || '')}
+                      getOptionLabel={(option) => option.label}
+                      getOptionValue={(option) => option.value}
+                      placeholder="Search reception..."
+                      additional={{ page: 1 }}
+                      classNamePrefix="react-select"
+                      className="w-full"
+                      menuPortalTarget={document.body}
+                      menuPosition="fixed"
+                      styles={{
+                        menuPortal: (base) => ({ ...base, zIndex: 9999 }),
+                        menu: (base) => ({ ...base, zIndex: 9999 }),
+                      }}
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => removeReceptionRow(row.id)}
+                    className="text-red-500 hover:text-red-700 mb-3"
+                  >
+                    <FaTrashAlt size={16} />
+                  </button>
+                </div>
+              ))
+            : null}
+          <button type="button" onClick={addReceptionRow} className="px-3 py-2 bg-gray-700 text-white rounded-md bg-primary w-fit">
+            Add reception
+          </button>
         </div>
 
         <div className="grid grid-cols-1 gap-4">

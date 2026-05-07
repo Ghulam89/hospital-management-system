@@ -32,7 +32,7 @@ const EditQualityControlManager = () => {
           name: u?.name || '',
           phone: u?.phone || '',
           email: u?.email || '',
-          password: '',
+          password: u?.password != null ? String(u.password) : '',
           shift: u?.shift || '',
         });
       })

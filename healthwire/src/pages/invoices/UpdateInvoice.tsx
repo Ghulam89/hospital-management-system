@@ -21,6 +21,7 @@ type ProcedureItem = {
   procedureId: string;
   procedure: string;
   description: string;
+  procedureDate: string;
   rate: number;
   quantity: number;
   amount: number;
@@ -63,8 +64,58 @@ type ProcedureOption = {
   procedureData?: Procedure;
 };
 
+/** Mongoose populated refs often come back as `{ _id, name }` — normalize for selects/API */
+function refId(value: unknown): string {
+  if (value == null || value === '') return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object' && value !== null && '_id' in value) {
+    const idVal = (value as { _id: unknown })._id;
+    if (idVal != null && idVal !== '') return String(idVal);
+  }
+  return '';
+}
+
+/** API / legacy bundles sometimes store non-arrays; calling .filter/.reduce on {} throws and breaks the page */
+function asArray<T>(v: unknown): T[] {
+  return Array.isArray(v) ? (v as T[]) : [];
+}
+
+function formatInvoicePaymentDate(payDate: unknown): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  if (payDate == null || payDate === '') {
+    const n = new Date();
+    return `${n.getFullYear()}-${pad(n.getMonth() + 1)}-${pad(n.getDate())}`;
+  }
+  if (typeof payDate === 'string') {
+    // Keep API day stable (avoid timezone shifting when value is UTC ISO midnight).
+    const trimmed = payDate.trim();
+    const m = trimmed.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (m?.[1]) return m[1];
+  }
+  const d = new Date(payDate as string | Date);
+  if (Number.isNaN(d.getTime())) {
+    const n = new Date();
+    return `${n.getFullYear()}-${pad(n.getMonth() + 1)}-${pad(n.getDate())}`;
+  }
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+}
+
+function ymdFromApi(d: unknown): string {
+  if (d == null || d === '') return '';
+  if (typeof d === 'string') {
+    const trimmed = d.trim();
+    const m = trimmed.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (m?.[1]) return m[1];
+  }
+  const dt = new Date(d as string | Date);
+  if (Number.isNaN(dt.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${dt.getFullYear()}-${pad(dt.getMonth() + 1)}-${pad(dt.getDate())}`;
+}
+
 type InvoiceData = {
   _id: string;
+  invoiceNo?: string;
   patientId: Patient;
   item: {
     procedureId: string;
@@ -87,6 +138,7 @@ type InvoiceData = {
   duePay: number;
   advancePay: number;
   totalPay: number;
+  invoiceDate?: string;
   payment: {
     method: string;
     payDate: string;
@@ -111,6 +163,7 @@ export default function InvoiceUpdate() {
   const [remarks, setRemarks] = useState('');
   const [searchError, setSearchError] = useState('');
   const [invoiceData, setInvoiceData] = useState<InvoiceData | null>(null);
+  const [invoiceEditDate, setInvoiceEditDate] = useState<string>('');
   const [getPatinetData, setGetPatientData] = useState<Patient | null>(null);
   const [isPaymentComplete, setIsPaymentComplete] = useState(false);
   const [paymentStatus, setPaymentStatus] = useState('');
@@ -133,6 +186,7 @@ export default function InvoiceUpdate() {
       procedureId: '',
       procedure: '',
       description: '',
+      procedureDate: '',
       rate: 0,
       quantity: 1,
       amount: 0,
@@ -171,18 +225,182 @@ export default function InvoiceUpdate() {
     e.currentTarget.blur();
   };
 
+  const applyLoadedInvoice = (data: any) => {
+    try {
+    setInvoiceData(data);
+
+    const rawPatient = data.patientId;
+    if (rawPatient && typeof rawPatient === 'object' && rawPatient !== null) {
+      setPatientInfo(rawPatient as Patient);
+      const p = rawPatient as Patient & { fullName?: string };
+      const displayName = (p.name ?? p.fullName ?? '').trim();
+      const mr = (p.mr ?? '').toString().trim();
+      const label =
+        displayName && mr
+          ? `${displayName} (MR# ${mr})`
+          : displayName
+            ? displayName
+            : mr
+              ? `MR# ${mr}`
+              : '';
+      if (label) {
+        setSearchTerm(label);
+      }
+    }
+
+    const procedureLabelFromItem = (item: any): string => {
+      const desc = item?.description != null ? String(item.description) : '';
+      const pid = item?.procedureId;
+      if (pid != null && typeof pid === 'object' && 'name' in pid && (pid as { name?: unknown }).name != null) {
+        return String((pid as { name?: string }).name);
+      }
+      return desc;
+    };
+
+    if (data.item && Array.isArray(data.item) && data.item.length > 0) {
+      setInvoiceEditDate(ymdFromApi(data.invoiceDate) || ymdFromApi(data.createdAt));
+
+      const mappedProcedures = data.item.map((item: any, index: number) => ({
+        id: index + 1,
+        procedureId: refId(item.procedureId),
+        procedure: procedureLabelFromItem(item),
+        description: item.description ?? '',
+        procedureDate: ymdFromApi(item.procedureDate),
+        rate: Number(item.rate) || 0,
+        quantity: Number(item.quantity) || 0,
+        amount: Number(item.amount) || 0,
+        discount: Number(item.discount) || 0,
+        discountType: item.discountType ?? 0,
+        tax: Number(item.tax) === 0 ? 'value' : 'exempt',
+        deductDiscount: 'Hospital & Doctor',
+        performedBy: refId(item.performedBy),
+        doctorAmount: Number(item.doctorAmount) || 0,
+        hospitalAmount: Number(item.hospitalAmount) || 0,
+      }));
+      setProcedures(mappedProcedures);
+    }
+
+    const seededFromItems = Array.isArray(data.item)
+      ? data.item.map((srcItem: any, index: number) => ({
+          procedureRowId: index + 1,
+          procedureId: refId(srcItem?.procedureId),
+          expenses: asArray(srcItem?.expenses),
+          doctorShares: asArray(srcItem?.doctorShares),
+          assistedBy: Array.isArray(srcItem?.assistedBy)
+            ? srcItem.assistedBy.map((u: any) => ({
+                userId: String(refId(u) || refId((u as any)?.userId) || ''),
+                userName:
+                  typeof u === 'object' && u != null && 'name' in u && (u as { name?: string }).name
+                    ? String((u as { name?: string }).name)
+                    : '',
+              })).filter((x: { userId: string }) => x.userId)
+            : [],
+          receptionStaff: Array.isArray(srcItem?.receptionStaff)
+            ? srcItem.receptionStaff.map((u: any) => ({
+                userId: String(refId(u) || refId((u as any)?.userId) || ''),
+                userName:
+                  typeof u === 'object' && u != null && 'name' in u && (u as { name?: string }).name
+                    ? String((u as { name?: string }).name)
+                    : '',
+              })).filter((x: { userId: string }) => x.userId)
+            : [],
+          consumptions: Array.isArray(srcItem?.consumptions) ? srcItem.consumptions : [],
+          _id: `${data._id || 'inv'}-${index + 1}`,
+        }))
+      : [];
+
+    const invoiceLevelBundle = {
+      procedureRowId: null,
+      procedureId: '',
+      expenses: asArray(data.invoiceExpenses),
+      doctorShares: [],
+      consumptions: asArray(data.invoiceConsumptions),
+      _id: `${data._id || 'inv'}-invoice`,
+    };
+
+    const legacyBundles = Array.isArray(data.expensesBundles)
+      ? data.expensesBundles.map((bundle: any) => ({
+          procedureRowId: typeof bundle.procedureRowId === 'number' ? bundle.procedureRowId : null,
+          procedureId: '',
+          expenses: asArray(bundle.expenses),
+          doctorShares: asArray(bundle.doctorShares),
+          consumptions: asArray(bundle.consumptions),
+          _id: bundle._id || Date.now().toString(),
+        }))
+      : [];
+
+    const combinedSeed = [
+      ...seededFromItems.filter(
+        (b: any) =>
+          b.expenses?.length ||
+          b.doctorShares?.length ||
+          b.consumptions?.length ||
+          b.assistedBy?.length ||
+          b.receptionStaff?.length,
+      ),
+      ...(invoiceLevelBundle.expenses.length || invoiceLevelBundle.consumptions.length
+        ? [invoiceLevelBundle]
+        : []),
+      ...legacyBundles,
+    ];
+    if (combinedSeed.length > 0) {
+      setLocalExpenses(combinedSeed);
+    }
+
+    if (data.payment && Array.isArray(data.payment) && data.payment.length > 0) {
+      const mappedPayments = data.payment.map((payment: any, index: number) => ({
+        id: index + 1,
+        date: formatInvoicePaymentDate(payment.payDate),
+        method: payment.method ?? 'Cash',
+        amount: Number(payment.paid) || 0,
+        reference: payment.reference || '',
+      }));
+      setPaymentInstallments(mappedPayments);
+    }
+
+    if (data.note) {
+      setRemarks(data.note);
+    }
+
+    const duePayNum = Number(data.duePay ?? 0);
+    setPaymentStatus(duePayNum <= 0 ? 'Payment Complete' : `Due: Rs. ${duePayNum.toFixed(2)}`);
+    setIsPaymentComplete(duePayNum <= 0);
+    } catch (parseErr: unknown) {
+      console.error('applyLoadedInvoice:', parseErr);
+      const msg =
+        parseErr instanceof Error ? parseErr.message : 'Could not parse invoice response';
+      toast.error(msg);
+    }
+  };
+
+  const reloadInvoiceFromApi = async () => {
+    if (!id) return;
+    try {
+      const invoiceRes = await axios.get(`${Base_url}/apis/invoice/get/${id}`);
+      const data = invoiceRes.data?.data;
+      if (data) applyLoadedInvoice(data);
+    } catch (e) {
+      console.error('Error reloading invoice:', e);
+      toast.error('Could not reload invoice');
+    }
+  };
+
   // Calculate payment status whenever payments or total changes
   useEffect(() => {
-    const due = calculateDue();
-    if (due < 0) {
-      setIsPaymentComplete(true);
-      setPaymentStatus(`Credit: Rs. ${Math.abs(due).toFixed(2)}`);
-    } else if (due === 0) {
-      setIsPaymentComplete(true);
-      setPaymentStatus('Payment Complete');
-    } else {
-      setIsPaymentComplete(false);
-      setPaymentStatus(`Due: Rs. ${due.toFixed(2)}`);
+    try {
+      const due = calculateDue();
+      if (due < 0) {
+        setIsPaymentComplete(true);
+        setPaymentStatus(`Credit: Rs. ${Math.abs(due).toFixed(2)}`);
+      } else if (due === 0) {
+        setIsPaymentComplete(true);
+        setPaymentStatus('Payment Complete');
+      } else {
+        setIsPaymentComplete(false);
+        setPaymentStatus(`Due: Rs. ${due.toFixed(2)}`);
+      }
+    } catch (e) {
+      console.error('Invoice totals:', e);
     }
   }, [paymentInstallments, procedures]);
 
@@ -191,110 +409,70 @@ export default function InvoiceUpdate() {
     const fetchData = async () => {
       try {
         setIsLoading(true);
-        
-        // Fetch invoice data if we're updating
-        if (id) {
-          const invoiceRes = await axios.get(`${Base_url}/apis/invoice/get/${id}`);
-          const data = invoiceRes.data.data;
-          setInvoiceData(data);
-          
-          // Set patient info
-          if (data.patientId) {
-            setPatientInfo(data.patientId);
-            setSearchTerm(`${data.patientId.name} (MR# ${data.patientId.mr})`);
-          }
-          
-          // Set procedures
-          if (data.item && data.item.length > 0) {
-            const mappedProcedures = data.item.map((item, index) => ({
-              id: index + 1,
-              procedureId: item.procedureId,
-              procedure: item.description,
-              description: item.description,
-              rate: item.rate,
-              quantity: item.quantity,
-              amount: item.amount,
-              discount: item.discount,
-              discountType: item.discountType || 0,
-              tax: item.tax === 0 ? 'value' : 'exempt',
-              deductDiscount: 'Hospital & Doctor',
-              performedBy: item.performedBy,
-              doctorAmount: item.doctorAmount || 0,
-              hospitalAmount: item.hospitalAmount || 0
-            }));
-            setProcedures(mappedProcedures);
-          }
-          
-          const seededFromItems = Array.isArray(data.item)
-            ? data.item.map((srcItem: any, index: number) => ({
-                procedureRowId: index + 1,
-                procedureId: srcItem?.procedureId?._id || srcItem?.procedureId || '',
-                expenses: Array.isArray(srcItem?.expenses) ? srcItem.expenses : [],
-                doctorShares: Array.isArray(srcItem?.doctorShares) ? srcItem.doctorShares : [],
-                consumptions: Array.isArray(srcItem?.consumptions) ? srcItem.consumptions : [],
-                _id: `${data._id || 'inv'}-${index + 1}`,
-              }))
-            : [];
 
-          const invoiceLevelBundle = {
-            procedureRowId: null,
-            procedureId: '',
-            expenses: Array.isArray((data as any).invoiceExpenses) ? (data as any).invoiceExpenses : [],
-            doctorShares: [],
-            consumptions: Array.isArray((data as any).invoiceConsumptions) ? (data as any).invoiceConsumptions : [],
-            _id: `${data._id || 'inv'}-invoice`,
-          };
+        const invoiceId = String(id ?? '').trim();
+        const mongoIdOk = /^[a-fA-F0-9]{24}$/.test(invoiceId);
 
-          const legacyBundles = Array.isArray((data as any).expensesBundles)
-            ? (data as any).expensesBundles.map((bundle: any) => ({
-                procedureRowId: typeof bundle.procedureRowId === 'number' ? bundle.procedureRowId : null,
-                procedureId: '',
-                expenses: bundle.expenses || [],
-                doctorShares: bundle.doctorShares || [],
-                consumptions: bundle.consumptions || [],
-                _id: bundle._id || Date.now().toString(),
-              }))
-            : [];
-
-          const combinedSeed = [
-            ...seededFromItems.filter(b => (b.expenses?.length || b.doctorShares?.length || b.consumptions?.length)),
-            ...(invoiceLevelBundle.expenses.length || invoiceLevelBundle.consumptions.length ? [invoiceLevelBundle] : []),
-            ...legacyBundles,
-          ];
-          if (combinedSeed.length > 0) {
-            setLocalExpenses(combinedSeed);
+        if (invoiceId && mongoIdOk) {
+          try {
+            const invoiceRes = await axios.get(`${Base_url}/apis/invoice/get/${invoiceId}`);
+            const raw = invoiceRes?.data;
+            const data = raw?.data ?? raw?.invoice ?? raw?.result;
+            if (!data || typeof data !== 'object') {
+              toast.error(
+                (typeof raw?.message === 'string' && raw.message) ||
+                  (typeof raw?.error === 'string' && raw.error) ||
+                  'Invoice not found'
+              );
+              setIsLoading(false);
+              return;
+            }
+            applyLoadedInvoice(data);
+          } catch (invoiceErr: any) {
+            console.error('Invoice load error:', invoiceErr);
+            const msg =
+              invoiceErr.response?.data?.message ||
+              invoiceErr.response?.data?.error ||
+              invoiceErr.message;
+            toast.error(typeof msg === 'string' ? msg : 'Failed to load invoice data');
+            setIsLoading(false);
+            return;
           }
-          
-          // Set payments
-          if (data.payment && data.payment.length > 0) {
-            const mappedPayments = data.payment.map((payment, index) => ({
-              id: index + 1,
-              date: new Date(payment.payDate).toISOString().split('T')[0],
-              method: payment.method,
-              amount: payment.paid,
-              reference: payment.reference || ''
-            }));
-            setPaymentInstallments(mappedPayments);
-          }
-          
-          // Set remarks
-          if (data.note) {
-            setRemarks(data.note);
-          }
-
-          // Set payment status
-          setPaymentStatus(data.duePay <= 0 ? 'Payment Complete' : `Due: Rs. ${data.duePay.toFixed(2)}`);
-          setIsPaymentComplete(data.duePay <= 0);
+        } else {
+          toast.error(
+            !invoiceId
+              ? 'Missing invoice id in URL'
+              : 'Invalid invoice id — open Edit from the invoice list again',
+          );
+          setIsLoading(false);
+          return;
         }
-        
-        // Fetch procedures and doctors
-        const [proceduresRes, usersRes] = await Promise.all([
+
+        const results = await Promise.allSettled([
           axios.get(`${Base_url}/apis/procedure/get`),
-          axios.get(`${Base_url}/apis/user/get?role=doctor`)
+          axios.get(`${Base_url}/apis/user/get?role=doctor`),
         ]);
-        
-        setProceduresList(proceduresRes?.data?.data || []);
-        setUsersList(usersRes?.data?.data || []);
+
+        const procResult = results[0];
+        if (procResult.status === 'fulfilled') {
+          const pr = procResult.value;
+          const payload = pr?.data?.data ?? pr?.data;
+          setProceduresList(Array.isArray(payload) ? payload : []);
+        } else {
+          console.error('Could not load procedures list:', procResult.reason);
+          setProceduresList([]);
+        }
+
+        const userResult = results[1];
+        if (userResult.status === 'fulfilled') {
+          const ur = userResult.value;
+          const payload = ur?.data?.data ?? ur?.data;
+          setUsersList(Array.isArray(payload) ? payload : []);
+        } else {
+          console.error('Could not load doctors list:', userResult.reason);
+          setUsersList([]);
+        }
+
         setIsLoading(false);
       } catch (error) {
         console.error('Error fetching data:', error);
@@ -302,7 +480,7 @@ export default function InvoiceUpdate() {
         toast.error('Failed to load invoice data');
       }
     };
-    
+
     fetchData();
   }, [id]);
 
@@ -322,8 +500,8 @@ export default function InvoiceUpdate() {
   useEffect(() => {
   const fetchMissingDoctors = async () => {
     const missingDoctors = procedures
-      .map(p => p.performedBy)
-      .filter(doctorId => 
+      .map(p => refId(p.performedBy))
+      .filter(doctorId =>
         doctorId && !usersList.some(u => u._id === doctorId)
       );
     
@@ -347,18 +525,43 @@ export default function InvoiceUpdate() {
   }
 }, [usersList, procedures]);
 
-  // Patient search functionality
+  /** Load patient for header when route has patientId (covers unpopulated invoice.patientId) */
+  useEffect(() => {
+    const pid = patientId?.trim();
+    if (!pid || pid === 'undefined') return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await axios.get(`${Base_url}/apis/patient/get/${pid}`);
+        const p = response.data?.data;
+        if (!cancelled && p) {
+          setGetPatientData(p);
+          setPatientInfo((prev) => prev ?? p);
+        }
+      } catch (error) {
+        console.error('Error fetching patient for header:', error);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [patientId]);
+
+  // Patient search functionality (keeps getPatinetData in sync when search term changes)
   useEffect(() => {
     const fetchPatients = async () => {
-      if (searchTerm.trim() === '') {
+      const pid = patientId?.trim();
+      if (searchTerm.trim() === '' || !pid || pid === 'undefined') {
         setSearchResults([]);
         setSearchError('');
         return;
       }
-      
+
       try {
-        const response = await axios.get(`${Base_url}/apis/patient/get/${patientId}`);
-        setGetPatientData(response.data.data);
+        const response = await axios.get(`${Base_url}/apis/patient/get/${pid}`);
+        const p = response.data.data;
+        setGetPatientData(p);
+        if (p) setPatientInfo((prev) => prev ?? p);
       } catch (error) {
         console.error('Error fetching patient:', error);
       }
@@ -432,12 +635,51 @@ export default function InvoiceUpdate() {
     };
   };
 
+  const handleLocalExpenseAdd = (procedureRowId: number | null, bundle: any) => {
+    setLocalExpenses((prev) => {
+      const idx = prev.findIndex((e) => e.procedureRowId === procedureRowId);
+      const proc = procedureRowId != null ? procedures.find((p) => p.id === procedureRowId) : null;
+      const payload = {
+        procedureRowId,
+        procedureId: proc?.procedureId || '',
+        invoiceId: invoiceData?._id || '',
+        ...bundle,
+      };
+      if (idx >= 0) {
+        const next = [...prev];
+        next[idx] = payload;
+        return next;
+      }
+      return [...prev, payload];
+    });
+    if (procedureRowId != null) {
+      const firstDoc = asArray(bundle?.doctorShares).find(
+        (s: any) =>
+          s.doctorId && /^[0-9a-fA-F]{24}$/.test(String(s.doctorId).trim()),
+      );
+      const docId = firstDoc?.doctorId ? String(firstDoc.doctorId).trim() : '';
+      if (docId) {
+        setProcedures((prev) =>
+          prev.map((p) => {
+            if (p.id !== procedureRowId) return p;
+            const next = { ...p, performedBy: docId };
+            const sh = calculateShares(next);
+            return { ...next, doctorAmount: sh.doctorAmount, hospitalAmount: sh.hospitalAmount };
+          }),
+        );
+      }
+    }
+    setIsProcedureExpenseModalOpen(false);
+    setEditingExpense(null);
+  };
+
   const addProcedure = () => {
     setProcedures([...procedures, {
       id: procedures.length + 1,
       procedureId: '',
       procedure: '',
       description: '',
+      procedureDate: '',
       rate: 0,
       quantity: 1,
       amount: 0,
@@ -592,8 +834,7 @@ export default function InvoiceUpdate() {
         toast.success('Procedure refund recorded successfully');
         setRefundModalOpen(false);
         setRefundProcedure(null);
-        // Refresh invoice data
-        fetchInvoiceData();
+        await reloadInvoiceFromApi();
       } else {
         toast.error(response.data.message || 'Failed to record refund');
       }
@@ -674,22 +915,6 @@ export default function InvoiceUpdate() {
     setProcedures(updatedProcedures);
   };
   
-  const handleLocalExpenseAdd = (procedureRowId: number | null, bundle: any) => {
-    setLocalExpenses(prev => {
-      const idx = prev.findIndex(e => e.procedureRowId === procedureRowId);
-      const proc = procedureRowId != null ? procedures.find(p => p.id === procedureRowId) : null;
-      const payload = { procedureRowId, procedureId: proc?.procedureId || '', invoiceId: invoiceData?._id || '', ...bundle };
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = payload;
-        return next;
-      }
-      return [...prev, payload];
-    });
-    setIsProcedureExpenseModalOpen(false);
-    setEditingExpense(null);
-  };
-
   const addPaymentInstallment = () => {
     setPaymentInstallments([...paymentInstallments, {
       id: paymentInstallments.length + 1,
@@ -717,33 +942,74 @@ export default function InvoiceUpdate() {
     setPaymentsDirty(true);
   };
 
+  const isProcDated = (item: ProcedureItem) =>
+    !!(item.procedureDate && String(item.procedureDate).trim());
+
+  const lineNetAfterDiscount = (item: ProcedureItem) => {
+    const disc =
+      item.discountType === 0 ? item.discount : item.amount * (item.discount / 100);
+    return Math.max(0, item.amount - disc);
+  };
+
+  const undatedProcedureAdvance = () =>
+    procedures.filter((p) => !isProcDated(p)).reduce((sum, p) => sum + lineNetAfterDiscount(p), 0);
+
+  const expenseAddOnTotal = (procedureRowId: number | null) => {
+    const bundle = localExpenses.find((e) => e.procedureRowId === procedureRowId);
+    if (!bundle?.expenses) return 0;
+    return bundle.expenses
+      .filter((row: { deductBeforeDoctorShare?: boolean }) => !row.deductBeforeDoctorShare)
+      .reduce((s: number, row: { amount?: number }) => s + (Number(row.amount) || 0), 0);
+  };
+
   const calculateSubTotal = () => {
-    return procedures.reduce((sum, item) => sum + item.amount, 0);
+    return procedures.filter(isProcDated).reduce((sum, item) => sum + item.amount, 0);
   };
 
   const calculateTotalDiscount = () => {
-    return procedures.reduce((sum, item) => {
+    return procedures.filter(isProcDated).reduce((sum, item) => {
       if (item.discountType === 0) {
         return sum + item.discount;
       } else {
-        return sum + (item.amount * (item.discount / 100));
+        return sum + item.amount * (item.discount / 100);
       }
     }, 0);
   };
 
-  const calculateGrandTotal = () => {
+  const calculateDoctorShareBase = () => {
     const procedureTotal = calculateSubTotal() - calculateTotalDiscount();
-    const expensesTotal =
-      localExpenses.reduce((sum, expense) => {
-        const e = expense.expenses || [];
-        return (
-          sum +
-          e
-            .filter((row: any) => !row.deductBeforeDoctorShare)
-            .reduce((s: number, row: any) => s + (Number(row.amount) || 0), 0)
-        );
+    const preDoctorShareDeductExpenses = localExpenses
+      .filter((expense) => {
+        if (expense.procedureRowId == null) return false;
+        const proc = procedures.find((p) => p.id === expense.procedureRowId);
+        return proc ? isProcDated(proc) : false;
+      })
+      .reduce((sum, expense) => {
+        const deductSum = asArray<{ deductBeforeDoctorShare?: boolean; amount?: number }>(
+          expense.expenses,
+        )
+          .filter((exp) => exp.deductBeforeDoctorShare)
+          .reduce((expSum, exp) => expSum + (exp.amount || 0), 0);
+        return sum + deductSum;
       }, 0);
-    return procedureTotal + expensesTotal;
+    return Math.max(0, procedureTotal - preDoctorShareDeductExpenses);
+  };
+
+  const calculateGrandTotal = () => {
+    let procedureNet = 0;
+    let expenseFromRows = 0;
+    for (const p of procedures) {
+      if (!isProcDated(p)) continue;
+      procedureNet += lineNetAfterDiscount(p);
+      expenseFromRows += expenseAddOnTotal(p.id);
+    }
+    const invBundle = localExpenses.find((e) => e.procedureRowId == null);
+    const invoiceExtra = Array.isArray(invBundle?.expenses)
+      ? invBundle.expenses
+          .filter((row: { deductBeforeDoctorShare?: boolean }) => !row.deductBeforeDoctorShare)
+          .reduce((s: number, row: { amount?: number }) => s + (Number(row.amount) || 0), 0)
+      : 0;
+    return procedureNet + expenseFromRows + invoiceExtra;
   };
 
   const calculateTotalPaid = () => {
@@ -762,38 +1028,40 @@ export default function InvoiceUpdate() {
     return procedures.reduce((sum, item) => sum + item.hospitalAmount, 0);
   };
   
-  const calculateAdditionalExpensesTotal = () => {
-    return localExpenses.reduce((sum, expense) => {
-      const e = expense.expenses || [];
-      return (
-        sum +
-        e
-          .filter((row: any) => !row.deductBeforeDoctorShare)
-          .reduce((s: number, row: any) => s + (Number(row.amount) || 0), 0)
-      );
-    }, 0);
-  };
-  
+  const calculateAdditionalExpensesTotal = () =>
+    localExpenses
+      .filter((expense) => {
+        if (expense.procedureRowId == null) return true;
+        const proc = procedures.find((p) => p.id === expense.procedureRowId);
+        return proc ? isProcDated(proc) : false;
+      })
+      .reduce((sum, expense) => {
+        const e = expense.expenses || [];
+        return (
+          sum +
+          e
+            .filter((row: { deductBeforeDoctorShare?: boolean }) => !row.deductBeforeDoctorShare)
+            .reduce((s: number, row: { amount?: number }) => s + (Number(row.amount) || 0), 0)
+        );
+      }, 0);
+
   const calculateDoctorSharesDeduction = () => {
-    const procedureTotal = calculateSubTotal() - calculateTotalDiscount();
-    const preDoctorShareDeductExpenses = localExpenses.reduce((sum, expense) => {
-      const e = expense.expenses || [];
-      const deduct = e
-        .filter((row: any) => row.deductBeforeDoctorShare)
-        .reduce((s: number, row: any) => s + (Number(row.amount) || 0), 0);
-      return sum + deduct;
-    }, 0);
-    const base = Math.max(0, procedureTotal - preDoctorShareDeductExpenses);
-    return localExpenses.reduce((sum, expense) => {
-      const shares = expense.doctorShares || [];
-      const total =
-        shares.reduce((s: number, share: any) => {
+    const base = calculateDoctorShareBase();
+    return localExpenses
+      .filter((expense) => {
+        if (expense.procedureRowId == null) return false;
+        const proc = procedures.find((p) => p.id === expense.procedureRowId);
+        return proc ? isProcDated(proc) : false;
+      })
+      .reduce((sum, expense) => {
+        const shares = asArray<{ share?: number; shareType?: string }>(expense.doctorShares);
+        const sharesTotal = shares.reduce((s, share: any) => {
           const val = Number(share.share) || 0;
           const amt = share.shareType === 'percentage' ? base * (val / 100) : val;
           return s + amt;
         }, 0);
-      return sum + total;
-    }, 0);
+        return sum + sharesTotal;
+      }, 0);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -806,36 +1074,74 @@ export default function InvoiceUpdate() {
       return;
     }
   
-    // Validate procedures
+    const procedureDateToIso = (ds: string) => {
+      const t = String(ds || '').trim();
+      if (!t) return undefined;
+      const [y, m, d] = t.split('-').map(Number);
+      if (!y || !m || !d) return undefined;
+      return new Date(y, m - 1, d, 12, 0, 0, 0).toISOString();
+    };
+
     for (const item of procedures) {
-      if (!item.performedBy || item.performedBy.trim() === '') {
-        toast.error(`Doctor must be selected for procedure ${item.id}`);
-        setIsSubmitting(false);
-        return;
-      }
       if (!item.procedureId || item.procedureId.trim() === '') {
         toast.error(`Please select a procedure for item ${item.id}`);
         setIsSubmitting(false);
         return;
       }
+      const costing = localExpenses.find(
+        (b) => b.procedureRowId === item.id || b.procedureId === item.procedureId,
+      );
+      const hasDoctor = asArray(costing?.doctorShares).some(
+        (s: any) => s.doctorId && /^[0-9a-fA-F]{24}$/i.test(String(s.doctorId)),
+      );
+      if (!hasDoctor) {
+        toast.error(
+          `Procedure "${item.procedure || item.id}": open costing (document icon) and add at least one doctor`,
+        );
+        setIsSubmitting(false);
+        return;
+      }
     }
-  
-    // Validate doctorId
-    const doctorId = procedures[0]?.performedBy;
-    if (!doctorId || doctorId.trim() === '') {
-      toast.error('Doctor must be selected');
+
+    const firstProc = procedures[0];
+    const firstBundle =
+      localExpenses.find((b) => b.procedureRowId === firstProc?.id || b.procedureId === firstProc?.procedureId) ||
+      {};
+    const doctorId =
+      asArray(firstBundle.doctorShares).find(
+        (s: any) => s.doctorId && /^[0-9a-fA-F]{24}$/i.test(String(s.doctorId)),
+      )?.doctorId || procedures[0]?.performedBy;
+    if (!doctorId || String(doctorId).trim() === '') {
+      toast.error('Add at least one doctor in costing for the first procedure');
       setIsSubmitting(false);
       return;
     }
-  
+
+    const billingTotal = calculateGrandTotal();
+    const paidSum = calculateTotalPaid();
+    const undatedAdv = undatedProcedureAdvance();
+    const rawDue = billingTotal - paidSum;
+
+    const shareBaseForSave = calculateDoctorShareBase();
+
+    const invoiceEditDateIso = (() => {
+      const t = String(invoiceEditDate || '').trim();
+      if (!t) return undefined;
+      const [y, m, d] = t.split('-').map(Number);
+      if (!y || !m || !d) return undefined;
+      return new Date(y, m - 1, d, 12, 0, 0, 0).toISOString();
+    })();
+
     const invoiceDataBase = {
       patientId: patientInfo._id,
       patientMr: patientInfo.mr,
       doctorId: doctorId,
-      item: procedures.map((item, index) => {
-        const bundle = localExpenses.find((b) => b.procedureRowId === item.id || b.procedureId === item.procedureId) || {};
-        const shownExpenses = bundle.expenses || [];
-        const shares = (bundle.doctorShares || [])
+      ...(invoiceEditDateIso ? { invoiceDate: invoiceEditDateIso } : {}),
+      item: procedures.map((item) => {
+        const bundle =
+          localExpenses.find((b) => b.procedureRowId === item.id || b.procedureId === item.procedureId) || {};
+        const shownExpenses = asArray(bundle.expenses);
+        const shares = asArray(bundle.doctorShares)
           .filter((share: any) => {
             const id = String(share.doctorId || '');
             const isHex24 = /^[0-9a-fA-F]{24}$/.test(id);
@@ -843,9 +1149,8 @@ export default function InvoiceUpdate() {
             return isHex24 && Number.isFinite(val) && val > 0;
           })
           .map((share: any) => {
-            const base = calculateShares(item).doctorAmount + calculateShares(item).hospitalAmount;
             const val = Number(share.share) || 0;
-            const amount = share.shareType === 'percentage' ? base * (val / 100) : val;
+            const amount = share.shareType === 'percentage' ? shareBaseForSave * (val / 100) : val;
             return {
               doctorId: String(share.doctorId),
               shareType: share.shareType,
@@ -853,9 +1158,17 @@ export default function InvoiceUpdate() {
               amount,
             };
           });
+        const primaryDoc =
+          asArray(bundle.doctorShares).find(
+            (s: any) => s.doctorId && /^[0-9a-fA-F]{24}$/i.test(String(s.doctorId)),
+          )?.doctorId || item.performedBy;
         return {
           procedureId: item.procedureId,
-          description: item.description,
+          description:
+            [item.procedure, item.procedureDate].filter(Boolean).join(' — ') ||
+            item.description ||
+            item.procedure,
+          procedureDate: procedureDateToIso(item.procedureDate),
           rate: item.rate,
           quantity: item.quantity,
           amount: item.amount,
@@ -863,28 +1176,33 @@ export default function InvoiceUpdate() {
           discountType: item.discountType,
           tax: item.tax === 'value' ? 0 : 0,
           total: item.amount - (item.discountType === 0 ? item.discount : (item.amount * (item.discount / 100))),
-          performedBy: item.performedBy,
+          performedBy: primaryDoc,
+          assistedBy: asArray<{ userId?: string }>(bundle.assistedBy)
+            .map((x) => x?.userId)
+            .filter(Boolean),
+          receptionStaff: asArray<{ userId?: string }>(bundle.receptionStaff)
+            .map((x) => x?.userId)
+            .filter(Boolean),
           doctorAmount: item.doctorAmount,
           hospitalAmount: item.hospitalAmount,
           expenses: shownExpenses,
           doctorShares: shares,
-          consumptions: bundle.consumptions || [],
+          consumptions: asArray(bundle.consumptions),
         };
       }),
       subTotalBill: calculateSubTotal(),
       discountBill: calculateTotalDiscount(),
       taxBill: 0,
-      totalBill: calculateGrandTotal(),
+      totalBill: billingTotal,
       note: remarks,
     };
     
     const invoiceData: any = { ...invoiceDataBase };
     {
-      const due = calculateDue();
-      invoiceData.duePay = due > 0 ? due : 0;
-      invoiceData.advancePay = due < 0 ? Math.abs(due) : 0;
-      invoiceData.totalPay = calculateTotalPaid();
-      invoiceData.status = due < 0 ? 'credit' : due === 0 ? 'completed' : 'pending';
+      invoiceData.duePay = rawDue > 0 ? rawDue : 0;
+      invoiceData.advancePay = undatedAdv + (rawDue < 0 ? Math.abs(rawDue) : 0);
+      invoiceData.totalPay = paidSum;
+      invoiceData.status = rawDue < 0 ? 'credit' : rawDue === 0 ? 'completed' : 'pending';
     }
     if (paymentsDirty) {
       invoiceData.payment = paymentInstallments.map(payment => ({
@@ -942,14 +1260,23 @@ export default function InvoiceUpdate() {
     );
   }
 
+  const headerPatient = getPatinetData ?? patientInfo;
+  const headerName =
+    (headerPatient as Patient & { fullName?: string })?.name?.trim() ||
+    (headerPatient as Patient & { fullName?: string })?.fullName?.trim() ||
+    '';
+
   return (
     <>
       <div className="">
         <div>
           <p className='text-black mb-3 font-medium'>
             <span className='text-primary'>
-              {getPatinetData?.mr}-{getPatinetData?.name} - {getPatinetData?.gender}
-            </span> - Edit Invoice
+              {headerPatient
+                ? `${headerPatient.mr ?? ''}-${headerName || '—'} - ${headerPatient.gender ?? ''}`
+                : '—'}{' '}
+            </span>
+            - Edit Invoice
           </p>
         </div>
 
@@ -961,6 +1288,16 @@ export default function InvoiceUpdate() {
               {paymentStatus}
             </div>
           </div>
+
+          <div className="mb-4">
+            <label className="mb-2 block text-black dark:text-white">Invoice date</label>
+            <input
+              type="date"
+              className="rounded border-[1.5px] border-stroke bg-transparent py-2 px-3 w-56 text-black outline-none transition focus:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+              value={invoiceEditDate}
+              onChange={(e) => setInvoiceEditDate(e.target.value)}
+            />
+          </div>
         
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
@@ -970,7 +1307,7 @@ export default function InvoiceUpdate() {
                     Procedure
                   </th>
                   <th className="px-4 py-3 text-left text-sm font-medium text-gray-500  whitespace-nowrap tracking-wider">
-                    Description
+                    Procedure date
                   </th>
                   <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 whitespace-nowrap  tracking-wider">
                     Rate
@@ -997,9 +1334,6 @@ export default function InvoiceUpdate() {
                   <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 whitespace-nowrap  tracking-wider">
                     Hospital Share
                   </th> */}
-                  <th className="px-4 py-3 text-left text-sm font-medium text-gray-500   tracking-wider whitespace-nowrap">
-                    Performed By
-                  </th>
                   <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 whitespace-nowrap  tracking-wider">
                     Action
                   </th>
@@ -1033,6 +1367,7 @@ export default function InvoiceUpdate() {
                         procedureId: option.value,
                         procedure: option.procedureData?.name || '',
                         description: option.procedureData?.name || '',
+                        procedureDate: item.procedureDate,
                         rate: option.procedureData?.amount || 0,
                         amount: (option.procedureData?.amount || 0) * item.quantity,
                         cost: option.procedureData?.cost || 0
@@ -1083,15 +1418,12 @@ export default function InvoiceUpdate() {
                                     </td>
                                     <td className="px-1 py-3 whitespace-nowrap">
                                       <input
-                                        type="text"
-                                        className="rounded border-[1.5px] border-stroke bg-transparent py-2 px-1 w-40 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
-                                        value={item.description}
+                                        type="date"
+                                        title="Dated lines bill; empty date counts as advance only"
+                                        className="rounded border-[1.5px] border-stroke bg-transparent py-2 px-1 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                                        value={item.procedureDate}
                                         onChange={(e) =>
-                                          updateProcedure(
-                                            item.id,
-                                            'description',
-                                            e.target.value,
-                                          )
+                                          updateProcedure(item.id, 'procedureDate', e.target.value)
                                         }
                                       />
                                     </td>
@@ -1204,50 +1536,6 @@ export default function InvoiceUpdate() {
                                         disabled
                                       />
                                     </td> */}
-                   <td className="px-1 py-3 whitespace-nowrap">
-  <div className='w-49'>
-    <AsyncPaginate
-      key={`doctor-select-${item.id}-${item.performedBy}`}
-      name={`performedBy-${item.id}`}
-      value={
-        item.performedBy
-          ? {
-              value: item.performedBy,
-              label: usersList.find(u => u._id === item.performedBy)?.name || 'Select Doctor',
-            }
-          : null
-      }
-      loadOptions={loadDoctorOptions}
-      onChange={(option: any) => {
-        updateProcedure(item.id, 'performedBy', option?.value || '');
-      }}
-      getOptionLabel={(option: any) => option.label}
-      getOptionValue={(option: any) => option.value}
-      placeholder="Select a doctor..."
-      additional={{ page: 1 }}
-      classNamePrefix="react-select"
-      className="w-full"
-      menuPortalTarget={document.body}
-      menuPosition="fixed"
-      styles={{
-        menuPortal: base => ({ ...base, zIndex: 9999 }),
-        control: provided => ({ ...provided, minHeight: '42px' })
-      }}
-      cacheUniqs={[usersList]}
-      debounceTimeout={500}
-      keepSelectedInList={true}
-      closeMenuOnSelect={true}
-      defaultOptions={usersList.map(u => ({
-        value: u._id,
-        label: u.name,
-      }))}
-      isOptionSelected={(option) => option.value === item.performedBy}
-      onMenuOpen={() => {
-        loadDoctorOptions('', [], { page: 1 });
-      }}
-    />
-  </div>
-</td>
                                     <td className="px-1 py-3 whitespace-nowrap">
                                       <div className=' flex gap-3 items-center'>
                                         <button

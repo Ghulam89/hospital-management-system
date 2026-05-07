@@ -13,7 +13,7 @@ import { Base_url } from '../../../utils/Base_url';
 import AddPharmacyItems from './AddPharmacyItems';
 import UploadPharmacyItem from './UploadPharmacyItem';
 import dayjs from 'dayjs';
-import { getUserDataFromStorage, isSuperAdminRole, buildAxiosBranchScopedParams } from '../../../utils/branchScope';
+import { getUserDataFromStorage, isSuperAdminRole, buildAxiosBranchScopedParams, getSuperadminBranchScopeForApi, BRANCH_CHANGED_EVENT } from '../../../utils/branchScope';
 import { canMenuAction } from '../../../utils/permissions';
 
 const { Search } = Input;
@@ -46,6 +46,18 @@ interface PharmacyItem {
   catalogMasterOnly?: boolean;
   sellablePharmItemId?: string | null;
   catalogMasterId?: string | null;
+  /** True when this branch row was created by branch staff (Add Item / import), not seeded from HQ */
+  branchAuthoredCatalog?: boolean;
+}
+
+/** Branch may edit list rows they truly own, not shared-catalog / HQ-master inventory. */
+function canBranchUserEditPharmacyListRow(r: PharmacyItem): boolean {
+  if (r.catalogMasterOnly === true) return false;
+  if (r.branchAuthoredCatalog === true) return true;
+  if (r.branchAuthoredCatalog === false) return false;
+  const mid = r.catalogMasterId;
+  if (mid != null && String(mid).trim()) return false;
+  return true;
 }
 
 interface PharmItemFlow {
@@ -57,12 +69,11 @@ const PharmacyItems: React.FC = () => {
   const navigate = useNavigate();
   const user = getUserDataFromStorage();
   const isSuperAdmin = isSuperAdminRole(user?.role);
-  /** Matrix `mp.pharm_items.*` — branch users are no longer hard-coded view-only */
+  /** Add/Upload: `mp.pharm_items.create`; row Edit: Super Admin all rows, or branch with `update` on own inventory rows only. */
   const canCreatePharmItem = canMenuAction(user, 'pharm_items', 'create');
   const canUpdatePharmItem = canMenuAction(user, 'pharm_items', 'update');
-  const canDeletePharmItem = canMenuAction(user, 'pharm_items', 'delete');
-  const showPharmItemEdit = canUpdatePharmItem;
-  const showPharmItemDelete = canDeletePharmItem;
+  /** Super Admin: activate/deactivate + delete. */
+  const showSuperAdminPharmControls = isSuperAdmin;
 
   const [selectedRowKeys, setSelectedRowKeys] = useState<React.Key[]>([]);
   const [items, setItems] = useState<PharmacyItem[]>([]);
@@ -91,6 +102,8 @@ const PharmacyItems: React.FC = () => {
   const [purchaseDetails, setPurchaseDetails] = useState<any[]>([]);
   const [salesDetails, setSalesDetails] = useState<any[]>([]);
   const [auditDateRange, setAuditDateRange] = useState<any[]>([]);
+  /** Superadmin navbar branch picker: refetch merged catalog when scope changes */
+  const [branchScopeNonce, setBranchScopeNonce] = useState(0);
 
   // Table row selection
   const onSelectChange = (newSelectedRowKeys: React.Key[]) => {
@@ -124,13 +137,8 @@ const PharmacyItems: React.FC = () => {
   };
 
   const handleToggleActive = async (item: PharmacyItem) => {
-    if (!canUpdatePharmItem) {
-      message.warning('You do not have permission to activate or deactivate items.');
-      return;
-    }
-    const meta = item as PharmacyItem & { catalogMasterOnly?: boolean };
-    if (meta.catalogMasterOnly && !isSuperAdmin) {
-      message.info('Pehle branch par stock add karein (Manage Stock). Phir apni branch ki row par activate/deactivate karain.');
+    if (!isSuperAdmin) {
+      message.warning('Only Super Admin can activate or deactivate items.');
       return;
     }
     try {
@@ -146,14 +154,13 @@ const PharmacyItems: React.FC = () => {
     }
   };
 
-  // Table columns (Toggle / Actions follow Roles matrix — `mp.pharm_items.*`)
+  // Toggle + delete: Super Admin only. Edit: SA all rows, or branch with update on branch-authored / legacy-non-linked inventory only.
   const allColumns = [
     {
       title: 'Name',
       dataIndex: 'name',
       sorter: (a: PharmacyItem, b: PharmacyItem) => a.name.localeCompare(b.name),
       render: (_: any, record: PharmacyItem) => {
-        const meta = record as PharmacyItem & { catalogMasterOnly?: boolean };
         return (
           <div className="flex flex-col gap-0.5">
             <button
@@ -207,7 +214,7 @@ const PharmacyItems: React.FC = () => {
       sorter: (a: PharmacyItem, b: PharmacyItem) => ((a.pharmCategoryId as any)?.name || '').localeCompare((b.pharmCategoryId as any)?.name || ''),
     },
     {
-      title: 'Stock (branch)',
+      title: isSuperAdmin && !getSuperadminBranchScopeForApi() ? 'Stock (all branches)' : 'Stock (branch)',
       dataIndex: 'availableQuantity',
       render: (text: number) => text || 0,
       sorter: (a: PharmacyItem, b: PharmacyItem) => a.availableQuantity - b.availableQuantity,
@@ -238,10 +245,6 @@ const PharmacyItems: React.FC = () => {
       title: 'Toggle',
       dataIndex: 'toggle',
       render: (_: any, record: PharmacyItem) => {
-        const meta = record as PharmacyItem & { catalogMasterOnly?: boolean };
-        if (meta.catalogMasterOnly && !isSuperAdmin) {
-          return <span className="text-xs text-bodydark2">—</span>;
-        }
         return (
           <button
             type="button"
@@ -264,11 +267,12 @@ const PharmacyItems: React.FC = () => {
       fixed: 'right' as 'right',
       width: 100,
       render: (_: any, record: PharmacyItem) => {
-        const meta = record as PharmacyItem & { catalogMasterOnly?: boolean };
-        const blockCatalogOnly = meta.catalogMasterOnly && !isSuperAdmin;
+        const meta = record as PharmacyItem;
+        const hqCatalogOverlay = meta.catalogMasterOnly === true && !isSuperAdmin;
+        const showBranchEdit = !isSuperAdmin && canUpdatePharmItem && canBranchUserEditPharmacyListRow(meta);
         return (
         <div className="flex items-center gap-4">
-          {showPharmItemEdit && !blockCatalogOnly ? (
+          {(showSuperAdminPharmControls && !hqCatalogOverlay) || showBranchEdit ? (
             <FaRegEdit
               color="blue"
               size={18}
@@ -277,7 +281,7 @@ const PharmacyItems: React.FC = () => {
               title="Edit Item"
             />
           ) : null}
-          {showPharmItemDelete && !blockCatalogOnly ? (
+          {showSuperAdminPharmControls && !hqCatalogOverlay ? (
             <RiDeleteBin5Line
               color="red"
               size={18}
@@ -293,12 +297,8 @@ const PharmacyItems: React.FC = () => {
   ];
 
   const columns = allColumns.filter((col) => {
-    if (!canUpdatePharmItem && col.dataIndex === 'toggle') {
-      return false;
-    }
-    if (col.dataIndex === 'action' && !showPharmItemEdit && !showPharmItemDelete) {
-      return false;
-    }
+    if (col.dataIndex === 'toggle' && !showSuperAdminPharmControls) return false;
+    if (col.dataIndex === 'action' && !showSuperAdminPharmControls && !canUpdatePharmItem) return false;
     return true;
   });
 
@@ -381,8 +381,14 @@ const PharmacyItems: React.FC = () => {
     fetchItems(currentPage, searchTerm, statusTab);
     fetchReferenceData();
     // eslint-disable-next-line
-  }, [currentPage, searchTerm, statusTab, pageSize, manufacturerFilter, categoryFilter, supplierFilter]);
+  }, [currentPage, searchTerm, statusTab, pageSize, manufacturerFilter, categoryFilter, supplierFilter, branchScopeNonce]);
 
+  useEffect(() => {
+    if (!isSuperAdmin) return undefined;
+    const bump = () => setBranchScopeNonce((n) => n + 1);
+    window.addEventListener(BRANCH_CHANGED_EVENT, bump);
+    return () => window.removeEventListener(BRANCH_CHANGED_EVENT, bump);
+  }, [isSuperAdmin]);
   // Table pagination change (Ant Design passes pagination as first arg)
   const handleTableChange = (pagination: TablePaginationConfig) => {
     const newPage = pagination.current || 1;
@@ -397,6 +403,10 @@ const PharmacyItems: React.FC = () => {
 
   // Delete item
   const handleDelete = (id: string) => {
+    if (!isSuperAdmin) {
+      message.warning('Only Super Admin can delete pharmacy items.');
+      return;
+    }
     Swal.fire({
       title: "Confirm Deletion",
       text: "Are you sure you want to delete this item? This action cannot be undone.",
@@ -432,8 +442,30 @@ const PharmacyItems: React.FC = () => {
     });
   };
 
-  // Edit item
+  // Edit item — branch: branch-authored inventory or legacy row not tied to HQ master in merged list
   const handleEdit = (item: PharmacyItem) => {
+    const meta = item as PharmacyItem;
+    if (isSuperAdmin) {
+      setEditingItem(item);
+      setIsAddEditModalOpen(true);
+      return;
+    }
+    if (!canUpdatePharmItem) {
+      message.warning('You do not have permission to edit pharmacy items.');
+      return;
+    }
+    if (meta.catalogMasterOnly === true) {
+      message.warning(
+        'This row is from the global catalog. Ask Super Admin to edit the master item, or manage your branch-specific row after you add stock / add your own item.',
+      );
+      return;
+    }
+    if (!canBranchUserEditPharmacyListRow(meta)) {
+      message.warning(
+        'You can only edit items your branch created (Add Item). Shared catalog items are updated by Super Admin.',
+      );
+      return;
+    }
     setEditingItem(item);
     setIsAddEditModalOpen(true);
   };
