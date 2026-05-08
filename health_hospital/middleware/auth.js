@@ -134,6 +134,19 @@ const requireMpPermission = (menuId, action) => (req, res, next) => {
   next();
 };
 
+/** Custom capability keys from Roles catalog (e.g. pharmPosBackdateBills), stored in user `tabs`. */
+function hasCapabilityKey(user, key) {
+  if (!user || !key) return false;
+  const role = normalizeRole(user.role);
+  if (role === 'superadmin' || role === 'super admin') return true;
+  const tabs = new Set(coercePermissionTabs(user));
+  if (tabs.has(key)) return true;
+  const legacyFull = ['administrator', 'admin'].includes(role);
+  const usesGranular = [...tabs].some((t) => t.startsWith('mp.'));
+  if (legacyFull && !usesGranular) return true;
+  return false;
+}
+
 module.exports = {
   auth,
   requireRole,
@@ -143,4 +156,5 @@ module.exports = {
   coercePermissionTabs,
   hasMpPermission,
   requireMpPermission,
+  hasCapabilityKey,
 };

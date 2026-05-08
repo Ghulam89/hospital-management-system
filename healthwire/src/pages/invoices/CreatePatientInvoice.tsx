@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 
 import axios from 'axios';
 import { Base_url } from '../../utils/Base_url';
+import { localCalendarYmd } from '../../utils/dateLocal';
 import { toast } from 'react-toastify';
 import { useParams, useNavigate } from 'react-router-dom';
 import { FaEye } from 'react-icons/fa';
@@ -100,9 +101,7 @@ type InvoiceData = {
 };
 
 export default function CreatePatientInvoice() {
-   const [invoiceDate, setInvoiceDate] = useState<string>(
-      new Date().toISOString().split('T')[0]
-    );
+   const [invoiceDate, setInvoiceDate] = useState<string>(() => localCalendarYmd());
   
   const { id } = useParams();
   const navigate = useNavigate();
@@ -121,30 +120,33 @@ export default function CreatePatientInvoice() {
   const [paymentStatus, setPaymentStatus] = useState('');
   const [isNewInvoice, setIsNewInvoice] = useState(false);
 const [isSubmitting, setIsSubmitting] = useState(false);
-  const [procedures, setProcedures] = useState<ProcedureItem[]>([
-    {
-      id: 1,
-      procedureId: '',
-      procedure: '',
-      description: '',
-      procedureDate: '',
-      rate: 0,
-      quantity: 1,
-      amount: 0,
-      discount: 0,
-      discountType: 0,
-      tax: 'value',
-      deductDiscount: 'Hospital & Doctor',
-      performedBy: '',
-      doctorAmount: 0,
-      hospitalAmount: 0,
-    }
-  ]);
+  const [procedures, setProcedures] = useState<ProcedureItem[]>(() => {
+    const d = localCalendarYmd();
+    return [
+      {
+        id: 1,
+        procedureId: '',
+        procedure: '',
+        description: '',
+        procedureDate: d,
+        rate: 0,
+        quantity: 1,
+        amount: 0,
+        discount: 0,
+        discountType: 0,
+        tax: 'value',
+        deductDiscount: 'Hospital & Doctor',
+        performedBy: '',
+        doctorAmount: 0,
+        hospitalAmount: 0,
+      },
+    ];
+  });
 
   const [paymentInstallments, setPaymentInstallments] = useState<PaymentInstallment[]>([
     {
       id: 1,
-      date: new Date().toISOString().split('T')[0],
+      date: localCalendarYmd(),
       method: 'Cash',
       amount: 0,
       reference: ''
@@ -161,7 +163,7 @@ const [isSubmitting, setIsSubmitting] = useState(false);
   const [refundForm, setRefundForm] = useState({
     method: 'Cash',
     paid: '',
-    payDate: new Date().toISOString().split('T')[0],
+    payDate: localCalendarYmd(),
     reference: '',
     notes: ''
   });
@@ -171,7 +173,7 @@ const [isSubmitting, setIsSubmitting] = useState(false);
     setRefundForm({
       method: 'Cash',
       paid: String(procedure.amount || 0),
-      payDate: new Date().toISOString().split('T')[0],
+      payDate: localCalendarYmd(),
       reference: '',
       notes: ''
     });
@@ -361,7 +363,7 @@ const [isSubmitting, setIsSubmitting] = useState(false);
       procedureId: '',
       procedure: '',
       description: '',
-      procedureDate: '',
+      procedureDate: invoiceDate,
       rate: 0,
       quantity: 1,
       amount: 0,
@@ -445,7 +447,7 @@ const [isSubmitting, setIsSubmitting] = useState(false);
   const addPaymentInstallment = () => {
     setPaymentInstallments([...paymentInstallments, {
       id: paymentInstallments.length + 1,
-      date: new Date().toISOString().split('T')[0],
+      date: localCalendarYmd(),
       method: 'Cash',
       amount: 0,
       reference: ''
@@ -604,7 +606,6 @@ const [isSubmitting, setIsSubmitting] = useState(false);
 
     const billingTotal = calculateGrandTotal();
     const paidSum = calculateTotalPaid();
-    const undatedAdv = undatedProcedureAdvance();
     const rawDue = billingTotal - paidSum;
 
     const invoiceDateIso = (() => {
@@ -643,7 +644,10 @@ const [isSubmitting, setIsSubmitting] = useState(false);
       taxBill: 0,
       totalBill: billingTotal,
       duePay: rawDue > 0 ? rawDue : 0,
-      advancePay: undatedAdv + (rawDue < 0 ? Math.abs(rawDue) : 0),
+      // Advance = sirf wahi paid amount jo billed (dated procedures) se zyada hai.
+      // Pehle `undatedAdv` ko bhi add kiya ja raha tha jo same paisa double count karta tha
+      // (e.g. 50k paid for an undated procedure → 50k + 50k = 100k advance shown). Fixed.
+      advancePay: rawDue < 0 ? Math.abs(rawDue) : 0,
       totalPay: calculateTotalPaid(),
       payment: paymentInstallments.map(payment => ({
         method: payment.method,
@@ -731,7 +735,18 @@ const [isSubmitting, setIsSubmitting] = useState(false);
               type="date"
               className="rounded border-[1.5px] border-stroke bg-transparent py-2 px-3 w-56 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
               value={invoiceDate}
-              onChange={(e) => setInvoiceDate(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value;
+                const prevTop = invoiceDate;
+                setInvoiceDate(v);
+                setProcedures((prev) => {
+                  const allEmptyOrSameAsTop = prev.every(
+                    (p) => !String(p.procedureDate || '').trim() || p.procedureDate === prevTop,
+                  );
+                  if (!allEmptyOrSameAsTop) return prev;
+                  return prev.map((p) => ({ ...p, procedureDate: v }));
+                });
+              }}
             />
           </div>
         

@@ -67,7 +67,60 @@ type PatientOption = {
   };
 };
 
+const INVOICE_FILTERS_SESSION_KEY = 'invoiceFiltersSession';
 
+function getDefaultInvoiceFilters() {
+  const defaultStartDate = moment().startOf('day');
+  const defaultEndDate = moment().endOf('day');
+  return {
+    startDate: defaultStartDate as moment.Moment,
+    endDate: defaultEndDate as moment.Moment,
+    department: '',
+    paymentMode: '',
+    doctor: '',
+    procedure: '',
+    amountField: 'paid',
+    patientName: '',
+    patientMR: '',
+    patientPhone: '',
+    invoiceNumber: '',
+    status: '',
+    minAmount: '',
+    maxAmount: '',
+    paymentDateStart: '',
+    paymentDateEnd: '',
+    dateRange: [defaultStartDate, defaultEndDate] as moment.Moment[],
+    discountPercent: '',
+  };
+}
+
+/** Pehli render hi par session se hydrate — warna save wala useEffect "today" likh kar session overwrite kar deta tha. */
+function loadInvoiceFiltersFromSession() {
+  const base = getDefaultInvoiceFilters();
+  try {
+    const raw = sessionStorage.getItem(INVOICE_FILTERS_SESSION_KEY);
+    if (!raw) return base;
+    const saved = JSON.parse(raw);
+    if (!saved || typeof saved !== 'object') return base;
+
+    const startDate = saved.startDate ? moment(saved.startDate) : null;
+    const endDate = saved.endDate ? moment(saved.endDate) : null;
+    const dateRange =
+      startDate && endDate ? [startDate, endDate] : base.dateRange;
+
+    const { startDate: _s, endDate: _e, dateRange: _dr, ...rest } = saved;
+
+    return {
+      ...base,
+      ...rest,
+      startDate: (startDate || base.startDate) as moment.Moment,
+      endDate: (endDate || base.endDate) as moment.Moment,
+      dateRange: dateRange as moment.Moment[],
+    };
+  } catch {
+    return base;
+  }
+}
 
 // PDF Styles
 const styles = StyleSheet.create({
@@ -405,29 +458,7 @@ const Invoice = () => {
   const [selectedProcedure, setSelectedProcedure] = useState<ProcedureOption | null>(null);
   const [selectedPatient, setSelectedPatient] = useState<PatientOption | null>(null);
 
-  const [filters, setFilters] = useState({
-    // No default date range — otherwise older invoices (e.g. 2023) never appear until user clears dates.
-    startDate: null as unknown as moment.Moment,
-    endDate: null as unknown as moment.Moment,
-    department: '',
-    paymentMode: '',
-    doctor: '',
-    procedure: '',
-    // which amount field min/max applies to: 'paid' by default
-    amountField: 'paid',
-    patientName: '',
-    patientMR: '',
-    patientPhone: '',
-    invoiceNumber: '',
-    status: '',
-    minAmount: '',
-    maxAmount: '',
-    paymentDateStart: '',
-    paymentDateEnd: '',
-    dateRange: [] as moment.Moment[],
-    discountPercent: '',
-    
-  });
+  const [filters, setFilters] = useState(() => loadInvoiceFiltersFromSession());
 
   const [paymentModalOpen, setPaymentModalOpen] = useState(false);
   const [savingPayment, setSavingPayment] = useState(false);
@@ -497,24 +528,6 @@ const Invoice = () => {
   ] satisfies Array<{ label: string; value: [Dayjs, Dayjs] }>;
 
   const disabledDate = (current: Dayjs) => current && current > dayjs().endOf('day');
-  
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem('invoiceFilters');
-      if (!raw) return;
-      const saved = JSON.parse(raw);
-      const startDate = saved.startDate ? moment(saved.startDate) : undefined;
-      const endDate = saved.endDate ? moment(saved.endDate) : undefined;
-      const dateRange = startDate && endDate ? [startDate, endDate] : undefined;
-      setFilters((prev) => ({
-        ...prev,
-        ...saved,
-        startDate: startDate || prev.startDate,
-        endDate: endDate || prev.endDate,
-        dateRange: dateRange || prev.dateRange,
-      }));
-    } catch {}
-  }, []);
 
   useEffect(() => {
     try {
@@ -525,7 +538,7 @@ const Invoice = () => {
         paymentDateStart: filters.paymentDateStart || '',
         paymentDateEnd: filters.paymentDateEnd || '',
       };
-      localStorage.setItem('invoiceFilters', JSON.stringify(payload));
+      sessionStorage.setItem(INVOICE_FILTERS_SESSION_KEY, JSON.stringify(payload));
     } catch {}
   }, [filters]);
 
@@ -1020,14 +1033,10 @@ const Invoice = () => {
           formattedDate: moment(item.createdAt).format('YYYY-MM-DD')
         })));
         
-        // If no data matches the exact date, show message and set empty data
+        // If no data matches the exact date, just clear the table silently
+        // (toast/notice messages disabled per request — empty table is enough feedback)
         if (filteredData.length === 0) {
           shouldShowNoDataMessage = true;
-          if (data.length > 0) {
-            message.warning(`No invoices found for ${filters.startDate.format('DD/MM/YYYY')}. Backend returned data from other dates.`);
-          } else {
-            message.info(`No invoices found for ${filters.startDate.format('DD/MM/YYYY')}`);
-          }
         }
       } else if (filters.startDate && filters.endDate) {
         // For date ranges, also apply frontend filtering to ensure data is within range
@@ -1046,10 +1055,7 @@ const Invoice = () => {
           formattedDate: moment(item.createdAt).format('YYYY-MM-DD')
         })));
         
-        // If filtered data is different from original data, show warning
-        if (filteredData.length !== data.length) {
-          message.warning(`Backend returned ${data.length} records but only ${filteredData.length} are within the selected date range.`);
-        }
+        // Backend mismatch warning suppressed per request (table itself shows the in-range data).
       }
 
       // Apply payment date filter if provided
@@ -1139,9 +1145,13 @@ const Invoice = () => {
           }
         }
 
-        const rawDue = Number(invoice.duePay) || 0;
-        const advance = Number(invoice.advancePay) > 0 ? Number(invoice.advancePay) : rawDue < 0 ? Math.abs(rawDue) : 0;
-        const due = rawDue > 0 ? rawDue : 0;
+        // Listing par advance/due ko hamesha live recompute karte hain (totalBill aur totalPay se).
+        // Pehle stored `advancePay` / `duePay` use ho raha tha, lekin purani buggy data
+        // (e.g. 50k paid pe 100k advance) wahi galat values dikhati thi. Live recompute = always sahi.
+        const totalBillNum = Number(invoice.totalBill) || 0;
+        const totalPayNum = Number(invoice.totalPay) || 0;
+        const advance = Math.max(0, totalPayNum - totalBillNum);
+        const due = Math.max(0, totalBillNum - totalPayNum);
 
         const createdByName =
           invoice.createdByData?.name ||
@@ -1275,8 +1285,13 @@ const Invoice = () => {
         }
       }
 
-      // Sort results ascending by the selected amount field
-      if (filters.minAmount || filters.maxAmount) {
+      // Invoice date range: chronological order (range start → end; oldest first)
+      if (filters.startDate && filters.endDate) {
+        finalData = [...finalData].sort(
+          (a, b) => moment(a.date || a.createdAt).valueOf() - moment(b.date || b.createdAt).valueOf(),
+        );
+      } else if (filters.minAmount || filters.maxAmount) {
+        // Sort results ascending by the selected amount field (only when no invoice date range)
         finalData = [...finalData].sort((a, b) => {
           const getValue = (inv: any) =>
             amountField === 'total'
@@ -1420,6 +1435,7 @@ const Invoice = () => {
       sorter: (a, b) =>
         moment(a.date || a.createdAt).valueOf() - moment(b.date || b.createdAt).valueOf(),
       sortDirections: ['ascend', 'descend'],
+      ...(filters.startDate && filters.endDate ? { defaultSortOrder: 'ascend' as const } : {}),
     },
     {
       title: 'MR#',
@@ -1807,6 +1823,7 @@ const Invoice = () => {
 
             <Col xs={24} sm={12} md={8} lg={12}>
               <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                <span style={{ whiteSpace: 'nowrap' }}>Invoice Date:</span>
                 <RangePicker
                   style={{ flex: 1 }}
                   value={
@@ -1835,12 +1852,9 @@ const Invoice = () => {
                       dateRange: [start, end],
                       startDate: start,
                       endDate: end,
-                      paymentDateStart: '',
-                      paymentDateEnd: '',
                     }));
                   }}
                 />
-                
               </div>
             </Col>
 
@@ -1875,9 +1889,6 @@ const Invoice = () => {
                       ...prev,
                       paymentDateStart: dates[0].format('YYYY-MM-DD'),
                       paymentDateEnd: dates[1].format('YYYY-MM-DD'),
-                      startDate: '' as any,
-                      endDate: '' as any,
-                      dateRange: [],
                     }));
                   }}
                 />
@@ -2012,10 +2023,12 @@ const Invoice = () => {
                     </Button>
                     <Button
                       onClick={() => {
+                        const todayStart = moment().startOf('day');
+                        const todayEnd = moment().endOf('day');
                         setFilters({
-                          dateRange: [],
-                          startDate: null as unknown as moment.Moment,
-                          endDate: null as unknown as moment.Moment,
+                          dateRange: [todayStart, todayEnd],
+                          startDate: todayStart,
+                          endDate: todayEnd,
                           department: '',
                           paymentMode: '',
                           doctor: '',

@@ -6,10 +6,13 @@ import { FaTrashAlt } from 'react-icons/fa';
 import { useState } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
+import { Base_url } from '../../../utils/Base_url';
+import BranchSelectField from '../../../components/BranchSelectField';
 
 const AddAccountant = () => {
   const [gender, setGender] = useState('');
 const [loading, setLoading] = useState(false);
+const [branchId, setBranchId] = useState('');
   console.log(gender);
   
 
@@ -59,6 +62,9 @@ const [loading, setLoading] = useState(false);
       else if(!state.shift){
         toast("Must enter shift!") 
       }
+      else if(!branchId){
+        toast("Please select branch") 
+      }
       
       else {
 
@@ -71,11 +77,12 @@ const [loading, setLoading] = useState(false);
           password:state.password,
           shift:state.shift,
           role: 'staff',
+          branchId,
           tabs: [],
     
     
         }
-        axios.post('https://api.holisticare.pk/apis/user/create',params).then((res)=>{
+        axios.post(`${Base_url}/apis/user/create`,params).then((res)=>{
 
           console.log(res.data);
 
@@ -227,6 +234,8 @@ const [loading, setLoading] = useState(false);
                       <option> Evening</option>
                     </select>
                   </div>
+
+                  <BranchSelectField value={branchId} onChange={setBranchId} />
                 </div>
                 <div className="mt-4.5">
                   <button

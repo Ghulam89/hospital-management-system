@@ -5,12 +5,13 @@ import { useState } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 import { Base_url } from '../../../utils/Base_url';
-import { mergeSuperadminBranchIdForCreate } from '../../../utils/branchScope';
+import BranchSelectField from '../../../components/BranchSelectField';
 
 const AddNurse = () => {
 
   const [gender, setGender] = useState('');
 const [loading, setLoading] = useState(false);
+const [branchId, setBranchId] = useState('');
   
 
   const handleGenderChange = (gender) => {
@@ -58,11 +59,14 @@ const [loading, setLoading] = useState(false);
       else if(!state.shift){
         toast("Must enter shift!") 
       }
+      else if(!branchId){
+        toast("Please select branch") 
+      }
       
       else {
 
         setLoading(true)
-        const params = mergeSuperadminBranchIdForCreate({
+        const params = {
           name: state.name,
           gender: gender,
           phone: state.phone,
@@ -70,8 +74,9 @@ const [loading, setLoading] = useState(false);
           password: state.password,
           shift: state.shift,
           role: 'nurse',
+          branchId,
           tabs: [],
-        });
+        };
         axios.post(`${Base_url}/apis/user/create`, params).then((res)=>{
 
           console.log(res.data);
@@ -226,7 +231,7 @@ const [loading, setLoading] = useState(false);
                     </select>
                   </div>
 
-               
+                  <BranchSelectField value={branchId} onChange={setBranchId} />
                 </div>
 
                 <div className="mt-4.5">

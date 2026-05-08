@@ -6,12 +6,14 @@ import React, { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 import { Base_url } from '../../../utils/Base_url';
+import BranchSelectField from '../../../components/BranchSelectField';
 
 const UpdateDoctor = () => {
   const { id } = useParams();
   const [activeTab, setActiveTab] = useState('Biography Data');
   const [gender, setGender] = useState('');
   const [departmentId, setDepartmentId] = useState('');
+  const [branchId, setBranchId] = useState('');
   const [allDepartment, setAllDepartment] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -132,6 +134,11 @@ const UpdateDoctor = () => {
 
       // Set department
       setDepartmentId(doctorData.departmentId || '');
+
+      // Set branch
+      const existingBranch =
+        doctorData?.branchId?._id || doctorData?.branchId || '';
+      if (existingBranch) setBranchId(String(existingBranch));
 
       // Set qualifications
       if (doctorData.qualification && doctorData.qualification.length > 0) {
@@ -447,6 +454,8 @@ const UpdateDoctor = () => {
       sundayDuration: availability.sundayDuration,
     };
 
+    if (branchId) (params as any).branchId = branchId;
+
     try {
       setIsSubmitting(true);
       const res = await axios.put(`${Base_url}/apis/user/update/${id}`, params);
@@ -655,6 +664,8 @@ const UpdateDoctor = () => {
                         ))}
                       </select>
                     </div>
+
+                    <BranchSelectField value={branchId} onChange={setBranchId} />
 
                     {/* Professional Information */}
                     <div>

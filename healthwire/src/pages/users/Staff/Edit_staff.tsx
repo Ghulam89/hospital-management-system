@@ -7,11 +7,13 @@ import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 import { Base_url } from '../../../utils/Base_url';
+import BranchSelectField from '../../../components/BranchSelectField';
 
 const Edit_accountant = () => {
   const { id } = useParams();
   const [gender, setGender] = useState('');
   const [user, setUser] = useState(null);
+  const [branchId, setBranchId] = useState('');
   const [state, setState] = useState({
     name: '',
     phone: '',
@@ -29,6 +31,8 @@ const Edit_accountant = () => {
         if (u && ['Male', 'Female', 'Other'].includes(u.gender)) {
           setGender(u.gender);
         }
+        const existingBranch = u?.branchId?._id || u?.branchId || '';
+        if (existingBranch) setBranchId(String(existingBranch));
         setState({
           name: u?.name || '',
           phone: u?.phone || '',
@@ -67,6 +71,7 @@ const Edit_accountant = () => {
       role: String(user?.role || 'staff').trim(),
       tabs: Array.isArray(user?.tabs) ? user.tabs : [],
     };
+    if (branchId) params.branchId = branchId;
 
     const password = String(state.password || '').trim();
     if (password) params.password = password;
@@ -98,7 +103,7 @@ const Edit_accountant = () => {
   }
   return (
     <>
-      <Breadcrumb pageName="Add Accountant" />
+      <Breadcrumb pageName="Edit Staff" />
 
       <div className="">
         <div className="flex flex-col gap-9">
@@ -106,7 +111,7 @@ const Edit_accountant = () => {
           <div className="rounded-sm border border-stroke bg-white shadow-default dark:border-strokedark dark:bg-boxdark">
             <div className="border-b border-stroke py-4 px-6.5 dark:border-strokedark">
               <h3 className="font-medium text-black dark:text-white">
-                Add Accountant
+                Edit Staff
               </h3>
             </div>
             <form onSubmit={SubmitFun} action="#">
@@ -225,6 +230,8 @@ const Edit_accountant = () => {
                       defaultValue={user?.shift}
                     />
                   </div>
+
+                  <BranchSelectField value={branchId} onChange={setBranchId} />
                 </div>
                 <div className="mt-4.5">
                   <button

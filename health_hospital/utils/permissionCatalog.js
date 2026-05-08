@@ -66,6 +66,27 @@ module.exports = [
     description: 'Open pharmacy sales and stock reports.',
   },
   {
+    key: 'pharmPosChangeQuantity',
+    label: 'POS: change quantities on bills',
+    group: 'Pharmacy',
+    description:
+      'When editing pharmacy POS invoices, allow changing line quantities and return quantities (otherwise header/note-only style edits).',
+  },
+  {
+    key: 'pharmPosBackdateBills',
+    label: 'POS: backdate bills',
+    group: 'Pharmacy',
+    description:
+      'Create or edit pharmacy POS with invoice/payment date before today (calendar day in server local time).',
+  },
+  {
+    key: 'invoiceBackdate',
+    label: 'Backdate patient invoices',
+    group: 'Finance & billing',
+    description:
+      'Set patient invoice date or payment dates before today (calendar day in server local time).',
+  },
+  {
     key: 'accountant',
     label: 'Accountant',
     group: 'Finance & billing',

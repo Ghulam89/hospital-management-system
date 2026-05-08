@@ -1,22 +1,17 @@
 import { useNavigate, useParams } from 'react-router-dom';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 import { Base_url } from '../../../utils/Base_url';
-import { accountantAssignableRoles } from '../utils/assignableRoles';
-
-const authHeaders = () => {
-  const t = localStorage.getItem('userToken') || '';
-  return t ? { Authorization: `Bearer ${t}` } : {};
-};
+import BranchSelectField from '../../../components/BranchSelectField';
 
 const Edit_accountant = () => {
   const { id } = useParams();
   const [gender, setGender] = useState('');
   const [user, setUser] = useState(null);
-  const [assignableRoles, setAssignableRoles] = useState<{ key: string; name?: string }[]>([]);
+  const [branchId, setBranchId] = useState('');
   const [roleKey, setRoleKey] = useState('accountant');
   const [state, setState] = useState({
     name: '',
@@ -25,25 +20,6 @@ const Edit_accountant = () => {
     password: '',
     shift: '',
   });
-
-  const roleOptions = useMemo(() => {
-    const ur = user?.role != null ? String(user.role).trim().toLowerCase() : '';
-    const list = [...assignableRoles];
-    if (ur && !list.some((x) => x.key === ur)) list.push({ key: ur, name: `${ur} (current)` });
-    return list;
-  }, [assignableRoles, user?.role]);
-
-  useEffect(() => {
-    axios
-      .get(`${Base_url}/apis/role/get`, { headers: authHeaders() })
-      .then((res) => {
-        const roleRows = Array.isArray(res.data?.data) ? res.data.data : [];
-        setAssignableRoles(accountantAssignableRoles(roleRows));
-      })
-      .catch(() => {
-        setAssignableRoles([{ key: 'accountant', name: 'Accountant (legacy)' }]);
-      });
-  }, []);
 
   useEffect(() => {
     axios
@@ -56,6 +32,8 @@ const Edit_accountant = () => {
         if (u && ['Male', 'Female', 'Other'].includes(u.gender)) {
           setGender(u.gender);
         }
+        const existingBranch = u?.branchId?._id || u?.branchId || '';
+        if (existingBranch) setBranchId(String(existingBranch));
         setState({
           name: u?.name || '',
           phone: u?.phone || '',
@@ -94,6 +72,7 @@ const Edit_accountant = () => {
       role: roleKey.trim().toLowerCase(),
       tabs: Array.isArray(user?.tabs) ? user.tabs : [],
     };
+    if (branchId) params.branchId = branchId;
 
     const password = String(state.password || '').trim();
     if (password) params.password = password;
@@ -125,7 +104,7 @@ const Edit_accountant = () => {
   }
   return (
     <>
-      <Breadcrumb pageName="Add Accountant" />
+      <Breadcrumb pageName="Edit Accountant" />
 
       <div className="">
         <div className="flex flex-col gap-9">
@@ -133,7 +112,7 @@ const Edit_accountant = () => {
           <div className="rounded-sm border border-stroke bg-white shadow-default dark:border-strokedark dark:bg-boxdark">
             <div className="border-b border-stroke py-4 px-6.5 dark:border-strokedark">
               <h3 className="font-medium text-black dark:text-white">
-                Add Accountant
+                Edit Accountant
               </h3>
             </div>
             <form onSubmit={SubmitFun} action="#">
@@ -241,26 +220,6 @@ const Edit_accountant = () => {
 
                   <div className="w-full">
                     <label className="mb-2.5 block text-black dark:text-white">
-                      Permission role key
-                    </label>
-                    <select
-                      value={roleKey}
-                      onChange={(e) => setRoleKey(e.target.value)}
-                      className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
-                    >
-                      {roleOptions.map((r) => (
-                        <option key={r.key} value={r.key}>
-                          {(r.name && r.name.trim()) || r.key}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="mt-1 text-xs text-bodydark2 dark:text-meta-10">
-                      Must match Roles & Permissions (e.g. accountant_access) so sidebar uses that role&apos;s matrix.
-                    </p>
-                  </div>
-
-                  <div className="w-full">
-                    <label className="mb-2.5 block text-black dark:text-white">
                       Shift
                     </label>
                     <input
@@ -272,6 +231,8 @@ const Edit_accountant = () => {
                       defaultValue={user?.shift}
                     />
                   </div>
+
+                  <BranchSelectField value={branchId} onChange={setBranchId} />
                 </div>
                 <div className="mt-4.5">
                   <button

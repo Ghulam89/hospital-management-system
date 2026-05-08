@@ -5,11 +5,12 @@ import { useState, type ChangeEvent, type FormEvent } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 import { Base_url } from '../../../utils/Base_url';
-import { mergeSuperadminBranchIdForCreate } from '../../../utils/branchScope';
+import BranchSelectField from '../../../components/BranchSelectField';
 
 const AddQualityControlManager = () => {
   const [gender, setGender] = useState('');
   const [loading, setLoading] = useState(false);
+  const [branchId, setBranchId] = useState('');
 
   const handleGenderChange = (g: string) => {
     setGender(g);
@@ -44,9 +45,11 @@ const AddQualityControlManager = () => {
       toast('Must enter password!');
     } else if (!state.shift) {
       toast('Must enter shift!');
+    } else if (!branchId) {
+      toast('Please select branch');
     } else {
       setLoading(true);
-      const params = mergeSuperadminBranchIdForCreate({
+      const params = {
         name: state.name,
         gender,
         phone: state.phone,
@@ -54,8 +57,9 @@ const AddQualityControlManager = () => {
         password: state.password,
         shift: state.shift,
         role: 'quality_control_manager',
+        branchId,
         tabs: [],
-      });
+      };
       axios
         .post(`${Base_url}/apis/user/create`, params)
         .then((res) => {
@@ -181,6 +185,8 @@ const AddQualityControlManager = () => {
                       <option>Evening</option>
                     </select>
                   </div>
+
+                  <BranchSelectField value={branchId} onChange={setBranchId} />
                 </div>
 
                 <div className="mt-4.5">

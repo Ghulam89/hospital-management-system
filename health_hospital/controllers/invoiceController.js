@@ -1,12 +1,30 @@
 const { Types } = require("mongoose");
 const Invoice = require("../models/invoiceModel");
 const moment = require("moment");
+const { hasCapabilityKey } = require("../middleware/auth");
+const { isBeforeStartOfTodayLocal } = require("../utils/posClosingAndBackdate");
 const {
   assignBranchIdForCreate,
   mergeBranchScopedQuery,
   branchDocumentVisible,
   applyStrictBranchListFilter,
 } = require("../utils/branchScope");
+
+function assertInvoiceBackdatesAllowed(req, res, dates) {
+  if (!req.user) return true;
+  const list = Array.isArray(dates) ? dates : [];
+  for (const dt of list) {
+    if (dt == null || dt === "") continue;
+    if (isBeforeStartOfTodayLocal(dt) && !hasCapabilityKey(req.user, "invoiceBackdate")) {
+      res.status(403).json({
+        status: "error",
+        message: "Backdating patient invoices requires the 'Backdate patient invoices' permission.",
+      });
+      return false;
+    }
+  }
+  return true;
+}
 
 // 1. Create invoice
 const addinvoice = async (req, res) => {
@@ -15,6 +33,16 @@ const addinvoice = async (req, res) => {
 
 
     const body = assignBranchIdForCreate(req, { ...req.body });
+    const datesToCheck = [];
+    if (body.invoiceDate) datesToCheck.push(body.invoiceDate);
+    if (Array.isArray(body.payment)) {
+      for (const p of body.payment) {
+        if (p && p.payDate) datesToCheck.push(p.payDate);
+      }
+    }
+    if (!assertInvoiceBackdatesAllowed(req, res, datesToCheck)) {
+      return;
+    }
     const data = await Invoice.create(body);
     return res.status(200).json({ status: "ok", data: data });
 
@@ -631,6 +659,19 @@ const updateinvoice = async (req, res) => {
       return res.status(404).json({ status: "fail", message: "Invoice not found" });
     }
 
+    const datesToCheck = [];
+    if (req.body.invoiceDate != null && req.body.invoiceDate !== "") {
+      datesToCheck.push(req.body.invoiceDate);
+    }
+    if (Array.isArray(req.body.payment)) {
+      for (const p of req.body.payment) {
+        if (p && p.payDate) datesToCheck.push(p.payDate);
+      }
+    }
+    if (!assertInvoiceBackdatesAllowed(req, res, datesToCheck)) {
+      return;
+    }
+
     const data = await Invoice.findByIdAndUpdate(
       id,
       { ...req.body },
@@ -666,6 +707,11 @@ const addInvoicePayments = async (req, res) => {
 
     if (cleanedPayments.length === 0) {
       return res.status(400).json({ status: "error", message: "No valid payments provided" });
+    }
+
+    const payDates = cleanedPayments.map((p) => p.payDate).filter(Boolean);
+    if (!assertInvoiceBackdatesAllowed(req, res, payDates)) {
+      return;
     }
 
     invoice.payment = Array.isArray(invoice.payment) ? invoice.payment : [];
@@ -711,6 +757,11 @@ const addInvoiceRefund = async (req, res) => {
       return res.status(400).json({ status: "error", message: "No valid refunds provided" });
     }
 
+    const refundDates = cleanedRefunds.map((p) => p.payDate).filter(Boolean);
+    if (!assertInvoiceBackdatesAllowed(req, res, refundDates)) {
+      return;
+    }
+
     invoice.payment = Array.isArray(invoice.payment) ? invoice.payment : [];
     invoice.payment.push(...cleanedRefunds);
 
@@ -743,6 +794,11 @@ const addProcedureRefund = async (req, res) => {
     const invoice = await Invoice.findById(id);
     if (!invoice || !(await branchDocumentVisible(req, invoice.branchId))) {
       return res.status(404).json({ status: "error", message: "Invoice not found" });
+    }
+
+    const refundPayDate = payDate ? new Date(payDate) : new Date();
+    if (!assertInvoiceBackdatesAllowed(req, res, [refundPayDate])) {
+      return;
     }
 
     const items = Array.isArray(invoice.item) ? invoice.item : [];
@@ -825,7 +881,7 @@ const addProcedureRefund = async (req, res) => {
     // Record refund as negative payment with a clear note
     const paymentEntry = {
       method: method || "Refund",
-      payDate: payDate ? new Date(payDate) : new Date(),
+      payDate: refundPayDate,
       paid: -Math.abs(applyAmount),
       reference: reference || "",
       chequeNo: "",

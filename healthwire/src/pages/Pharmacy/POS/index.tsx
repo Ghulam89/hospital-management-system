@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import axios from 'axios';
 import { Base_url } from '../../../utils/Base_url';
 import { toast } from 'react-toastify';
@@ -6,6 +6,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 import { AsyncPaginate, LoadOptions } from 'react-select-async-paginate';
 import Modal from '../../../components/modal';
+import { getStoredUserForPermissions, hasAnyPermission } from '../../../utils/permissions';
 
 // Enhanced type definitions
 // Custom option types for AsyncPaginate
@@ -100,6 +101,12 @@ type PaymentInstallment = {
   reference: string;
 };
 
+function localTodayYmd(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 export default function PharmacyPOS() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -127,6 +134,12 @@ export default function PharmacyPOS() {
     } catch {}
   }, [allowNegativeInventory]);
   const [editingInvoiceNumber, setEditingInvoiceNumber] = useState<string>('');
+
+  const permUser = useMemo(() => getStoredUserForPermissions(), []);
+  const canPosChangeQuantity = hasAnyPermission(permUser, 'pharmPosChangeQuantity');
+  const canPosBackdateBills = hasAnyPermission(permUser, 'pharmPosBackdateBills');
+  const lockQtyOnEdit = Boolean(id) && !canPosChangeQuantity;
+  const paymentDateMin = !canPosBackdateBills && !id ? localTodayYmd() : undefined;
 
   const [posItems, setPosItems] = useState<PosItem[]>([
     {
@@ -1208,6 +1221,11 @@ export default function PharmacyPOS() {
         <div className="mb-4 bg-yellow-50 border border-yellow-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between">
           <div className="text-sm font-semibold text-yellow-800">
             Editing existing invoice
+            {lockQtyOnEdit ? (
+              <span className="block mt-1 font-normal text-yellow-900">
+                Line quantities are read-only without the &quot;POS: change quantities on bills&quot; permission.
+              </span>
+            ) : null}
           </div>
           <div className="mt-2 sm:mt-0 text-xs text-yellow-700">
             Items: <span className="font-bold">{posItems.length}</span> • Payments: <span className="font-bold">{paymentInstallments.length}</span>
@@ -1645,7 +1663,7 @@ export default function PharmacyPOS() {
                       }
                       onWheel={(e) => e.currentTarget.blur()}
                       min="1"
-                      disabled={item.isReturn}
+                      disabled={item.isReturn || lockQtyOnEdit}
                       required
                     />
                         {selected && (
@@ -1672,6 +1690,7 @@ export default function PharmacyPOS() {
                         min="0"
                         max={item.quantity}
                         placeholder="Return Qty"
+                        disabled={lockQtyOnEdit}
                       />
                     )}
                     {item.isReturn && (() => {
@@ -1716,7 +1735,7 @@ export default function PharmacyPOS() {
                       }
                       onWheel={(e) => e.currentTarget.blur()}
                       min="1"
-                      disabled={item.isReturn || !item.pharmItemId || item.conversionUnit <= 1}
+                      disabled={item.isReturn || !item.pharmItemId || item.conversionUnit <= 1 || lockQtyOnEdit}
                       title={`Conversion: 1 ${item.unit} = ${item.conversionUnit} units`}
                     />
                         </>
@@ -1847,6 +1866,7 @@ export default function PharmacyPOS() {
                       type="date"
                       className="w-full rounded-lg border border-gray-300 bg-white py-2.5 px-4 text-sm text-gray-700 outline-none transition focus:border-green-500 focus:ring-2 focus:ring-green-200"
                       value={item.date}
+                      min={paymentDateMin}
                       onChange={(e) => updatePaymentInstallment(item.id, 'date', e.target.value)}
                       required
                     />

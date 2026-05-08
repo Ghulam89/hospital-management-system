@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 import { Base_url } from '../../../utils/Base_url';
+import BranchSelectField from '../../../components/BranchSelectField';
 
 const AddDoctor = () => {
   // Form state management
@@ -14,6 +15,7 @@ const AddDoctor = () => {
   const [departmentId, setDepartmentId] = useState('');
   const [allDepartment, setAllDepartment] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [branchId, setBranchId] = useState('');
   // Main form state
   const [state, setState] = useState({
     name: "",
@@ -240,6 +242,9 @@ const AddDoctor = () => {
     } else if (!state.shift) {
       toast.error("Must select shift!");
       return;
+    } else if (!branchId) {
+      toast.error("Please select branch");
+      return;
     }
 
     // Validate availability times
@@ -276,6 +281,7 @@ const AddDoctor = () => {
       shift: state.shift,
       departmentId: departmentId,
       role: 'doctor',
+      branchId,
       tabs: [],
       consultationFee: state.consultationFee,
     followUpCharges: state.followUpCharges,
@@ -488,6 +494,8 @@ const AddDoctor = () => {
                         ))}
                       </select>
                     </div>
+
+                    <BranchSelectField value={branchId} onChange={setBranchId} />
 
                     {/* Professional Information */}
                     <div>

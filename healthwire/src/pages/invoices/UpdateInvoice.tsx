@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 
 import axios from 'axios';
 import { Base_url } from '../../utils/Base_url';
@@ -8,6 +8,7 @@ import { AsyncPaginate, LoadOptions } from 'react-select-async-paginate';
 import { BsFillFileEarmarkPdfFill } from 'react-icons/bs';
 import { RiRefund2Line } from 'react-icons/ri';
 import AddProcedureExpense from './AddProcedureExpense';
+import { getStoredUserForPermissions, hasAnyPermission } from '../../utils/permissions';
 
 type Procedure = {
   _id: string;
@@ -80,6 +81,36 @@ function asArray<T>(v: unknown): T[] {
   return Array.isArray(v) ? (v as T[]) : [];
 }
 
+/** `doctorShares` from GET invoice often has populated `doctorId: { _id, name }` — normalize for checks and save */
+function doctorIdFromShareRow(s: unknown): string {
+  if (s == null || typeof s !== 'object') return '';
+  const o = s as Record<string, unknown>;
+  return refId(o.doctorId ?? o.userId ?? o.doctor);
+}
+
+function shareRowHasValidDoctorId(s: unknown): boolean {
+  const id = doctorIdFromShareRow(s);
+  return !!id && /^[0-9a-fA-F]{24}$/i.test(id);
+}
+
+/**
+ * Prefer row id so two lines with the same procedure each keep their own costing bundle.
+ * Fallback by procedureId only when exactly one row uses that procedure (legacy / odd data).
+ */
+function expenseBundleForProcedureRow(
+  expenses: any[],
+  row: { id: number; procedureId: string },
+  allRows: { id: number; procedureId: string }[],
+): any {
+  const byRow = expenses.find((b) => b != null && b.procedureRowId === row.id);
+  if (byRow) return byRow;
+  const pid = String(row.procedureId || '').trim();
+  if (!pid) return undefined;
+  const sameProcCount = allRows.filter((p) => String(p.procedureId || '').trim() === pid).length;
+  if (sameProcCount !== 1) return undefined;
+  return expenses.find((b) => b != null && String(b.procedureId || '').trim() === pid);
+}
+
 function formatInvoicePaymentDate(payDate: unknown): string {
   const pad = (n: number) => String(n).padStart(2, '0');
   if (payDate == null || payDate === '') {
@@ -150,6 +181,12 @@ type InvoiceData = {
   status: string;
 };
 
+function localTodayYmd(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 export default function InvoiceUpdate() {
   const { id, patientId } = useParams();
   const navigate = useNavigate();
@@ -168,6 +205,10 @@ export default function InvoiceUpdate() {
   const [isPaymentComplete, setIsPaymentComplete] = useState(false);
   const [paymentStatus, setPaymentStatus] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const permUser = useMemo(() => getStoredUserForPermissions(), []);
+  const canInvoiceBackdate = hasAnyPermission(permUser, 'invoiceBackdate');
+  const invoiceDateMin = canInvoiceBackdate ? undefined : localTodayYmd();
   
   // Refund modal state
   const [refundModalOpen, setRefundModalOpen] = useState(false);
@@ -653,11 +694,8 @@ export default function InvoiceUpdate() {
       return [...prev, payload];
     });
     if (procedureRowId != null) {
-      const firstDoc = asArray(bundle?.doctorShares).find(
-        (s: any) =>
-          s.doctorId && /^[0-9a-fA-F]{24}$/.test(String(s.doctorId).trim()),
-      );
-      const docId = firstDoc?.doctorId ? String(firstDoc.doctorId).trim() : '';
+      const firstDoc = asArray(bundle?.doctorShares).find((s: unknown) => shareRowHasValidDoctorId(s));
+      const docId = doctorIdFromShareRow(firstDoc);
       if (docId) {
         setProcedures((prev) =>
           prev.map((p) => {
@@ -674,8 +712,9 @@ export default function InvoiceUpdate() {
   };
 
   const addProcedure = () => {
+    const nextId = procedures.reduce((max, p) => (p.id > max ? p.id : max), 0) + 1;
     setProcedures([...procedures, {
-      id: procedures.length + 1,
+      id: nextId,
       procedureId: '',
       procedure: '',
       description: '',
@@ -791,6 +830,7 @@ export default function InvoiceUpdate() {
 
   const removeProcedure = (id: number) => {
     setProcedures(procedures.filter(item => item.id !== id));
+    setLocalExpenses((prev) => prev.filter((b) => b?.procedureRowId !== id));
   };
 
   const openProcedureRefundModal = (procedure: ProcedureItem) => {
@@ -1056,7 +1096,7 @@ export default function InvoiceUpdate() {
       .reduce((sum, expense) => {
         const shares = asArray<{ share?: number; shareType?: string }>(expense.doctorShares);
         const sharesTotal = shares.reduce((s, share: any) => {
-          const val = Number(share.share) || 0;
+          const val = Number(share.share ?? share.shareValue) || 0;
           const amt = share.shareType === 'percentage' ? base * (val / 100) : val;
           return s + amt;
         }, 0);
@@ -1088,29 +1128,29 @@ export default function InvoiceUpdate() {
         setIsSubmitting(false);
         return;
       }
-      const costing = localExpenses.find(
-        (b) => b.procedureRowId === item.id || b.procedureId === item.procedureId,
+      const costing = expenseBundleForProcedureRow(localExpenses, item, procedures);
+      const hasDoctorInCosting = asArray(costing?.doctorShares).some((s: unknown) =>
+        shareRowHasValidDoctorId(s),
       );
-      const hasDoctor = asArray(costing?.doctorShares).some(
-        (s: any) => s.doctorId && /^[0-9a-fA-F]{24}$/i.test(String(s.doctorId)),
-      );
-      if (!hasDoctor) {
+      // Legacy invoices stored the doctor on `item.performedBy` only — accept that too,
+      // otherwise users can't re-save existing invoices without re-keying every row.
+      const performedById = refId(item.performedBy);
+      const hasPerformedBy = !!performedById && /^[0-9a-fA-F]{24}$/i.test(performedById);
+      if (!hasDoctorInCosting && !hasPerformedBy) {
         toast.error(
           `Procedure "${item.procedure || item.id}": open costing (document icon) and add at least one doctor`,
         );
         setIsSubmitting(false);
         return;
       }
+      // Assisted By / Reception are optional on update — staff can stay on the line only or be empty.
     }
 
     const firstProc = procedures[0];
-    const firstBundle =
-      localExpenses.find((b) => b.procedureRowId === firstProc?.id || b.procedureId === firstProc?.procedureId) ||
-      {};
+    const firstBundle = expenseBundleForProcedureRow(localExpenses, firstProc, procedures) || {};
     const doctorId =
-      asArray(firstBundle.doctorShares).find(
-        (s: any) => s.doctorId && /^[0-9a-fA-F]{24}$/i.test(String(s.doctorId)),
-      )?.doctorId || procedures[0]?.performedBy;
+      doctorIdFromShareRow(asArray(firstBundle.doctorShares).find((s: unknown) => shareRowHasValidDoctorId(s))) ||
+      refId(firstProc?.performedBy);
     if (!doctorId || String(doctorId).trim() === '') {
       toast.error('Add at least one doctor in costing for the first procedure');
       setIsSubmitting(false);
@@ -1119,7 +1159,6 @@ export default function InvoiceUpdate() {
 
     const billingTotal = calculateGrandTotal();
     const paidSum = calculateTotalPaid();
-    const undatedAdv = undatedProcedureAdvance();
     const rawDue = billingTotal - paidSum;
 
     const shareBaseForSave = calculateDoctorShareBase();
@@ -1138,30 +1177,29 @@ export default function InvoiceUpdate() {
       doctorId: doctorId,
       ...(invoiceEditDateIso ? { invoiceDate: invoiceEditDateIso } : {}),
       item: procedures.map((item) => {
-        const bundle =
-          localExpenses.find((b) => b.procedureRowId === item.id || b.procedureId === item.procedureId) || {};
+        const bundle = expenseBundleForProcedureRow(localExpenses, item, procedures) || {};
         const shownExpenses = asArray(bundle.expenses);
         const shares = asArray(bundle.doctorShares)
           .filter((share: any) => {
-            const id = String(share.doctorId || '');
-            const isHex24 = /^[0-9a-fA-F]{24}$/.test(id);
-            const val = Number(share.share);
-            return isHex24 && Number.isFinite(val) && val > 0;
+            const id = doctorIdFromShareRow(share);
+            const val = Number(share.share ?? share.shareValue);
+            return /^[0-9a-fA-F]{24}$/i.test(id) && Number.isFinite(val) && val > 0;
           })
           .map((share: any) => {
-            const val = Number(share.share) || 0;
+            const id = doctorIdFromShareRow(share);
+            const val = Number(share.share ?? share.shareValue) || 0;
             const amount = share.shareType === 'percentage' ? shareBaseForSave * (val / 100) : val;
             return {
-              doctorId: String(share.doctorId),
+              doctorId: id,
               shareType: share.shareType,
               shareValue: val,
               amount,
             };
           });
         const primaryDoc =
-          asArray(bundle.doctorShares).find(
-            (s: any) => s.doctorId && /^[0-9a-fA-F]{24}$/i.test(String(s.doctorId)),
-          )?.doctorId || item.performedBy;
+          doctorIdFromShareRow(
+            asArray(bundle.doctorShares).find((s: unknown) => shareRowHasValidDoctorId(s)),
+          ) || refId(item.performedBy);
         return {
           procedureId: item.procedureId,
           description:
@@ -1176,7 +1214,7 @@ export default function InvoiceUpdate() {
           discountType: item.discountType,
           tax: item.tax === 'value' ? 0 : 0,
           total: item.amount - (item.discountType === 0 ? item.discount : (item.amount * (item.discount / 100))),
-          performedBy: primaryDoc,
+          performedBy: refId(primaryDoc),
           assistedBy: asArray<{ userId?: string }>(bundle.assistedBy)
             .map((x) => x?.userId)
             .filter(Boolean),
@@ -1200,7 +1238,10 @@ export default function InvoiceUpdate() {
     const invoiceData: any = { ...invoiceDataBase };
     {
       invoiceData.duePay = rawDue > 0 ? rawDue : 0;
-      invoiceData.advancePay = undatedAdv + (rawDue < 0 ? Math.abs(rawDue) : 0);
+      // Advance = sirf wahi paid amount jo billed (dated procedures) se zyada hai.
+      // Pehle `undatedAdv` ko bhi add kiya ja raha tha jo same paisa double count karta tha
+      // (e.g. 50k paid for an undated procedure → 50k + 50k = 100k advance shown). Fixed.
+      invoiceData.advancePay = rawDue < 0 ? Math.abs(rawDue) : 0;
       invoiceData.totalPay = paidSum;
       invoiceData.status = rawDue < 0 ? 'credit' : rawDue === 0 ? 'completed' : 'pending';
     }
@@ -1295,6 +1336,7 @@ export default function InvoiceUpdate() {
               type="date"
               className="rounded border-[1.5px] border-stroke bg-transparent py-2 px-3 w-56 text-black outline-none transition focus:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
               value={invoiceEditDate}
+              min={invoiceDateMin}
               onChange={(e) => setInvoiceEditDate(e.target.value)}
             />
           </div>
@@ -1564,7 +1606,8 @@ export default function InvoiceUpdate() {
                                         <RiRefund2Line size={20} />
                                       </button>
                                       <button className={`text-primary ${!item.procedureId ? 'opacity-50 cursor-not-allowed' : ''}`} disabled={!item.procedureId} onClick={() => { 
-                                        const existing = localExpenses.find(e => e.procedureRowId === item.id || e.procedureId === item.procedureId) || null;
+                                        const existing =
+                                          expenseBundleForProcedureRow(localExpenses, item, procedures) || null;
                                         setSelectedProcedureRowId(item.id);
                                         setEditingExpense(existing);
                                         setIsProcedureExpenseModalOpen(true); 
@@ -1651,6 +1694,7 @@ export default function InvoiceUpdate() {
                         type="date"
                         className="w-full rounded border-[1.5px] border-stroke bg-transparent py-2 px-3 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                         value={item.date}
+                        min={invoiceDateMin}
                         onChange={(e) => updatePaymentInstallment(item.id, 'date', e.target.value)}
                       />
                     </td>
@@ -1851,6 +1895,7 @@ export default function InvoiceUpdate() {
                       type="date"
                       className="w-full rounded border border-stroke bg-transparent px-3 py-2 text-black outline-none transition focus:border-primary dark:border-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                       value={refundForm.payDate}
+                      min={invoiceDateMin}
                       onChange={(e) => setRefundForm({ ...refundForm, payDate: e.target.value })}
                     />
                   </div>

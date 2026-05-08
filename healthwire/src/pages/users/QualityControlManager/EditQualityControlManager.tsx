@@ -5,11 +5,13 @@ import { useEffect, useState, type ChangeEvent, type FormEvent } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 import { Base_url } from '../../../utils/Base_url';
+import BranchSelectField from '../../../components/BranchSelectField';
 
 const EditQualityControlManager = () => {
   const { id } = useParams();
   const [gender, setGender] = useState('');
   const [user, setUser] = useState<any>(null);
+  const [branchId, setBranchId] = useState('');
   const [state, setState] = useState({
     name: '',
     phone: '',
@@ -28,6 +30,8 @@ const EditQualityControlManager = () => {
         if (u && ['Male', 'Female', 'Other'].includes(u.gender)) {
           setGender(u.gender);
         }
+        const existingBranch = u?.branchId?._id || u?.branchId || '';
+        if (existingBranch) setBranchId(String(existingBranch));
         setState({
           name: u?.name || '',
           phone: u?.phone || '',
@@ -190,6 +194,8 @@ const EditQualityControlManager = () => {
                       defaultValue={user?.shift}
                     />
                   </div>
+
+                  <BranchSelectField value={branchId} onChange={setBranchId} />
                 </div>
                 <div className="mt-4.5">
                   <button type="submit" className="flex justify-center rounded bg-primary p-3 font-medium text-gray">

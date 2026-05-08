@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 
 import axios from 'axios';
 import { Base_url } from '../../utils/Base_url';
+import { localCalendarYmd } from '../../utils/dateLocal';
 import { toast } from 'react-toastify';
 import { useNavigate } from 'react-router-dom';
 import { BsFillFileEarmarkPdfFill } from 'react-icons/bs';
@@ -70,9 +71,7 @@ type ExpenseCategory = {
 };
 
 export default function InvoiceCreation() {
-    const [invoiceDate, setInvoiceDate] = useState<string>(
-    new Date().toISOString().split('T')[0]
-  );
+    const [invoiceDate, setInvoiceDate] = useState<string>(() => localCalendarYmd());
   const [dateFormat, setDateFormat] = useState<string>('YYYY-MM-DD'); // Default format
 
   const [patientInfo, setPatientInfo] = useState<Patient | null>(null);
@@ -87,33 +86,36 @@ export default function InvoiceCreation() {
    const navigate = useNavigate()
    const [isSubmitting, setIsSubmitting] = useState(false);
    
-  const [procedures, setProcedures] = useState<ProcedureItem[]>([
-    {
-      id: 1,
-      procedureId: '',
-      procedure: '',
-      description: '',
-      procedureDate: '',
-      rate: 0,
-      quantity: 1,
-      amount: 0,
-      discount: 0,
-      discountType: 0,
-      tax: 0,
-      deductDiscount: 'Hospital & Doctor',
-      performedBy: '',
-      doctorAmount: 0,
-      hospitalAmount: 0,
-      cost: 0, // Initialize cost
-    },
-  ]);
+  const [procedures, setProcedures] = useState<ProcedureItem[]>(() => {
+    const d = localCalendarYmd();
+    return [
+      {
+        id: 1,
+        procedureId: '',
+        procedure: '',
+        description: '',
+        procedureDate: d,
+        rate: 0,
+        quantity: 1,
+        amount: 0,
+        discount: 0,
+        discountType: 0,
+        tax: 0,
+        deductDiscount: 'Hospital & Doctor',
+        performedBy: '',
+        doctorAmount: 0,
+        hospitalAmount: 0,
+        cost: 0, // Initialize cost
+      },
+    ];
+  });
 
   const [paymentInstallments, setPaymentInstallments] = useState<
     PaymentInstallment[]
   >([
     {
       id: 1,
-      date: new Date().toISOString().split('T')[0],
+      date: localCalendarYmd(),
       method: 'Cash',
       amount: 0,
       reference: '',
@@ -334,7 +336,7 @@ export default function InvoiceCreation() {
         procedureId: '',
         procedure: '',
         description: '',
-        procedureDate: '',
+        procedureDate: invoiceDate,
         rate: 0,
         quantity: 1,
         amount: 0,
@@ -548,7 +550,7 @@ export default function InvoiceCreation() {
       ...paymentInstallments,
       {
         id: paymentInstallments.length + 1,
-        date: new Date().toISOString().split('T')[0],
+        date: localCalendarYmd(),
         method: 'Cash',
         amount: 0,
         reference: '',
@@ -676,6 +678,28 @@ export default function InvoiceCreation() {
         setIsSubmitting(false);
         return;
       }
+      // Staff (Assisted By) compulsory
+      const hasAssisted = (costing?.assistedBy || []).some(
+        (s: any) => s?.userId && /^[0-9a-fA-F]{24}$/i.test(String(s.userId)),
+      );
+      if (!hasAssisted) {
+        toast.error(
+          `Procedure "${item.procedure || item.id}": open costing (document icon) and add at least one staff (Assisted By)`,
+        );
+        setIsSubmitting(false);
+        return;
+      }
+      // Reception staff compulsory
+      const hasReception = (costing?.receptionStaff || []).some(
+        (s: any) => s?.userId && /^[0-9a-fA-F]{24}$/i.test(String(s.userId)),
+      );
+      if (!hasReception) {
+        toast.error(
+          `Procedure "${item.procedure || item.id}": open costing (document icon) and add at least one Reception staff`,
+        );
+        setIsSubmitting(false);
+        return;
+      }
       // Validate discount doesn't exceed amount
       const maxDiscount = item.discountType === 0 ? item.amount : 100;
       if (item.discount > maxDiscount) {
@@ -699,7 +723,6 @@ export default function InvoiceCreation() {
 
     const billingTotal = calculateGrandTotal();
     const paidSum = calculateTotalPaid();
-    const undatedAdv = undatedProcedureAdvance();
     const rawDue = billingTotal - paidSum;
     
     // Require at least one payment installment
@@ -787,7 +810,10 @@ export default function InvoiceCreation() {
        invoiceDate: invoiceDate,
       totalBill: billingTotal,
       duePay: rawDue > 0 ? rawDue : 0,
-      advancePay: undatedAdv + (rawDue < 0 ? Math.abs(rawDue) : 0),
+      // Advance = sirf wahi paid amount jo billed (dated procedures) se zyada hai.
+      // Pehle `undatedAdv` ko bhi add kiya ja raha tha jo same paisa double count karta tha
+      // (e.g. 50k paid for an undated procedure → 50k + 50k = 100k advance shown). Fixed.
+      advancePay: rawDue < 0 ? Math.abs(rawDue) : 0,
       totalPay: calculateTotalPaid(),
       payment: paymentInstallments.map((payment) => ({
         method: payment.method,
@@ -906,7 +932,18 @@ export default function InvoiceCreation() {
               type="date"
               className="rounded border-[1.5px] border-stroke bg-transparent py-2 px-3 w-56 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
               value={invoiceDate}
-              onChange={(e) => setInvoiceDate(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value;
+                const prevTop = invoiceDate;
+                setInvoiceDate(v);
+                setProcedures((prev) => {
+                  const allEmptyOrSameAsTop = prev.every(
+                    (p) => !String(p.procedureDate || '').trim() || p.procedureDate === prevTop,
+                  );
+                  if (!allEmptyOrSameAsTop) return prev;
+                  return prev.map((p) => ({ ...p, procedureDate: v }));
+                });
+              }}
             />
           </div>
           <div className="mb-4 relative patient-search-container">

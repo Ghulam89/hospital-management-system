@@ -62,8 +62,8 @@ const createStoreClosing = async (req, res) => {
     const expectedCash = openingCash + totalSales - totalExpenses;
     const difference = cashInHand - expectedCash;
 
-    const storeClosingData = {
-      closingDate,
+    const storeClosingData = assignBranchIdForCreate(req, {
+      closingDate: closingDate ? new Date(closingDate) : closingDate,
       openingCash,
       totalSales,
       totalExpenses,
@@ -73,7 +73,7 @@ const createStoreClosing = async (req, res) => {
       notes: notes || '',
       closedBy,
       status: status || 'Closed',
-    };
+    });
 
     const data = await StoreClosing.create(storeClosingData);
     

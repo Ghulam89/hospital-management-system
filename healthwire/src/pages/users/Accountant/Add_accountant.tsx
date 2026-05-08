@@ -1,38 +1,17 @@
 import { useNavigate } from 'react-router-dom';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 import { Base_url } from '../../../utils/Base_url';
-import { accountantAssignableRoles, preferredNewAccountantRoleKey } from '../utils/assignableRoles';
-
-const authHeaders = () => {
-  const t = localStorage.getItem('userToken') || '';
-  return t ? { Authorization: `Bearer ${t}` } : {};
-};
+import BranchSelectField from '../../../components/BranchSelectField';
 
 const AddAccountant = () => {
   const [gender, setGender] = useState('');
 const [loading, setLoading] = useState(false);
+const [branchId, setBranchId] = useState('');
   console.log(gender);
-  /** Must match Roles & Permissions role key exactly (syncs sidebar permissions → user tabs). */
-  const [assignableRoles, setAssignableRoles] = useState<{ key: string; name?: string }[]>([]);
-  const [roleKey, setRoleKey] = useState('accountant');
-
-  useEffect(() => {
-    axios
-      .get(`${Base_url}/apis/role/get`, { headers: authHeaders() })
-      .then((res) => {
-        const roleRows = Array.isArray(res.data?.data) ? res.data.data : [];
-        const list = accountantAssignableRoles(roleRows);
-        setAssignableRoles(list);
-        setRoleKey(preferredNewAccountantRoleKey(roleRows));
-      })
-      .catch(() => {
-        setAssignableRoles([{ key: 'accountant', name: 'Accountant (legacy)' }]);
-      });
-  }, []);
 
   const handleGenderChange = (gender) => {
     setGender(gender);
@@ -80,6 +59,9 @@ const [loading, setLoading] = useState(false);
       else if(!state.shift){
         toast("Must enter shift!") 
       }
+      else if(!branchId){
+        toast("Please select branch") 
+      }
       
       else {
 
@@ -91,7 +73,8 @@ const [loading, setLoading] = useState(false);
           email:state.email,
           password:state.password,
           shift:state.shift,
-          role: roleKey,
+          role: 'accountant',
+          branchId,
           tabs: [],
     
     
@@ -237,26 +220,6 @@ const [loading, setLoading] = useState(false);
 
                   <div className="w-full">
                     <label className="mb-2.5 block text-black dark:text-white">
-                      Permission role key
-                    </label>
-                    <select
-                      value={roleKey}
-                      onChange={(e) => setRoleKey(e.target.value)}
-                      className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
-                    >
-                      {assignableRoles.map((r) => (
-                        <option key={r.key} value={r.key}>
-                          {(r.name && r.name.trim()) || r.key}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="mt-1 text-xs text-bodydark2 dark:text-meta-10">
-                      Must match the slug from Admin → Roles & Permissions (e.g. accountant_access). Your matrix
-                      permissions apply only when this key equals that role&apos;s key.
-                    </p>
-                  </div>
-                  <div className="w-full">
-                    <label className="mb-2.5 block text-black dark:text-white">
                       Shift
                     </label>
                     <select
@@ -269,6 +232,8 @@ const [loading, setLoading] = useState(false);
                       <option> Evening</option>
                     </select>
                   </div>
+
+                  <BranchSelectField value={branchId} onChange={setBranchId} />
                 </div>
 
                 <div className="mt-4.5">

@@ -8,9 +8,41 @@ const User = require("../models/userModel");
 const {
   mergeBranchScopedQuery,
   assignBranchIdForCreate,
+  resolveWriteBranchOid,
 } = require("../utils/branchScope");
+const { hasCapabilityKey } = require("../middleware/auth");
+const {
+  getEffectivePosTimestamp,
+  isPharmPosDayClosedForBranch,
+  isBeforeStartOfTodayLocal,
+  posAllItemQtyOrLinesChanged,
+} = require("../utils/posClosingAndBackdate");
 
 const escapeRegex = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+async function assertPharmPosDateAndBackdate(req, res, payloadPreview, existingDoc) {
+  if (!req.user) return true;
+  const effective = getEffectivePosTimestamp(payloadPreview, existingDoc);
+  let branchId = payloadPreview.branchId || (existingDoc && existingDoc.branchId) || null;
+  if (!branchId) {
+    branchId = await resolveWriteBranchOid(req);
+  }
+  if (branchId && (await isPharmPosDayClosedForBranch(branchId, effective))) {
+    res.status(403).json({
+      status: "error",
+      message: "This day has a store closing. Pharmacy POS for this date is locked.",
+    });
+    return false;
+  }
+  if (isBeforeStartOfTodayLocal(effective) && !hasCapabilityKey(req.user, "pharmPosBackdateBills")) {
+    res.status(403).json({
+      status: "error",
+      message: "Backdating pharmacy POS bills requires the 'POS: backdate bills' permission.",
+    });
+    return false;
+  }
+  return true;
+}
 
 // Atomic counter for invoice numbers per year to avoid duplicates
 const getNextInvoiceSequence = async (year) => {
@@ -231,6 +263,9 @@ const addpharmPos = async (req, res) => {
               payload.createdAt = new Date(payload.payment[0].payDate);
             }
           }
+          if (!(await assertPharmPosDateAndBackdate(req, res, payload, null))) {
+            return;
+          }
           created = await PharmPos.create(payload);
           console.log('POS invoice created successfully:', created._id, invoiceNumber);
           return res.status(200).json({ 
@@ -254,7 +289,16 @@ const addpharmPos = async (req, res) => {
       }
     } else {
       // If invoiceNumber provided, still attempt create directly and let unique index enforce
-      const data = await PharmPos.create(assignBranchIdForCreate(req, { ...req.body }));
+      const dataPayload = assignBranchIdForCreate(req, { ...req.body });
+      if (!dataPayload.createdAt) {
+        if (Array.isArray(dataPayload.payment) && dataPayload.payment.length > 0 && dataPayload.payment[0].payDate) {
+          dataPayload.createdAt = new Date(dataPayload.payment[0].payDate);
+        }
+      }
+      if (!(await assertPharmPosDateAndBackdate(req, res, dataPayload, null))) {
+        return;
+      }
+      const data = await PharmPos.create(dataPayload);
       console.log('POS invoice created successfully with provided number:', data._id, req.body.invoiceNumber);
       return res.status(200).json({ 
         status: "ok", 
@@ -363,11 +407,35 @@ const getpharmPosById = async (req, res) => {
   }
 };
 
+async function assertExistingPosDayUnlocked(req, res, posDoc) {
+  if (!req.user || !posDoc) return true;
+  let branchId = posDoc.branchId || (await resolveWriteBranchOid(req));
+  if (branchId && (await isPharmPosDayClosedForBranch(branchId, posDoc.createdAt))) {
+    res.status(403).json({
+      status: "error",
+      message: "This day has a store closing. Pharmacy POS for this date is locked.",
+    });
+    return false;
+  }
+  return true;
+}
+
 // 4. Update pharmPos
 const updatepharmPos = async (req, res) => {
   try {
     const id = req.params.id;
-    
+    const existing = await PharmPos.findById(id).exec();
+    if (!existing) {
+      return res.status(404).json({
+        status: "error",
+        message: "POS transaction not found",
+      });
+    }
+
+    if (!(await assertExistingPosDayUnlocked(req, res, existing))) {
+      return;
+    }
+
     // Clean the request body
     const cleanedBody = {};
     for (const key in req.body) {
@@ -375,10 +443,30 @@ const updatepharmPos = async (req, res) => {
         cleanedBody[key] = req.body[key];
       }
     }
+
+    if (req.user && req.body && Object.prototype.hasOwnProperty.call(req.body, "allItem")) {
+      const incomingItems = req.body.allItem;
+      if (
+        Array.isArray(incomingItems) &&
+        posAllItemQtyOrLinesChanged(existing.allItem || [], incomingItems)
+      ) {
+        if (!hasCapabilityKey(req.user, "pharmPosChangeQuantity")) {
+          return res.status(403).json({
+            status: "error",
+            message:
+              "Changing POS line quantities requires the 'POS: change quantities on bills' permission.",
+          });
+        }
+      }
+    }
     // If this update includes any return items and no explicit createdAt provided,
     // set createdAt to "now" so the return impacts today's closing/reporting.
     if (!cleanedBody.createdAt) {
-      const items = Array.isArray(cleanedBody.allItem) ? cleanedBody.allItem : Array.isArray(req.body?.allItem) ? req.body.allItem : [];
+      const items = Array.isArray(cleanedBody.allItem)
+        ? cleanedBody.allItem
+        : Array.isArray(req.body?.allItem)
+          ? req.body.allItem
+          : [];
       const hasReturn = items.some((it) => it && (it.isReturn === true || Number(it.returnQuantity) > 0));
       if (hasReturn) {
         cleanedBody.createdAt = new Date();
@@ -386,6 +474,10 @@ const updatepharmPos = async (req, res) => {
     }
     if (!cleanedBody.createdAt && Array.isArray(cleanedBody.payment) && cleanedBody.payment.length > 0 && cleanedBody.payment[0].payDate) {
       cleanedBody.createdAt = new Date(cleanedBody.payment[0].payDate);
+    }
+
+    if (!(await assertPharmPosDateAndBackdate(req, res, cleanedBody, existing))) {
+      return;
     }
 
     const data = await PharmPos.findByIdAndUpdate(
@@ -432,6 +524,10 @@ const deletepharmPos = async (req, res) => {
         status: "error",
         message: "POS transaction not found",
       });
+    }
+
+    if (!(await assertExistingPosDayUnlocked(req, res, pos))) {
+      return;
     }
 
     // Delete the POS first so aggregates exclude this transaction
@@ -678,9 +774,27 @@ const addPatientPosLedgerPayment = async (req, res) => {
       return res.status(400).json({ status: "error", message: "No valid payments provided" });
     }
 
+    if (req.user) {
+      for (const p of cleanedPayments) {
+        if (isBeforeStartOfTodayLocal(p.payDate) && !hasCapabilityKey(req.user, "pharmPosBackdateBills")) {
+          return res.status(403).json({
+            status: "error",
+            message: "Backdating pharmacy POS payments requires the 'POS: backdate bills' permission.",
+          });
+        }
+        const bid = await resolveWriteBranchOid(req) || null;
+        if (bid && (await isPharmPosDayClosedForBranch(bid, p.payDate))) {
+          return res.status(403).json({
+            status: "error",
+            message: "This payment date has a store closing. Pharmacy POS for that date is locked.",
+          });
+        }
+      }
+    }
+
     const posList = await PharmPos.find({ patientId, due: { $gt: 0 } })
       .sort({ createdAt: 1 })
-      .select("_id due paid invoiceNumber")
+      .select("_id due paid invoiceNumber createdAt branchId")
       .lean();
 
     const totalDue = posList.reduce((sum, p) => sum + (Number(p.due) || 0), 0);
@@ -713,6 +827,10 @@ const addPatientPosLedgerPayment = async (req, res) => {
     for (const pos of posList) {
       let dueLeft = Number(pos.due) || 0;
       if (dueLeft <= 0) continue;
+
+      if (!(await assertExistingPosDayUnlocked(req, res, pos))) {
+        return;
+      }
 
       while (dueLeft > 0 && remainingPaymentIndex < cleanedPayments.length) {
         if (remainingInCurrent <= 0) {
@@ -771,6 +889,10 @@ const updatePatientPosLedgerPayment = async (req, res) => {
       return res.status(404).json({ status: "error", message: "POS invoice not found" });
     }
 
+    if (!(await assertExistingPosDayUnlocked(req, res, pos))) {
+      return;
+    }
+
     const payment = (pos.payment || []).find((p) => String(p._id) === String(paymentId));
     if (!payment) {
       return res.status(404).json({ status: "error", message: "Payment not found" });
@@ -790,6 +912,21 @@ const updatePatientPosLedgerPayment = async (req, res) => {
 
     const nextMethod = req.body?.payment?.method || payment.method || "";
     const nextPayDate = req.body?.payment?.payDate ? new Date(req.body.payment.payDate) : payment.payDate;
+    if (req.user) {
+      if (isBeforeStartOfTodayLocal(nextPayDate) && !hasCapabilityKey(req.user, "pharmPosBackdateBills")) {
+        return res.status(403).json({
+          status: "error",
+          message: "Backdating pharmacy POS payments requires the 'POS: backdate bills' permission.",
+        });
+      }
+      const bid = await resolveWriteBranchOid(req) || null;
+      if (bid && (await isPharmPosDayClosedForBranch(bid, nextPayDate))) {
+        return res.status(403).json({
+          status: "error",
+          message: "This payment date has a store closing. Pharmacy POS for that date is locked.",
+        });
+      }
+    }
     const nextReference = req.body?.payment?.reference ?? payment.reference ?? "";
     const nextChequeNo = req.body?.payment?.chequeNo ?? payment.chequeNo ?? "";
     const nextBankName = req.body?.payment?.bankName ?? payment.bankName ?? "";
@@ -839,6 +976,10 @@ const deletePatientPosLedgerPayment = async (req, res) => {
       return res.status(404).json({ status: "error", message: "POS invoice not found" });
     }
 
+    if (!(await assertExistingPosDayUnlocked(req, res, pos))) {
+      return;
+    }
+
     const payment = (pos.payment || []).find((p) => String(p._id) === String(paymentId));
     if (!payment) {
       return res.status(404).json({ status: "error", message: "Payment not found" });
@@ -873,6 +1014,10 @@ const addPatientPosInvoicePayment = async (req, res) => {
       return res.status(404).json({ status: "error", message: "POS invoice not found" });
     }
 
+    if (!(await assertExistingPosDayUnlocked(req, res, pos))) {
+      return;
+    }
+
     const incoming = Array.isArray(req.body?.payments) ? req.body.payments : [];
     const cleanedPayments = incoming
       .map((p) => ({
@@ -889,6 +1034,24 @@ const addPatientPosInvoicePayment = async (req, res) => {
 
     if (cleanedPayments.length === 0) {
       return res.status(400).json({ status: "error", message: "No valid payments provided" });
+    }
+
+    if (req.user) {
+      for (const p of cleanedPayments) {
+        if (isBeforeStartOfTodayLocal(p.payDate) && !hasCapabilityKey(req.user, "pharmPosBackdateBills")) {
+          return res.status(403).json({
+            status: "error",
+            message: "Backdating pharmacy POS payments requires the 'POS: backdate bills' permission.",
+          });
+        }
+        const bid = await resolveWriteBranchOid(req) || null;
+        if (bid && (await isPharmPosDayClosedForBranch(bid, p.payDate))) {
+          return res.status(403).json({
+            status: "error",
+            message: "This payment date has a store closing. Pharmacy POS for that date is locked.",
+          });
+        }
+      }
     }
 
     const currentDue = Number(pos.due) || 0;

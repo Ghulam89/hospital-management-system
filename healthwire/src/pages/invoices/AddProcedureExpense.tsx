@@ -502,6 +502,18 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
       toast.error('Add at least one doctor under Doctor (procedure share)');
       return;
     }
+    // Staff (Assisted By) compulsory — invoice creation rule
+    const hasAssisted = assistedByRows.some((r) => hexId(String(r.userId || '').trim()));
+    if (!hasAssisted) {
+      toast.error('Add at least one staff under Assisted By');
+      return;
+    }
+    // Reception compulsory — invoice creation rule
+    const hasReception = receptionRows.some((r) => hexId(String(r.userId || '').trim()));
+    if (!hasReception) {
+      toast.error('Add at least one staff under Reception');
+      return;
+    }
     const enrichedExpenses = expenses.map((e) => ({
       ...e,
       categoryName: categories.find((c) => c._id === e.expenseCategoryId)?.name || '',

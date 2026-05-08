@@ -22,6 +22,7 @@ type PosInvoice = {
   totalTax?: number;
   note?: string;
   createdAt?: string;
+  createdBy?: { _id: string; name?: string } | string | null;
   allItem?: Array<{
     pharmItemId?: any;
     quantity?: number;
@@ -51,6 +52,21 @@ export default function BillsList() {
   const permUser = getStoredUserForPermissions();
   const canPosUpdate = canMenuAction(permUser, 'pharm_pos', 'update');
   const canPosDelete = canMenuAction(permUser, 'pharm_pos', 'delete');
+
+  const canEditPosBill = (inv: PosInvoice) => {
+    if (canPosUpdate) return true;
+    const u = permUser as { _id?: string } | null;
+    const uid = u?._id != null ? String(u._id) : '';
+    if (!uid) return false;
+    const c = inv.createdBy;
+    const cid =
+      typeof c === 'object' && c != null && '_id' in c
+        ? String((c as { _id: string })._id)
+        : c != null && c !== ''
+          ? String(c)
+          : '';
+    return Boolean(cid && cid === uid);
+  };
 
   const [list, setList] = useState<PosInvoice[]>([]);
   const [loading, setLoading] = useState(false);
@@ -298,7 +314,7 @@ export default function BillsList() {
       key: 'actions',
       render: (_: any, inv: PosInvoice) => (
         <Space>
-          {canPosUpdate && (
+          {canEditPosBill(inv) && (
             <Button type="link" onClick={() => navigate(`/admin/pharmacy/invoices/edit/${inv._id}`)}>
               Edit
             </Button>
