@@ -34,16 +34,23 @@ interface POSTransaction {
   paid: number;
   note: string;
   allItem: Array<{
-    pharmItemId: {
-      _id: string;
-      name: string;
-    };
+    pharmItemId:
+      | {
+          _id: string;
+          name: string;
+        }
+      | string;
     unit: string;
     rate: number;
     quantity: number;
+    returnQuantity?: number;
+    isReturn?: boolean;
+    originalInvoiceNumber?: string;
+    netAmount?: number;
     totalAmount: number;
     discount: number;
     tax: number;
+    itemName?: string;
   }>;
   payment: Array<{
     method: string;
@@ -157,11 +164,16 @@ const PharmacyReports: React.FC = () => {
     setSelectedRowKeys([]);
   }, [activeTab, searchTerm, dateRange, paymentDateRange, posPaymentMethod, posStatus, posPatientName, posPatientMr, posDoctorName, posMinAmount, posMaxAmount, posDiscountPercent]);
 
+  /** RangePicker `allowClear` calls onChange with `null` — never store that on state or `dateRange[0]` crashes the page. */
   useEffect(() => {
-    if ((!dateRange[0] || !dateRange[1]) && activeTab === 'pos-sales') {
-      setDateRange([dayjs().startOf('month'), dayjs().endOf('day')]);
-    }
-  }, [activeTab]);
+    if (dateRange != null && Array.isArray(dateRange)) return;
+    setDateRange([dayjs().startOf('month'), dayjs().endOf('day')]);
+  }, [dateRange]);
+
+  useEffect(() => {
+    if (paymentDateRange != null && Array.isArray(paymentDateRange)) return;
+    setPaymentDateRange([null, null]);
+  }, [paymentDateRange]);
 
   // Fetch summary when date range or any POS list filter changes (must match fetchPOSTransactions filters)
   useEffect(() => {
@@ -195,13 +207,15 @@ const PharmacyReports: React.FC = () => {
   const buildPOSListFilterParams = () => {
     const params: Record<string, string> = {};
     if (searchTerm) params.search = searchTerm;
-    if (dateRange[0] && dateRange[1]) {
-      params.from = dateRange[0].format('YYYY-MM-DD');
-      params.to = dateRange[1].format('YYYY-MM-DD');
+    const dr = Array.isArray(dateRange) ? dateRange : [null, null];
+    const pr = Array.isArray(paymentDateRange) ? paymentDateRange : [null, null];
+    if (dr[0] && dr[1]) {
+      params.from = dr[0].format('YYYY-MM-DD');
+      params.to = dr[1].format('YYYY-MM-DD');
     }
-    if (paymentDateRange[0] && paymentDateRange[1]) {
-      params.paymentFrom = paymentDateRange[0].format('YYYY-MM-DD');
-      params.paymentTo = paymentDateRange[1].format('YYYY-MM-DD');
+    if (pr[0] && pr[1]) {
+      params.paymentFrom = pr[0].format('YYYY-MM-DD');
+      params.paymentTo = pr[1].format('YYYY-MM-DD');
     }
     if (posPaymentMethod) params.paymentMethod = posPaymentMethod;
     if (posStatus) params.status = posStatus;
@@ -217,9 +231,10 @@ const PharmacyReports: React.FC = () => {
   const buildStockListFilterParams = () => {
     const params: Record<string, string> = {};
     if (searchTerm) params.search = searchTerm;
-    if (dateRange[0] && dateRange[1]) {
-      params.from = dateRange[0].format('YYYY-MM-DD');
-      params.to = dateRange[1].format('YYYY-MM-DD');
+    const dr = Array.isArray(dateRange) ? dateRange : [null, null];
+    if (dr[0] && dr[1]) {
+      params.from = dr[0].format('YYYY-MM-DD');
+      params.to = dr[1].format('YYYY-MM-DD');
     }
     return params;
   };
@@ -245,7 +260,12 @@ const PharmacyReports: React.FC = () => {
       if (transactions.length === 0) {
         console.warn('⚠️ No POS transactions found! Check if:');
         console.warn('   1. You have created any POS transactions');
-        console.warn('   2. Date range is correct:', dateRange[0]?.format('YYYY-MM-DD'), 'to', dateRange[1]?.format('YYYY-MM-DD'));
+        console.warn(
+          '   2. Date range is correct:',
+          Array.isArray(dateRange) ? dateRange[0]?.format('YYYY-MM-DD') : 'n/a',
+          'to',
+          Array.isArray(dateRange) ? dateRange[1]?.format('YYYY-MM-DD') : 'n/a',
+        );
         console.warn('   3. Search term is not too restrictive:', searchTerm);
       }
       
@@ -258,6 +278,11 @@ const PharmacyReports: React.FC = () => {
     } finally {
       setLoading(false);
     }
+  };
+
+  const safeSummaryNumber = (v: unknown): number => {
+    const n = typeof v === 'number' ? v : Number(v);
+    return Number.isFinite(n) ? n : 0;
   };
 
   // POS summary from backend — same filter profile as transaction list (not paginated)
@@ -273,24 +298,35 @@ const PharmacyReports: React.FC = () => {
       console.log('📊 Summary API Full Response:', response);
       console.log('📊 Summary API Response Data:', response.data);
       
-      if (response.data.status === 'ok' && response.data.summary) {
-        const summary = response.data.summary;
+      const body = response?.data as Record<string, unknown> | undefined;
+      const statusOk = String(body?.status ?? '').toLowerCase() === 'ok';
+      const summary =
+        (body?.summary && typeof body.summary === 'object' ? body.summary : null) ||
+        (body?.data && typeof body.data === 'object' && (body.data as any).summary
+          ? (body.data as any).summary
+          : null);
+
+      if (statusOk && summary && typeof summary === 'object') {
+        const s = summary as Record<string, unknown>;
         console.log('✅ POS summary received:', {
-          totalTransactions: summary.totalTransactions,
-          totalSales: summary.totalSales,
-          totalPaid: summary.totalPaid,
-          totalDue: summary.totalDue
+          totalTransactions: s.totalTransactions,
+          totalSales: s.totalSales,
+          totalPaid: s.totalPaid,
+          totalDue: s.totalDue,
         });
-        
-        // Direct assignment - NO calculations, just display backend data
-        setTotalTransactions(summary.totalTransactions || 0);
-        setTotalSales(summary.totalSales || 0);
-        setTotalPaid(summary.totalPaid || 0);
-        setTotalDue(summary.totalDue || 0);
-        
+
+        setTotalTransactions(safeSummaryNumber(s.totalTransactions));
+        setTotalSales(safeSummaryNumber(s.totalSales));
+        setTotalPaid(safeSummaryNumber(s.totalPaid));
+        setTotalDue(safeSummaryNumber(s.totalDue));
+
         console.log('✅ Summary cards updated for current filters');
       } else {
         console.warn('⚠️ Invalid summary response format:', response.data);
+        setTotalTransactions(0);
+        setTotalSales(0);
+        setTotalPaid(0);
+        setTotalDue(0);
       }
     } catch (error: any) {
       console.error('❌ Error fetching POS summary:', error);
@@ -299,7 +335,11 @@ const PharmacyReports: React.FC = () => {
         response: error.response?.data,
         status: error.response?.status
       });
-      
+      setTotalTransactions(0);
+      setTotalSales(0);
+      setTotalPaid(0);
+      setTotalDue(0);
+
       if (error.response?.status === 404) {
         message.error('Summary API endpoint not found. Please restart the backend server.');
       }
@@ -573,29 +613,93 @@ const PharmacyReports: React.FC = () => {
     },
   ];
 
-  const handleViewPOSDetail = (record: POSTransaction) => {
-    const itemsHtml = record.allItem?.map((item, index) => `
+  const escapeHtmlSwal = (s: string) =>
+    String(s ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+
+  const lineItemName = (item: POSTransaction['allItem'][number]) => {
+    const p = item.pharmItemId;
+    if (p && typeof p === 'object' && 'name' in p) return String((p as { name?: string }).name || 'N/A');
+    const anyItem = item as { itemName?: string };
+    if (anyItem.itemName && String(anyItem.itemName).trim()) return String(anyItem.itemName).trim();
+    return 'N/A';
+  };
+
+  const buildPosDetailItemsHtml = (allItem: POSTransaction['allItem'] | undefined) => {
+    if (!allItem?.length) return '<p>No items</p>';
+    return allItem
+      .map((item, index) => {
+        const name = escapeHtmlSwal(lineItemName(item));
+        const isReturn = Boolean(item.isReturn);
+        const qty = Number(item.quantity) || 0;
+        const rq = Number(item.returnQuantity) || 0;
+        const unit = String(item.unit || '');
+        const rate = Number(item.rate) || 0;
+        const disc = Number(item.discount) || 0;
+        const tax = Number(item.tax) || 0;
+        const total = Number(item.totalAmount) || 0;
+        const badge = isReturn
+          ? '<span style="background:#fee2e2;color:#991b1b;padding:2px 8px;border-radius:4px;font-size:11px;margin-left:6px;">Return / adjustment</span>'
+          : '<span style="background:#dcfce7;color:#166534;padding:2px 8px;border-radius:4px;font-size:11px;margin-left:6px;">Sale</span>';
+        const netQty = Math.max(0, qty - rq);
+        const unitLabel = unit ? String(unit) : 'units';
+        const qtyBlock =
+          rq > 0 || isReturn
+            ? `<p style="margin: 6px 0; font-size: 13px; color: #374151; line-height: 1.5;">
+                <span style="display:block;margin-bottom:4px;"><strong>Bought / sold:</strong> ${qty} ${unitLabel}</span>
+                <span style="display:block;margin-bottom:4px;"><strong>Returned:</strong> ${rq} ${unitLabel}</span>
+                <span style="display:block;"><strong>Net (billed):</strong> ${netQty} ${unitLabel}</span>
+              </p>`
+            : `<p style="margin: 4px 0; font-size: 13px; color: #374151;">
+                <strong>Bought / sold:</strong> ${qty} ${unitLabel}
+                <span style="color:#6b7280;font-size:12px;"> &nbsp;·&nbsp; Returned: 0</span>
+              </p>`;
+        const refInv =
+          isReturn && item.originalInvoiceNumber
+            ? `<p style="margin:4px 0;font-size:11px;color:#92400e;"><strong>Return ref invoice:</strong> ${escapeHtmlSwal(
+                String(item.originalInvoiceNumber || '')
+              )}</p>`
+            : '';
+        return `
       <div style="border-bottom: 1px solid #e5e7eb; padding: 8px 0;">
-        <p style="margin: 4px 0;"><strong>${index + 1}. ${item.pharmItemId?.name || 'N/A'}</strong></p>
+        <p style="margin: 4px 0;"><strong>${index + 1}. ${name}</strong>${badge}</p>
+        ${qtyBlock}
         <p style="margin: 4px 0; font-size: 12px; color: #666;">
-          Quantity: ${item.quantity} ${item.unit} | 
-          Rate: Rs. ${item.rate} | 
-          Discount: Rs. ${item.discount} | 
-          Tax: ${item.tax}%
+          Rate: Rs. ${rate} | Line discount: Rs. ${disc.toLocaleString()} | Tax: ${tax}%
         </p>
         <p style="margin: 4px 0; font-size: 12px; color: #059669;">
-          <strong>Total: Rs. ${item.totalAmount.toLocaleString()}</strong>
+          <strong>Line total: Rs. ${total.toLocaleString()}</strong>
         </p>
-      </div>
-    `).join('') || '<p>No items</p>';
+        ${refInv}
+      </div>`;
+      })
+      .join('');
+  };
 
-    const paymentsHtml = record.payment?.map((payment, index) => `
+  const openPosInvoiceDetailModal = (record: POSTransaction) => {
+    const itemsHtml = buildPosDetailItemsHtml(record.allItem);
+
+    const paymentsHtml =
+      record.payment
+        ?.map((payment, index) => {
+          const ref = payment.reference ? escapeHtmlSwal(String(payment.reference)) : '';
+          return `
       <div style="padding: 4px 0;">
-        <strong>${index + 1}. ${payment.method}</strong>: Rs. ${payment.paid.toLocaleString()}
-        ${payment.reference ? ` (Ref: ${payment.reference})` : ''}
+        <strong>${index + 1}. ${escapeHtmlSwal(String(payment.method || ''))}</strong>: Rs. ${Number(payment.paid || 0).toLocaleString()}
+        ${ref ? ` (Ref: ${ref})` : ''}
         <br/><small style="color: #666;">${dayjs(payment.payDate).format('DD/MM/YYYY hh:mm A')}</small>
-      </div>
-    `).join('') || '<p>No payments</p>';
+      </div>`;
+        })
+        .join('') || '<p>No payments</p>';
+
+    const linesNet = (record.allItem || []).reduce(
+      (s, it) => s + (Number(it.totalAmount) || 0),
+      0
+    );
 
     Swal.fire({
       title: 'POS Invoice Details',
@@ -603,13 +707,19 @@ const PharmacyReports: React.FC = () => {
         <div style="text-align: left; font-size: 14px; max-height: 70vh; overflow-y: auto;">
           <div style="background: #dbeafe; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
             <h4 style="margin-top: 0; color: #1e40af;">Invoice Information</h4>
-            <p style="margin: 6px 0;"><strong>Invoice #:</strong> ${record.invoiceNumber || record._id.slice(-8).toUpperCase()}</p>
+            <p style="margin: 6px 0;"><strong>Invoice #:</strong> ${escapeHtmlSwal(
+              (record.invoiceNumber && String(record.invoiceNumber).trim()
+                ? String(record.invoiceNumber).trim()
+                : record._id
+                  ? String(record._id).slice(-8).toUpperCase()
+                  : '') || ''
+            )}</p>
             <p style="margin: 6px 0;"><strong>Date:</strong> ${dayjs(record.createdAt).format('DD/MM/YYYY hh:mm A')}</p>
-            <p style="margin: 6px 0;"><strong>Patient:</strong> ${record.patientName || record.patientId?.name || 'Walk-in'}</p>
-            ${record.patientId?.mr ? `<p style="margin: 6px 0;"><strong>MR:</strong> ${record.patientId.mr}</p>` : ''}
-            ${record.patientId?.phone ? `<p style="margin: 6px 0;"><strong>Phone:</strong> ${record.patientId.phone}</p>` : ''}
-            <p style="margin: 6px 0;"><strong>Doctor:</strong> ${record.doctorName || record.referId?.name || 'N/A'}</p>
-            ${record.note ? `<p style="margin: 6px 0;"><strong>Note:</strong> ${record.note}</p>` : ''}
+            <p style="margin: 6px 0;"><strong>Patient:</strong> ${escapeHtmlSwal(String(record.patientName || record.patientId?.name || 'Walk-in'))}</p>
+            ${record.patientId?.mr ? `<p style="margin: 6px 0;"><strong>MR:</strong> ${escapeHtmlSwal(String(record.patientId.mr))}</p>` : ''}
+            ${record.patientId?.phone ? `<p style="margin: 6px 0;"><strong>Phone:</strong> ${escapeHtmlSwal(String(record.patientId.phone))}</p>` : ''}
+            <p style="margin: 6px 0;"><strong>Doctor:</strong> ${escapeHtmlSwal(String(record.doctorName || record.referId?.name || 'N/A'))}</p>
+            ${record.note ? `<p style="margin: 6px 0;"><strong>Note:</strong> ${escapeHtmlSwal(String(record.note))}</p>` : ''}
           </div>
           
           <div style="background: #f3f4f6; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
@@ -619,13 +729,13 @@ const PharmacyReports: React.FC = () => {
           
           <div style="background: #dcfce7; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
             <h4 style="margin-top: 0; color: #16a34a;">Payment Summary</h4>
-            <p style="margin: 8px 0;"><strong>Sub Total:</strong> Rs. ${(record.paid + record.due).toLocaleString()}</p>
-            <p style="margin: 8px 0;"><strong>Discount:</strong> Rs. ${record.totalDiscount.toLocaleString()}</p>
-            <p style="margin: 8px 0;"><strong>Tax:</strong> Rs. ${record.totalTax.toLocaleString()}</p>
-            <p style="margin: 8px 0; font-size: 16px;"><strong>Total:</strong> <span style="color: #059669;">Rs. ${(record.paid + record.due).toLocaleString()}</span></p>
+            <p style="margin: 8px 0;"><strong>Net from lines:</strong> Rs. ${linesNet.toLocaleString()}</p>
+            <p style="margin: 8px 0;"><strong>Bill discount:</strong> Rs. ${Number(record.totalDiscount || 0).toLocaleString()}</p>
+            <p style="margin: 8px 0;"><strong>Tax:</strong> Rs. ${Number(record.totalTax || 0).toLocaleString()}</p>
+            <p style="margin: 8px 0; font-size: 16px;"><strong>Bill total (paid + due):</strong> <span style="color: #059669;">Rs. ${(Number(record.paid) + Number(record.due)).toLocaleString()}</span></p>
             <hr style="margin: 10px 0;"/>
-            <p style="margin: 8px 0;"><strong>Paid:</strong> <span style="color: #2563eb;">Rs. ${record.paid.toLocaleString()}</span></p>
-            <p style="margin: 8px 0;"><strong>Due:</strong> <span style="color: ${record.due > 0 ? '#dc2626' : '#059669'};">Rs. ${record.due.toLocaleString()}</span></p>
+            <p style="margin: 8px 0;"><strong>Paid:</strong> <span style="color: #2563eb;">Rs. ${Number(record.paid || 0).toLocaleString()}</span></p>
+            <p style="margin: 8px 0;"><strong>Due:</strong> <span style="color: ${Number(record.due) > 0 ? '#dc2626' : '#059669'};">Rs. ${Number(record.due || 0).toLocaleString()}</span></p>
           </div>
           
           <div style="background: #fef3c7; padding: 15px; border-radius: 8px;">
@@ -638,6 +748,28 @@ const PharmacyReports: React.FC = () => {
       showConfirmButton: false,
       width: 800,
     });
+  };
+
+  const handleViewPOSDetail = async (record: POSTransaction) => {
+    try {
+      const res = await axios.get(`${Base_url}/apis/pharmPos/get/${record._id}`);
+      const payload = res.data;
+      const doc = payload?.data;
+      if (doc && typeof doc === 'object') {
+        openPosInvoiceDetailModal(doc as POSTransaction);
+        return;
+      }
+      if (payload?.status === 'ok' || payload?.status === 'success') {
+        if (payload.data) {
+          openPosInvoiceDetailModal(payload.data as POSTransaction);
+          return;
+        }
+      }
+    } catch (e) {
+      console.error('POS detail fetch failed:', e);
+      message.warning('Could not reload full invoice; showing row data.');
+    }
+    openPosInvoiceDetailModal(record);
   };
 
   const handleViewStockDetail = (record: StockTransaction) => {
@@ -802,9 +934,10 @@ const PharmacyReports: React.FC = () => {
           const ws2 = XLSX.utils.json_to_sheet(lineRows);
           XLSX.utils.book_append_sheet(wb, ws2, 'Line_Items');
         }
+        const dr = Array.isArray(dateRange) ? dateRange : [null, null];
         const part =
-          dateRange[0] && dateRange[1]
-            ? `${dateRange[0].format('YYYYMMDD')}_${dateRange[1].format('YYYYMMDD')}`
+          dr[0] && dr[1]
+            ? `${dr[0].format('YYYYMMDD')}_${dr[1].format('YYYYMMDD')}`
             : dayjs().format('YYYYMMDD');
         XLSX.writeFile(wb, `POS_Sales_Summary_${part}.xlsx`);
         message.success(`Exported ${rows.length} POS bill(s)`);
@@ -851,9 +984,10 @@ const PharmacyReports: React.FC = () => {
           const ws2 = XLSX.utils.json_to_sheet(lineRows);
           XLSX.utils.book_append_sheet(wb, ws2, 'Line_Items');
         }
+        const dr = Array.isArray(dateRange) ? dateRange : [null, null];
         const part =
-          dateRange[0] && dateRange[1]
-            ? `${dateRange[0].format('YYYYMMDD')}_${dateRange[1].format('YYYYMMDD')}`
+          dr[0] && dr[1]
+            ? `${dr[0].format('YYYYMMDD')}_${dr[1].format('YYYYMMDD')}`
             : dayjs().format('YYYYMMDD');
         XLSX.writeFile(wb, `Stock_Purchases_${part}.xlsx`);
         message.success(`Exported ${rows.length} stock document(s)`);
@@ -999,9 +1133,14 @@ const PharmacyReports: React.FC = () => {
                 value={dateRange}
                 disabledDate={disableDatesAfterToday}
                 onChange={(dates) => {
-                  setDateRange(dates as [Dayjs | null, Dayjs | null]);
-                  if (dates && dates[0] && dates[1]) {
-                    setPaymentDateRange([null, null]);
+                  if (dates == null) {
+                    setDateRange([dayjs().startOf('month'), dayjs().endOf('day')]);
+                  } else {
+                    const next: [Dayjs | null, Dayjs | null] = [dates[0] ?? null, dates[1] ?? null];
+                    setDateRange(next);
+                    if (next[0] && next[1]) {
+                      setPaymentDateRange([null, null]);
+                    }
                   }
                   setCurrentPage(1);
                 }}
@@ -1052,9 +1191,14 @@ const PharmacyReports: React.FC = () => {
                     value={paymentDateRange}
                     disabledDate={disableDatesAfterToday}
                     onChange={(dates) => {
-                      setPaymentDateRange(dates as [Dayjs | null, Dayjs | null]);
-                      if (dates && dates[0] && dates[1]) {
-                        setDateRange([null, null]);
+                      if (dates == null) {
+                        setPaymentDateRange([null, null]);
+                      } else {
+                        const next: [Dayjs | null, Dayjs | null] = [dates[0] ?? null, dates[1] ?? null];
+                        setPaymentDateRange(next);
+                        if (next[0] && next[1]) {
+                          setDateRange([null, null]);
+                        }
                       }
                       setCurrentPage(1);
                     }}
@@ -1320,7 +1464,9 @@ const PharmacyReports: React.FC = () => {
                       </svg>
                       <h3 className="mt-2 text-sm font-medium text-gray-900">No POS transactions found</h3>
                       <p className="mt-1 text-sm text-gray-500">
-                        {dateRange[0] || dateRange[1] ? 'Try adjusting your date range or clearing filters.' : 'Create your first POS transaction to see data here.'}
+                        {Array.isArray(dateRange) && (dateRange[0] || dateRange[1])
+                          ? 'Try adjusting your date range or clearing filters.'
+                          : 'Create your first POS transaction to see data here.'}
                       </p>
                     </div>
                   </div>
@@ -1406,7 +1552,9 @@ const PharmacyReports: React.FC = () => {
                       </svg>
                       <h3 className="mt-2 text-sm font-medium text-gray-900">No stock purchases found</h3>
                       <p className="mt-1 text-sm text-gray-500">
-                        {dateRange[0] || dateRange[1] ? 'Try adjusting your date range or clearing filters.' : 'Add stock to see purchase records here.'}
+                        {Array.isArray(dateRange) && (dateRange[0] || dateRange[1])
+                          ? 'Try adjusting your date range or clearing filters.'
+                          : 'Add stock to see purchase records here.'}
                       </p>
                     </div>
                   </div>

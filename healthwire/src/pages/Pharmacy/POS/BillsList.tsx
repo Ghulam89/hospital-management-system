@@ -40,6 +40,15 @@ type Summary = {
   totalAdvance: number;
 };
 
+const ZERO_POS_SUMMARY: Summary = {
+  totalTransactions: 0,
+  totalSales: 0,
+  totalPaid: 0,
+  totalDue: 0,
+  totalDiscount: 0,
+  totalAdvance: 0,
+};
+
 const formatDate = (iso?: string) => {
   if (!iso) return '-';
   const d = new Date(iso);
@@ -91,13 +100,34 @@ export default function BillsList() {
   const [patientHasMore, setPatientHasMore] = useState(true);
   const [patientLoading, setPatientLoading] = useState(false);
 
-  const [summary, setSummary] = useState<Summary | null>(null);
+  const [summary, setSummary] = useState<Summary>(ZERO_POS_SUMMARY);
 
   const [editOpen, setEditOpen] = useState(false);
   const [editInvoice, setEditInvoice] = useState<PosInvoice | null>(null);
   const [editNote, setEditNote] = useState('');
   const [editPatientName, setEditPatientName] = useState('');
   const [editDoctorName, setEditDoctorName] = useState('');
+
+  /** List pagination must not be sent to /summary — summary aggregates all matching bills. */
+  const summaryParams = useMemo(() => {
+    const p: Record<string, any> = {};
+    const s = search.trim();
+    if (s) p.search = s;
+    const f = from.trim();
+    const t = to.trim();
+    if (f) p.from = f;
+    if (t) p.to = t;
+    const pay = paymentMethod.trim();
+    if (pay) p.paymentMethod = pay;
+    const minA = minAmount.trim() === '' ? null : Number(minAmount);
+    if (minA !== null && !Number.isNaN(minA)) p.minAmount = minA;
+    const maxA = maxAmount.trim() === '' ? null : Number(maxAmount);
+    if (maxA !== null && !Number.isNaN(maxA)) p.maxAmount = maxA;
+    const inv = invoiceNumber.trim();
+    if (inv) p.invoiceNumber = inv;
+    if (selectedPatientId) p.patientId = selectedPatientId;
+    return p;
+  }, [search, from, to, paymentMethod, minAmount, maxAmount, invoiceNumber, selectedPatientId]);
 
   const params = useMemo(() => {
     const p: Record<string, any> = {
@@ -145,20 +175,46 @@ export default function BillsList() {
     }
   };
 
+  const parseSummary = (raw: unknown): Summary => {
+    const body = raw as Record<string, unknown> | null | undefined;
+    const s =
+      (body?.summary && typeof body.summary === 'object' ? body.summary : null) ||
+      (body?.data && typeof body.data === 'object' && (body.data as any).summary
+        ? (body.data as any).summary
+        : null);
+    if (!s || typeof s !== 'object') return ZERO_POS_SUMMARY;
+    const o = s as Record<string, unknown>;
+    const n = (v: unknown) => {
+      const x = typeof v === 'number' ? v : Number(v);
+      return Number.isFinite(x) ? x : 0;
+    };
+    return {
+      totalTransactions: n(o.totalTransactions),
+      totalSales: n(o.totalSales),
+      totalPaid: n(o.totalPaid),
+      totalDue: n(o.totalDue),
+      totalDiscount: n(o.totalDiscount),
+      totalAdvance: n(o.totalAdvance),
+    };
+  };
+
   const fetchSummary = async () => {
     try {
-      const res = await axios.get(`${Base_url}/apis/pharmPos/summary`, { params });
-      const s: Summary = res?.data?.summary || null;
-      setSummary(s);
+      const res = await axios.get(`${Base_url}/apis/pharmPos/summary`, { params: summaryParams });
+      const statusOk = String(res?.data?.status ?? '').toLowerCase() === 'ok';
+      setSummary(statusOk ? parseSummary(res.data) : ZERO_POS_SUMMARY);
     } catch {
-      setSummary(null);
+      setSummary(ZERO_POS_SUMMARY);
     }
   };
 
   useEffect(() => {
     fetchList();
-    fetchSummary();
   }, [params]);
+
+  useEffect(() => {
+    fetchSummary();
+  }, [summaryParams]);
 
   const openEdit = (inv: PosInvoice) => {
     setEditInvoice(inv);
@@ -412,8 +468,7 @@ export default function BillsList() {
         </Row>
       </Card>
 
-      {summary && (
-        <div className="mb-4">
+      <div className="mb-4">
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-lg p-4 border border-green-200 shadow-sm">
               <div className="flex items-center justify-between">
@@ -477,7 +532,7 @@ export default function BillsList() {
             </div>
           </div>
         </div>
-      )}
+
       <Card className="mb-4">
         <Table
           columns={columns as any}

@@ -7,6 +7,7 @@ import { RiDeleteBin5Line, RiEdit2Fill, RiFile2Line, RiPenNibFill, RiPrinterLine
 import { Base_url } from '../../utils/Base_url';
 import { getInvoiceHeaderForPdf } from '../../utils/branchPdfHeader';
 import { enrichInvoiceForPdf } from '../../utils/enrichInvoiceForPdf';
+import { sumInvoiceDoctorHospitalShare } from '../../utils/invoiceShare';
 import logoDataUrl from '../../images/logo-icon.png';
 import Breadcrumb from '../../components/Breadcrumbs/Breadcrumb';
 
@@ -581,14 +582,7 @@ const PatientInvoice = () => {
       
       const transformedData = filteredData
         .map((invoice) => {
-          const doctorShare = invoice.item.reduce(
-            (sum, item) => sum + (item.doctorAmount || 0),
-            0,
-          );
-          const hospitalShare = invoice.item.reduce(
-            (sum, item) => sum + (item.hospitalAmount || 0),
-            0,
-          );
+          const { doctorShare, hospitalShare } = sumInvoiceDoctorHospitalShare(invoice);
 
           return {
             key: invoice._id,

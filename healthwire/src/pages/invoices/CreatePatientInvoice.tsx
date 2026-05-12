@@ -41,6 +41,11 @@ type ProcedureItem = {
   hospitalAmount: number;
 };
 
+function isMongoHex24(id: string | undefined | null): boolean {
+  const s = String(id ?? '').trim();
+  return /^[0-9a-fA-F]{24}$/i.test(s);
+}
+
 type PaymentInstallment = {
   id: number;
   date: string;
@@ -298,58 +303,61 @@ const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Calculate doctor and hospital shares
   const calculateShares = (item: ProcedureItem) => {
-    const totalAmount = item.rate * item.quantity;
+    const gross = item.rate * item.quantity;
     let discountAmount = item.discount;
 
-    // Calculate discount amount based on type
-    if (item.discountType === 1) { // percentage
-      discountAmount = totalAmount * (item.discount / 100);
+    if (item.discountType === 1) {
+      discountAmount = gross * (item.discount / 100);
     }
 
-    const remainingAmount = totalAmount - discountAmount;
+    const net = Math.max(0, gross - discountAmount);
 
-    // Find the selected doctor to get share info
-    const selectedDoctor = usersList.find(user => user._id === item.performedBy);
-    
-    let doctorShare = 0;
-    let hospitalShare = remainingAmount; // Default to hospital getting full amount
+    const selectedDoctor = usersList.find((user) => user._id === item.performedBy);
+
+    let doctorShareGross = 0;
+    let hospitalShareGross = gross;
 
     if (selectedDoctor && selectedDoctor.sharePrice && selectedDoctor.shareType) {
-      const sharePrice = parseFloat(selectedDoctor.sharePrice);
-      
+      const sharePrice = parseFloat(String(selectedDoctor.sharePrice));
+
       if (selectedDoctor.shareType === 'percentage') {
-        // Doctor gets percentage of total amount (before discount)
-        doctorShare = totalAmount * (sharePrice / 100);
+        doctorShareGross = gross * (sharePrice / 100);
       } else {
-        // Doctor gets fixed amount
-        doctorShare = sharePrice;
+        doctorShareGross = sharePrice;
       }
 
-      // Ensure doctor doesn't get more than the remaining amount
-      doctorShare = Math.min(doctorShare, remainingAmount);
-      hospitalShare = remainingAmount - doctorShare;
+      doctorShareGross = Math.min(doctorShareGross, gross);
+      hospitalShareGross = gross - doctorShareGross;
     }
 
-    // Apply discount distribution based on deductDiscount selection
+    let doctorShare = doctorShareGross;
+    let hospitalShare = hospitalShareGross;
+
     switch (item.deductDiscount) {
       case 'Hospital & Doctor':
-        // Split discount equally between hospital and doctor
-        doctorShare = doctorShare - (discountAmount / 2);
-        hospitalShare = hospitalShare - (discountAmount / 2);
+        doctorShare = Math.max(0, doctorShareGross - discountAmount / 2);
+        hospitalShare = Math.max(0, hospitalShareGross - discountAmount / 2);
         break;
       case 'Hospital':
-        // Apply full discount to hospital share only
-        hospitalShare = hospitalShare - discountAmount;
+        hospitalShare = Math.max(0, hospitalShareGross - discountAmount);
+        doctorShare = doctorShareGross;
         break;
       case 'Doctor':
-        // Apply full discount to doctor share only
-        doctorShare = doctorShare - discountAmount;
+        doctorShare = Math.max(0, doctorShareGross - discountAmount);
+        hospitalShare = hospitalShareGross;
+        break;
+      default:
         break;
     }
 
-    // Ensure shares don't go negative
-    doctorShare = Math.max(0, doctorShare);
-    hospitalShare = Math.max(0, hospitalShare);
+    const sumAfter = doctorShare + hospitalShare;
+    if (net <= 0) {
+      doctorShare = 0;
+      hospitalShare = 0;
+    } else if (Math.abs(sumAfter - net) > 0.0001) {
+      hospitalShare = Math.max(0, net - doctorShare);
+      doctorShare = Math.max(0, net - hospitalShare);
+    }
 
     return {
       doctorAmount: parseFloat(doctorShare.toFixed(2)),
@@ -471,6 +479,22 @@ const [isSubmitting, setIsSubmitting] = useState(false);
   const isProcDated = (item: ProcedureItem) =>
     !!(item.procedureDate && String(item.procedureDate).trim());
 
+  const isProcCostingRequired = (item: ProcedureItem): boolean => {
+    if (!isProcDated(item)) return false;
+    const ymd = String(item.procedureDate).trim().slice(0, 10);
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(ymd);
+    if (!m) return false;
+    const y = Number(m[1]);
+    const mo = Number(m[2]);
+    const day = Number(m[3]);
+    if (!y || !mo || !day) return false;
+    const procStart = new Date(y, mo - 1, day);
+    procStart.setHours(0, 0, 0, 0);
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    return procStart.getTime() <= todayStart.getTime();
+  };
+
   const lineNetAfterDiscount = (item: ProcedureItem) => {
     const disc =
       item.discountType === 0 ? item.discount : item.amount * (item.discount / 100);
@@ -506,13 +530,52 @@ const [isSubmitting, setIsSubmitting] = useState(false);
     return calculateGrandTotal() - calculateTotalPaid();
   };
 
-  const calculateTotalDoctorShare = () => {
-    return procedures.reduce((sum, item) => sum + item.doctorAmount, 0);
+  const calculateShareBreakdown = (item: ProcedureItem) => {
+    const gross = item.rate * item.quantity;
+    const selectedDoctor = usersList.find((user) => user._id === item.performedBy);
+
+    let doctorShareGross = 0;
+    let hospitalShareGross = gross;
+
+    if (selectedDoctor && selectedDoctor.sharePrice && selectedDoctor.shareType) {
+      const sharePrice = parseFloat(String(selectedDoctor.sharePrice));
+      if (selectedDoctor.shareType === 'percentage') {
+        doctorShareGross = gross * (sharePrice / 100);
+      } else {
+        doctorShareGross = sharePrice;
+      }
+      doctorShareGross = Math.min(doctorShareGross, gross);
+      hospitalShareGross = gross - doctorShareGross;
+    }
+
+    const finalShares = calculateShares(item);
+    return {
+      doctorShare: finalShares.doctorAmount,
+      hospitalShare: finalShares.hospitalAmount,
+      doctorDiscountBurden: Math.max(0, doctorShareGross - finalShares.doctorAmount),
+      hospitalDiscountBurden: Math.max(0, hospitalShareGross - finalShares.hospitalAmount),
+    };
   };
 
-  const calculateTotalHospitalShare = () => {
-    return procedures.reduce((sum, item) => sum + item.hospitalAmount, 0);
-  };
+  const calculateTotalDoctorDiscountBurden = () =>
+    procedures
+      .filter(isProcDated)
+      .reduce((sum, item) => sum + calculateShareBreakdown(item).doctorDiscountBurden, 0);
+
+  const calculateTotalHospitalDiscountBurden = () =>
+    procedures
+      .filter(isProcDated)
+      .reduce((sum, item) => sum + calculateShareBreakdown(item).hospitalDiscountBurden, 0);
+
+  const calculateTotalDoctorShare = () =>
+    procedures
+      .filter(isProcDated)
+      .reduce((sum, item) => sum + calculateShareBreakdown(item).doctorShare, 0);
+
+  const calculateTotalHospitalShare = () =>
+    procedures
+      .filter(isProcDated)
+      .reduce((sum, item) => sum + calculateShareBreakdown(item).hospitalShare, 0);
 
 
     const loadDoctorOptions: LoadOptions<any, never, { page: number }> = async (
@@ -574,26 +637,46 @@ const [isSubmitting, setIsSubmitting] = useState(false);
       return;
     }
   
-    // Validate procedures
+    const anyProcRequiringCosting = procedures.some((p) => isProcCostingRequired(p));
+
+    // Validate procedures (Performed By only when procedure date is today or earlier)
     for (const item of procedures) {
-      if (!item.performedBy || item.performedBy.trim() === '') {
-        toast.error(`Doctor must be selected for procedure ${item.id}`);
-        setIsSubmitting(false);
-        return;
-      }
       if (!item.procedureId || item.procedureId.trim() === '') {
         toast.error(`Please select a procedure for item ${item.id}`);
         setIsSubmitting(false);
         return;
       }
+      if (
+        isProcCostingRequired(item) &&
+        (!item.performedBy || String(item.performedBy).trim() === '')
+      ) {
+        toast.error(
+          `Doctor (Performed By) must be selected for procedure ${item.id} — required for dates today or earlier (${item.procedureDate}).`,
+        );
+        setIsSubmitting(false);
+        return;
+      }
     }
-  
-    // Validate doctorId
-    const doctorId = procedures[0]?.performedBy;
-    if (!doctorId || doctorId.trim() === '') {
-      toast.error('Doctor must be selected');
-      setIsSubmitting(false);
-      return;
+
+    let doctorId: string | undefined;
+    if (anyProcRequiringCosting) {
+      const headerProc = procedures.find((p) => isProcCostingRequired(p)) ?? procedures[0];
+      doctorId =
+        (headerProc?.performedBy && String(headerProc.performedBy).trim()) ||
+        procedures
+          .filter(isProcCostingRequired)
+          .map((p) => p.performedBy)
+          .find((id) => id && String(id).trim());
+      if (!doctorId || String(doctorId).trim() === '') {
+        toast.error(
+          'Doctor must be selected on at least one procedure dated today or earlier (Performed By).',
+        );
+        setIsSubmitting(false);
+        return;
+      }
+    } else {
+      doctorId =
+        procedures.map((p) => p.performedBy).find((id) => id && String(id).trim()) || undefined;
     }
 
     const procedureDateToIso = (ds: string) => {
@@ -620,8 +703,8 @@ const [isSubmitting, setIsSubmitting] = useState(false);
       patientId: patientInfo._id,
       patientMr: patientInfo.mr,
       invoiceDate: invoiceDateIso || invoiceDate,
-      doctorId: doctorId,
-      item: procedures.map(item => ({
+      ...(isMongoHex24(doctorId) ? { doctorId } : {}),
+      item: procedures.map((item) => ({
         procedureId: item.procedureId,
         description:
           [item.procedure, item.procedureDate].filter(Boolean).join(' — ') ||
@@ -635,9 +718,10 @@ const [isSubmitting, setIsSubmitting] = useState(false);
         discountType: item.discountType,
         tax: item.tax === 'value' ? 0 : 0,
         total: item.amount - (item.discountType === 0 ? item.discount : (item.amount * (item.discount / 100))),
-        performedBy: item.performedBy,
+        deductDiscount: item.deductDiscount,
+        ...(isMongoHex24(item.performedBy) ? { performedBy: String(item.performedBy).trim() } : {}),
         doctorAmount: item.doctorAmount,
-        hospitalAmount: item.hospitalAmount
+        hospitalAmount: item.hospitalAmount,
       })),
       subTotalBill: calculateSubTotal(),
       discountBill: calculateTotalDiscount(),
@@ -688,9 +772,14 @@ const [isSubmitting, setIsSubmitting] = useState(false);
         }
     
       
-    } catch (error) {
-      toast.error(error.response?.data?.message);
-    }finally {
+    } catch (error: unknown) {
+      const ax = error as { response?: { data?: { error?: string; message?: string } } };
+      toast.error(
+        ax.response?.data?.error ||
+          ax.response?.data?.message ||
+          'Failed to create invoice',
+      );
+    } finally {
     setIsSubmitting(false); 
   }
     
@@ -1194,12 +1283,24 @@ const [isSubmitting, setIsSubmitting] = useState(false);
                 </span>
               </div>
               <div className="border-t pt-2 mt-2 flex justify-between">
+                <span>Doctor Discount Burden:</span>
+                <span className="font-medium text-red-600">
+                  - Rs. {calculateTotalDoctorDiscountBurden().toFixed(2)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>Hospital Discount Burden:</span>
+                <span className="font-medium text-red-600">
+                  - Rs. {calculateTotalHospitalDiscountBurden().toFixed(2)}
+                </span>
+              </div>
+              <div className="flex justify-between">
                 <span>Doctor Share:</span>
-                <span className="font-medium">Rs. {calculateTotalDoctorShare().toFixed(2)}</span>
+                <span className="font-medium">Rs. {calculateTotalDoctorDiscountBurden().toFixed(2)}</span>
               </div>
               <div className="flex justify-between">
                 <span>Hospital Share:</span>
-                <span className="font-medium">Rs. {calculateTotalHospitalShare().toFixed(2)}</span>
+                <span className="font-medium">Rs. {calculateTotalHospitalDiscountBurden().toFixed(2)}</span>
               </div>
             </div>
           </div>

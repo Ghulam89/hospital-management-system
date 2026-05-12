@@ -51,6 +51,17 @@ export default function POSReceipt() {
       ? data.payment[0]?.method || 'Cash'
       : 'Cash';
 
+  /** Net pack count for grouping: sale rows use quantity; partial return on same row uses Q−R when R<Q; full/credit return lines use −R. */
+  const posLineNetPackContribution = (it: any): number => {
+    const isReturn = Boolean(it?.isReturn);
+    const Q = Number(it?.quantity) || 0;
+    const R = Math.max(0, Number(it?.returnQuantity) || 0);
+    if (!isReturn) return Q;
+    if (Q > 0 && R > 0 && R < Q) return Q - R;
+    if (R > 0) return -R;
+    return 0;
+  };
+
   const groupedItems = (() => {
     const arr = Array.isArray(data?.allItem) ? data.allItem : [];
     const map = new Map<string, { name: string; rate: number; qty: number; total: number }>();
@@ -58,8 +69,7 @@ export default function POSReceipt() {
       const key = `${it?.pharmItemId?._id || it?.pharmItemId || it?.itemName || ''}|${String(it?.unit || '')}|${String(it?.batchNumber || '')}`;
       const name = it?.pharmItemId?.name || it?.itemName || '-';
       const rate = Number(it?.rate || 0);
-      const isReturn = Boolean(it?.isReturn);
-      const qty = isReturn ? -(Number(it?.returnQuantity || 0)) : Number(it?.quantity || 0);
+      const qty = posLineNetPackContribution(it);
       const total = Number(it?.totalAmount || 0);
       if (!map.has(key)) {
         map.set(key, { name, rate, qty: 0, total: 0 });
@@ -88,6 +98,15 @@ export default function POSReceipt() {
     <div className="flex items-start justify-center w-full bg-gray-100 py-6">
       <style>
         {`
+          #receipt-print,
+          #receipt-print * {
+            color: #000 !important;
+            font-weight: 700 !important;
+            -webkit-print-color-adjust: exact;
+            print-color-adjust: exact;
+            text-rendering: geometricPrecision;
+          }
+
           @media print {
             body * { visibility: hidden; }
             #receipt-print, #receipt-print * { visibility: visible; }
@@ -95,9 +114,12 @@ export default function POSReceipt() {
             #receipt-print .logo-mono { filter: grayscale(100%) brightness(0) contrast(200%); }
           }
           #receipt-print .logo-mono { filter: grayscale(100%) brightness(0) contrast(200%); }
+          #receipt-print .receipt-print-btn {
+            color: #fff !important;
+          }
         `}
       </style>
-      <div id="receipt-print" className="bg-white mx-auto shadow-sm w-[420px] p-4 text-black">
+      <div id="receipt-print" className="bg-white mx-auto shadow-sm w-[420px] p-4 text-black font-bold">
         <div className="flex items-center justify-between mb-3">
           <button
             onClick={() => navigate(-1)}
@@ -190,7 +212,7 @@ export default function POSReceipt() {
         <div className="mt-4 flex justify-center print:hidden">
           <button
             onClick={() => window.print()}
-            className="px-4 py-2 rounded bg-primary text-white text-xs"
+            className="receipt-print-btn px-4 py-2 rounded bg-primary text-white text-xs"
           >
             Print Receipt
           </button>

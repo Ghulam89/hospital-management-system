@@ -26,13 +26,119 @@ function assertInvoiceBackdatesAllowed(req, res, dates) {
   return true;
 }
 
+/** 24-hex ObjectId string (strict) — avoids CastError from "" or invalid strings */
+function isStrictObjectIdString(v) {
+  if (v == null || v === "") return false;
+  const s =
+    typeof v === "object" && v !== null && "_id" in v ? String(v._id) : String(v);
+  const t = s.trim();
+  return /^[0-9a-fA-F]{24}$/i.test(t) && Types.ObjectId.isValid(t);
+}
+
+/**
+ * Strip invalid ObjectIds and coerce numeric line fields so Mongoose does not throw CastError
+ * (e.g. performedBy: "", rate: "10000" from form JSON).
+ */
+function sanitizeInvoiceWritePayload(body) {
+  if (!body || typeof body !== "object") return body;
+  const out = { ...body };
+
+  if (out.doctorId != null && !isStrictObjectIdString(out.doctorId)) {
+    delete out.doctorId;
+  }
+
+  const coerceNum = (v) => {
+    if (v == null || v === "") return v;
+    if (typeof v === "number" && Number.isFinite(v)) return v;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : v;
+  };
+
+  const cleanLine = (row) => {
+    if (!row || typeof row !== "object") return row;
+    const r = { ...row };
+    const numKeys = [
+      "rate",
+      "quantity",
+      "amount",
+      "discount",
+      "discountType",
+      "tax",
+      "total",
+      "doctorAmount",
+      "hospitalAmount",
+      "expenseAmount",
+    ];
+    for (const k of numKeys) {
+      if (k in r) r[k] = coerceNum(r[k]);
+    }
+    if (r.performedBy != null && !isStrictObjectIdString(r.performedBy)) {
+      delete r.performedBy;
+    }
+    if (Array.isArray(r.assistedBy)) {
+      r.assistedBy = r.assistedBy.filter((id) => isStrictObjectIdString(id));
+    }
+    if (Array.isArray(r.receptionStaff)) {
+      r.receptionStaff = r.receptionStaff.filter((id) => isStrictObjectIdString(id));
+    }
+    if (Array.isArray(r.expenses)) {
+      r.expenses = r.expenses
+        .filter((e) => e && isStrictObjectIdString(e.expenseCategoryId || e.categoryId))
+        .map((e) => ({
+          ...e,
+          amount: coerceNum(e.amount),
+        }));
+    }
+    if (Array.isArray(r.doctorShares)) {
+      r.doctorShares = r.doctorShares
+        .filter((s) => s && isStrictObjectIdString(s.doctorId || s.userId))
+        .map((s) => {
+          const doctorId = s.doctorId || s.userId;
+          const sv = coerceNum(s.shareValue ?? s.share);
+          const st = String(s.shareType || "value").toLowerCase();
+          return {
+            doctorId,
+            shareType: st === "percentage" ? "percentage" : "value",
+            shareValue: typeof sv === "number" && Number.isFinite(sv) ? sv : 0,
+            amount: coerceNum(s.amount),
+          };
+        });
+    }
+    if (Array.isArray(r.consumptions)) {
+      r.consumptions = r.consumptions
+        .filter((c) => c && isStrictObjectIdString(c.pharmItemId))
+        .map((c) => ({
+          ...c,
+          qty: coerceNum(c.qty),
+        }));
+    }
+    return r;
+  };
+
+  if (Array.isArray(out.item)) {
+    out.item = out.item.map(cleanLine);
+  }
+  if (Array.isArray(out.invoiceExpenses)) {
+    out.invoiceExpenses = out.invoiceExpenses
+      .filter((e) => e && isStrictObjectIdString(e.expenseCategoryId || e.categoryId))
+      .map((e) => ({ ...e, amount: coerceNum(e.amount) }));
+  }
+  if (Array.isArray(out.invoiceConsumptions)) {
+    out.invoiceConsumptions = out.invoiceConsumptions
+      .filter((c) => c && isStrictObjectIdString(c.pharmItemId))
+      .map((c) => ({ ...c, qty: coerceNum(c.qty) }));
+  }
+
+  return out;
+}
+
 // 1. Create invoice
 const addinvoice = async (req, res) => {
   try {
 
 
 
-    const body = assignBranchIdForCreate(req, { ...req.body });
+    const body = assignBranchIdForCreate(req, sanitizeInvoiceWritePayload({ ...req.body }));
     const datesToCheck = [];
     if (body.invoiceDate) datesToCheck.push(body.invoiceDate);
     if (Array.isArray(body.payment)) {
@@ -674,7 +780,7 @@ const updateinvoice = async (req, res) => {
 
     const data = await Invoice.findByIdAndUpdate(
       id,
-      { ...req.body },
+      sanitizeInvoiceWritePayload({ ...req.body }),
       { new: true }
     );
     return res.status(200).json({ status: "ok", data: data });

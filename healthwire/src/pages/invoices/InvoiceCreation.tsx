@@ -38,6 +38,26 @@ type ProcedureItem = {
   cost: number; // Added cost field
 };
 
+function refId(value: unknown): string {
+  if (value == null || value === '') return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object' && value !== null && '_id' in value) {
+    const idVal = (value as { _id: unknown })._id;
+    if (idVal != null && idVal !== '') return String(idVal);
+  }
+  return '';
+}
+
+/** Avoid sending "" for ObjectId fields — Mongoose throws CastError → HTTP 500 */
+function isMongoHex24(id: unknown): boolean {
+  return /^[0-9a-fA-F]{24}$/i.test(String(refId(id) || '').trim());
+}
+
+function numField(v: unknown, fallback = 0): number {
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 type PaymentInstallment = {
   id: number;
   date: string;
@@ -151,6 +171,23 @@ export default function InvoiceCreation() {
 
   const isProcDated = (item: ProcedureItem) =>
     !!(item.procedureDate && String(item.procedureDate).trim());
+
+  /** Doctor / assisted / reception compulsory only when procedure date is today or earlier (not future / unconfirmed). */
+  const isProcCostingRequired = (item: ProcedureItem): boolean => {
+    if (!isProcDated(item)) return false;
+    const ymd = String(item.procedureDate).trim().slice(0, 10);
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(ymd);
+    if (!m) return false;
+    const y = Number(m[1]);
+    const mo = Number(m[2]);
+    const day = Number(m[3]);
+    if (!y || !mo || !day) return false;
+    const procStart = new Date(y, mo - 1, day);
+    procStart.setHours(0, 0, 0, 0);
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    return procStart.getTime() <= todayStart.getTime();
+  };
 
   const lineNetAfterDiscount = (item: ProcedureItem) => {
     const disc =
@@ -328,6 +365,37 @@ export default function InvoiceCreation() {
     };
   }
 };
+  const getBundleForProcedureRow = (procedureRowId: number) =>
+    localExpenses.find((b) => b?.procedureRowId === procedureRowId) || null;
+
+  const getPrimaryDoctorProfile = (bundle: any) => {
+    const raw = bundle?.primaryDoctorProfile;
+    if (!raw || typeof raw !== 'object') return null;
+    const doc = raw as Record<string, unknown>;
+    const id = refId(doc._id);
+    if (!id) return null;
+    return {
+      _id: id,
+      name: String(doc.name || ''),
+      sharePrice: doc.sharePrice != null ? String(doc.sharePrice) : undefined,
+      shareType: doc.shareType != null ? String(doc.shareType) : undefined,
+    };
+  };
+
+  const calculateDoctorGrossShareFromBundle = (bundle: any, gross: number) => {
+    const validRows = (bundle?.doctorShares || []).filter((s: any) => {
+      const id = refId(s?.doctorId ?? s?.userId ?? s?.doctor);
+      const rawShare = Number(s?.share ?? s?.shareValue);
+      return id && /^[0-9a-fA-F]{24}$/i.test(id) && Number.isFinite(rawShare) && rawShare > 0;
+    });
+    if (validRows.length === 0) return null;
+    const total = validRows.reduce((sum: number, s: any) => {
+      const rawShare = Number(s?.share ?? s?.shareValue) || 0;
+      const isPct = String(s?.shareType || '').toLowerCase() === 'percentage';
+      return sum + (isPct ? gross * (rawShare / 100) : rawShare);
+    }, 0);
+    return Math.min(total, gross);
+  };
   const addProcedure = () => {
     setProcedures([
       ...procedures,
@@ -369,67 +437,133 @@ export default function InvoiceCreation() {
     fetchCategories();
   }, []);
 
-  const calculateShares = (item: ProcedureItem) => {
-  const totalAmount = item.rate * item.quantity;
-  let discountAmount = item.discount;
+  const calculateShares = (item: ProcedureItem, bundle?: any) => {
+    const gross = numField(item.rate) * numField(item.quantity, 1);
+    let discountAmount = numField(item.discount);
 
-  if (item.discountType === 1) { 
-    discountAmount = totalAmount * (item.discount / 100);
-  }
-
-  const remainingAmount = totalAmount - discountAmount;
-
-  const selectedDoctor = usersList.find(user => user._id === item.performedBy);
-    
-  let doctorShare = 0;
-  let hospitalShare = remainingAmount; 
-
-  if (selectedDoctor && selectedDoctor.sharePrice && selectedDoctor.shareType) {
-    const sharePrice = parseFloat(selectedDoctor.sharePrice);
-    
-    if (selectedDoctor.shareType === 'percentage') {
-      doctorShare = totalAmount * (sharePrice / 100);
-    } else {
-      doctorShare = sharePrice;
+    if (item.discountType === 1) {
+      discountAmount = gross * (numField(item.discount) / 100);
     }
 
-    // Ensure doctor doesn't get more than the remaining amount
-    doctorShare = Math.min(doctorShare, remainingAmount);
-    hospitalShare = remainingAmount - doctorShare;
-  }
+    const net = Math.max(0, gross - discountAmount);
 
-  // Apply discount distribution based on deductDiscount selection
-  switch (item.deductDiscount) {
-    case 'Hospital & Doctor':
-      // Split discount equally between hospital and doctor
-      doctorShare = doctorShare - (discountAmount / 2);
-      hospitalShare = hospitalShare - (discountAmount / 2);
-      break;
-    case 'Hospital':
-      // Apply full discount to hospital share only
-      hospitalShare = hospitalShare - discountAmount;
-      break;
-    case 'Doctor':
-      // Apply full discount to doctor share only
-      doctorShare = doctorShare - discountAmount;
-      break;
-  }
+    const selectedDoctor = usersList.find((user) => user._id === item.performedBy);
+    const primaryDoctorProfile = getPrimaryDoctorProfile(bundle);
 
-  // Ensure shares don't go negative
-  doctorShare = Math.max(0, doctorShare);
-  hospitalShare = Math.max(0, hospitalShare);
+    let doctorShareGross = 0;
+    let hospitalShareGross = gross;
 
-  return {
-    doctorAmount: parseFloat(doctorShare.toFixed(2)),
-    hospitalAmount: parseFloat(hospitalShare.toFixed(2)),
+    const manualDoctorShare = calculateDoctorGrossShareFromBundle(bundle, gross);
+    if (manualDoctorShare != null) {
+      doctorShareGross = manualDoctorShare;
+      hospitalShareGross = gross - doctorShareGross;
+    } else {
+      const sharePrice =
+        primaryDoctorProfile?.sharePrice != null && String(primaryDoctorProfile.sharePrice).trim() !== ''
+          ? parseFloat(String(primaryDoctorProfile.sharePrice).replace(/,/g, ''))
+          : selectedDoctor?.sharePrice != null && String(selectedDoctor.sharePrice).trim() !== ''
+            ? parseFloat(String(selectedDoctor.sharePrice).replace(/,/g, ''))
+            : NaN;
+      if (Number.isFinite(sharePrice)) {
+        const isPct =
+          String(primaryDoctorProfile?.shareType || '').toLowerCase().includes('percent') ||
+          String(selectedDoctor?.shareType || '')
+            .toLowerCase()
+            .includes('percent');
+        doctorShareGross = isPct ? gross * (sharePrice / 100) : sharePrice;
+        doctorShareGross = Math.min(doctorShareGross, gross);
+        hospitalShareGross = gross - doctorShareGross;
+      }
+    }
+
+    let doctorShare = doctorShareGross;
+    let hospitalShare = hospitalShareGross;
+
+    switch (item.deductDiscount) {
+      case 'Hospital & Doctor':
+        doctorShare = Math.max(0, doctorShareGross - discountAmount / 2);
+        hospitalShare = Math.max(0, hospitalShareGross - discountAmount / 2);
+        break;
+      case 'Hospital':
+        hospitalShare = Math.max(0, hospitalShareGross - discountAmount);
+        doctorShare = doctorShareGross;
+        break;
+      case 'Doctor':
+        doctorShare = Math.max(0, doctorShareGross - discountAmount);
+        hospitalShare = hospitalShareGross;
+        break;
+      default:
+        break;
+    }
+
+    const sumAfter = doctorShare + hospitalShare;
+    if (net <= 0) {
+      doctorShare = 0;
+      hospitalShare = 0;
+    } else if (Math.abs(sumAfter - net) > 0.0001) {
+      hospitalShare = Math.max(0, net - doctorShare);
+      doctorShare = Math.max(0, net - hospitalShare);
+    }
+
+    return {
+      doctorAmount: parseFloat(doctorShare.toFixed(2)),
+      hospitalAmount: parseFloat(hospitalShare.toFixed(2)),
+    };
   };
-};
+
+  const calculateShareBreakdown = (item: ProcedureItem, bundle?: any) => {
+    const gross = numField(item.rate) * numField(item.quantity, 1);
+    const selectedDoctor = usersList.find((user) => user._id === item.performedBy);
+    const primaryDoctorProfile = getPrimaryDoctorProfile(bundle);
+
+    let doctorShareGross = 0;
+    let hospitalShareGross = gross;
+    const manualDoctorShare = calculateDoctorGrossShareFromBundle(bundle, gross);
+    if (manualDoctorShare != null) {
+      doctorShareGross = manualDoctorShare;
+      hospitalShareGross = gross - doctorShareGross;
+    } else {
+      const sharePrice =
+        primaryDoctorProfile?.sharePrice != null && String(primaryDoctorProfile.sharePrice).trim() !== ''
+          ? parseFloat(String(primaryDoctorProfile.sharePrice).replace(/,/g, ''))
+          : selectedDoctor?.sharePrice != null && String(selectedDoctor.sharePrice).trim() !== ''
+            ? parseFloat(String(selectedDoctor.sharePrice).replace(/,/g, ''))
+            : NaN;
+      if (Number.isFinite(sharePrice)) {
+        const isPct =
+          String(primaryDoctorProfile?.shareType || '').toLowerCase().includes('percent') ||
+          String(selectedDoctor?.shareType || '').toLowerCase().includes('percent');
+        doctorShareGross = Math.min(isPct ? gross * (sharePrice / 100) : sharePrice, gross);
+        hospitalShareGross = gross - doctorShareGross;
+      }
+    }
+
+    const finalShares = calculateShares(item, bundle);
+    return {
+      doctorShare: finalShares.doctorAmount,
+      hospitalShare: finalShares.hospitalAmount,
+      doctorDiscountBurden: Math.max(0, doctorShareGross - finalShares.doctorAmount),
+      hospitalDiscountBurden: Math.max(0, hospitalShareGross - finalShares.hospitalAmount),
+    };
+  };
 
   const handleLocalExpenseAdd = (procedureRowId: number | null, bundle: any) => {
+    const proc = procedureRowId != null ? procedures.find((p) => p.id === procedureRowId) : null;
+    const payload = { procedureRowId, procedureId: proc?.procedureId || '', ...bundle };
+    const primaryDoctorProfile = getPrimaryDoctorProfile(payload);
+    if (primaryDoctorProfile) {
+      setUsersList((prev) => {
+        const idx = prev.findIndex((u) => u._id === primaryDoctorProfile._id);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = { ...next[idx], ...primaryDoctorProfile };
+          return next;
+        }
+        return [...prev, primaryDoctorProfile];
+      });
+    }
     setLocalExpenses((prev) => {
       const idx = prev.findIndex((e) => e.procedureRowId === procedureRowId);
-      const proc = procedureRowId != null ? procedures.find((p) => p.id === procedureRowId) : null;
-      const payload = { procedureRowId, procedureId: proc?.procedureId || '', ...bundle };
       if (idx >= 0) {
         const next = [...prev];
         next[idx] = payload;
@@ -438,17 +572,17 @@ export default function InvoiceCreation() {
       return [...prev, payload];
     });
     if (procedureRowId != null) {
-      const firstDoc = bundle?.doctorShares?.find(
-        (s: any) =>
-          s.doctorId && /^[0-9a-fA-F]{24}$/.test(String(s.doctorId).trim()),
-      );
-      const docId = firstDoc?.doctorId ? String(firstDoc.doctorId).trim() : '';
+      const firstDoc = bundle?.doctorShares?.find((s: any) => {
+        const id = refId(s?.doctorId ?? s?.userId ?? s?.doctor);
+        return id && /^[0-9a-fA-F]{24}$/i.test(id);
+      });
+      const docId = firstDoc ? refId(firstDoc.doctorId ?? firstDoc.userId ?? firstDoc.doctor) : '';
       if (docId) {
         setProcedures((prev) =>
           prev.map((p) => {
             if (p.id !== procedureRowId) return p;
             const next = { ...p, performedBy: docId };
-            const sh = calculateShares(next);
+            const sh = calculateShares(next, payload);
             return { ...next, doctorAmount: sh.doctorAmount, hospitalAmount: sh.hospitalAmount };
           }),
         );
@@ -523,17 +657,20 @@ export default function InvoiceCreation() {
         }
 
         if (
+          field === 'procedureId' ||
+          field === 'rate' ||
+          field === 'quantity' ||
           field === 'discount' ||
           field === 'discountType' ||
           field === 'deductDiscount'
         ) {
-          const shares = calculateShares(updatedItem);
+          const shares = calculateShares(updatedItem, getBundleForProcedureRow(id));
           updatedItem.doctorAmount = shares.doctorAmount;
           updatedItem.hospitalAmount = shares.hospitalAmount;
         }
 
         if (field === 'performedBy') {
-  const shares = calculateShares(updatedItem);
+  const shares = calculateShares(updatedItem, getBundleForProcedureRow(id));
   updatedItem.doctorAmount = shares.doctorAmount;
   updatedItem.hospitalAmount = shares.hospitalAmount;
 }
@@ -618,6 +755,38 @@ export default function InvoiceCreation() {
     return calculateGrandTotal() - calculateTotalPaid();
   };
 
+  const calculateTotalDoctorDiscountBurden = () =>
+    procedures
+      .filter(isProcDated)
+      .reduce((sum, item) => {
+        const breakdown = calculateShareBreakdown(item, getBundleForProcedureRow(item.id));
+        return sum + breakdown.doctorDiscountBurden;
+      }, 0);
+
+  const calculateTotalHospitalDiscountBurden = () =>
+    procedures
+      .filter(isProcDated)
+      .reduce((sum, item) => {
+        const breakdown = calculateShareBreakdown(item, getBundleForProcedureRow(item.id));
+        return sum + breakdown.hospitalDiscountBurden;
+      }, 0);
+
+  const calculateTotalDoctorShare = () =>
+    procedures
+      .filter(isProcDated)
+      .reduce((sum, item) => {
+        const breakdown = calculateShareBreakdown(item, getBundleForProcedureRow(item.id));
+        return sum + breakdown.doctorShare;
+      }, 0);
+
+  const calculateTotalHospitalShare = () =>
+    procedures
+      .filter(isProcDated)
+      .reduce((sum, item) => {
+        const breakdown = calculateShareBreakdown(item, getBundleForProcedureRow(item.id));
+        return sum + breakdown.hospitalShare;
+      }, 0);
+
   const handleSaveDraft = async () => {
     setIsSubmitting(true);
     
@@ -660,42 +829,53 @@ export default function InvoiceCreation() {
       return new Date(y, m - 1, d, 12, 0, 0, 0).toISOString();
     };
 
-   // Validate procedures
+   // Validate procedures (doctor / assisted / reception only for dates today or earlier — not future or blank)
     for (const item of procedures) {
       if (!item.procedureId) {
         toast.error(`Please select a procedure for item ${item.id}`);
         setIsSubmitting(false);
         return;
       }
+      if (!isProcCostingRequired(item)) {
+        // Validate discount doesn't exceed amount (all rows)
+        const maxDiscount = item.discountType === 0 ? item.amount : 100;
+        if (item.discount > maxDiscount) {
+          toast.error(`Discount cannot exceed ${item.discountType === 0 ? 'amount' : '100%'} for procedure ${item.id}`);
+          setIsSubmitting(false);
+          return;
+        }
+        continue;
+      }
       const costing = localExpenses.find((b) => b.procedureRowId === item.id);
-      const hasDoctor = costing?.doctorShares?.some(
-        (s: any) => s.doctorId && /^[0-9a-fA-F]{24}$/i.test(String(s.doctorId)),
-      );
-      if (!hasDoctor) {
+      const hasDoctor = costing?.doctorShares?.some((s: any) => {
+        const id = refId(s?.doctorId ?? s?.userId ?? s?.doctor);
+        return id && /^[0-9a-fA-F]{24}$/i.test(id);
+      });
+      const hasPerformedBy =
+        !!refId(item.performedBy) && /^[0-9a-fA-F]{24}$/i.test(String(refId(item.performedBy)));
+      if (!hasDoctor && !hasPerformedBy) {
         toast.error(
-          `Procedure "${item.procedure || item.id}": open costing (document icon) and add at least one doctor`,
+          `Procedure "${item.procedure || item.id}" (${item.procedureDate}): open costing and add at least one doctor, or set Performed By.`,
         );
         setIsSubmitting(false);
         return;
       }
-      // Staff (Assisted By) compulsory
       const hasAssisted = (costing?.assistedBy || []).some(
         (s: any) => s?.userId && /^[0-9a-fA-F]{24}$/i.test(String(s.userId)),
       );
       if (!hasAssisted) {
         toast.error(
-          `Procedure "${item.procedure || item.id}": open costing (document icon) and add at least one staff (Assisted By)`,
+          `Procedure "${item.procedure || item.id}" (${item.procedureDate}): open costing and add at least one staff (Assisted By)`,
         );
         setIsSubmitting(false);
         return;
       }
-      // Reception staff compulsory
       const hasReception = (costing?.receptionStaff || []).some(
         (s: any) => s?.userId && /^[0-9a-fA-F]{24}$/i.test(String(s.userId)),
       );
       if (!hasReception) {
         toast.error(
-          `Procedure "${item.procedure || item.id}": open costing (document icon) and add at least one Reception staff`,
+          `Procedure "${item.procedure || item.id}" (${item.procedureDate}): open costing and add at least one Reception staff`,
         );
         setIsSubmitting(false);
         return;
@@ -709,16 +889,37 @@ export default function InvoiceCreation() {
       }
     }
 
-    const firstProc = procedures[0];
-    const firstBundle = localExpenses.find((b) => b.procedureRowId === firstProc?.id) || {};
-    const doctorId =
-      firstBundle.doctorShares?.find(
-        (s: any) => s.doctorId && /^[0-9a-fA-F]{24}$/i.test(String(s.doctorId)),
-      )?.doctorId || procedures[0]?.performedBy;
-    if (!doctorId || String(doctorId).trim() === '') {
-      toast.error('Add at least one doctor in costing for the first procedure');
-      setIsSubmitting(false);
-      return;
+    const anyProcRequiringCosting = procedures.some((p) => isProcCostingRequired(p));
+
+    let doctorId: string | undefined;
+    if (anyProcRequiringCosting) {
+      const headerProc = procedures.find((p) => isProcCostingRequired(p)) ?? procedures[0];
+      const firstBundle = localExpenses.find((b) => b.procedureRowId === headerProc?.id) || {};
+      const firstShareDoc = firstBundle.doctorShares?.find((s: any) => {
+        const id = refId(s?.doctorId ?? s?.userId ?? s?.doctor);
+        return id && /^[0-9a-fA-F]{24}$/i.test(id);
+      });
+      doctorId =
+        (firstShareDoc ? refId(firstShareDoc.doctorId ?? firstShareDoc.userId ?? firstShareDoc.doctor) : '') ||
+        refId(headerProc?.performedBy);
+      if (!doctorId || String(doctorId).trim() === '') {
+        toast.error(
+          'Invoice needs a doctor: add doctor shares or Performed By on a procedure dated today or earlier.',
+        );
+        setIsSubmitting(false);
+        return;
+      }
+    } else {
+      const headerProc = procedures[0];
+      const firstBundle = localExpenses.find((b) => b.procedureRowId === headerProc?.id) || {};
+      const firstShareDoc = firstBundle.doctorShares?.find((s: any) => {
+        const id = refId(s?.doctorId ?? s?.userId ?? s?.doctor);
+        return id && /^[0-9a-fA-F]{24}$/i.test(id);
+      });
+      doctorId =
+        (firstShareDoc ? refId(firstShareDoc.doctorId ?? firstShareDoc.userId ?? firstShareDoc.doctor) : '') ||
+        refId(headerProc?.performedBy) ||
+        undefined;
     }
 
     const billingTotal = calculateGrandTotal();
@@ -743,67 +944,79 @@ export default function InvoiceCreation() {
     const invoiceData = {
       patientId: patientInfo._id,
       patientMr: patientInfo.mr,
-      
-      doctorId: doctorId,
+      ...(isMongoHex24(doctorId) ? { doctorId } : {}),
       item: procedures.map((item) => {
         const bundle = localExpenses.find((b) => b.procedureRowId === item.id) || {};
-        const shownExpenses = bundle.expenses || [];
+        const resolvedShares = calculateShares(item, bundle);
+        const shownExpenses = (bundle.expenses || []).filter((e: any) =>
+          isMongoHex24(e?.expenseCategoryId ?? e?.categoryId ?? e?.category),
+        );
         const shares = (bundle.doctorShares || [])
           .filter((share: any) => {
-            const id = String(share.doctorId || '');
-            const isHex24 = /^[0-9a-fA-F]{24}$/.test(id);
-            const val = Number(share.share);
-            return isHex24 && Number.isFinite(val) && val > 0;
+            const id = refId(share?.doctorId ?? share?.userId ?? share?.doctor);
+            const isHex24 = /^[0-9a-fA-F]{24}$/i.test(id);
+            const val = Number(share.share ?? share.shareValue);
+            return isHex24 && Number.isFinite(val);
           })
           .map((share: any) => {
-            const base = calculateDoctorShareBase();
-            const val = Number(share.share) || 0;
-            const amount = share.shareType === 'percentage' ? base * (val / 100) : val;
+            const val = Number(share.share ?? share.shareValue) || 0;
+            const st = String(share.shareType || '').toLowerCase();
+            const amount = st === 'percentage' ? numField(item.amount) * (val / 100) : val;
             return {
-              doctorId: String(share.doctorId),
-              shareType: share.shareType,
+              doctorId: refId(share.doctorId ?? share.userId ?? share.doctor),
+              shareType: st === 'percentage' ? 'percentage' : 'value',
               shareValue: val,
               amount,
             };
           });
+        const primaryRow = (bundle.doctorShares || []).find((s: any) => {
+          const id = refId(s?.doctorId ?? s?.userId ?? s?.doctor);
+          return id && /^[0-9a-fA-F]{24}$/i.test(id);
+        });
         const primaryDoc =
-          (bundle.doctorShares || []).find((s: any) =>
-            s.doctorId && /^[0-9a-fA-F]{24}$/i.test(String(s.doctorId)),
-          )?.doctorId || item.performedBy;
-        return ({
+          (primaryRow ? refId(primaryRow.doctorId ?? primaryRow.userId ?? primaryRow.doctor) : '') ||
+          item.performedBy;
+        const performedBySave = refId(primaryDoc);
+        const amt = numField(item.amount);
+        const disc = numField(item.discount);
+        const qty = numField(item.quantity, 1);
+        const lineTotal =
+          amt - (item.discountType === 0 ? disc : amt * (disc / 100));
+        return {
         procedureId: item.procedureId,
         description:
           [item.procedure, item.procedureDate].filter(Boolean).join(' — ') ||
           item.description ||
           item.procedure,
         procedureDate: procedureDateToIso(item.procedureDate),
-        rate: item.rate,
-        quantity: item.quantity,
-        amount: item.amount,
-        discount: item.discount,
-        discountType: item.discountType,
-        tax: item.tax,
-        total:
-          item.amount -
-          (item.discountType === 0
-            ? item.discount
-            : item.amount * (item.discount / 100)),
-        performedBy: primaryDoc,
+        rate: numField(item.rate),
+        quantity: qty,
+        amount: amt,
+        discount: disc,
+        discountType: numField(item.discountType),
+        tax: numField(item.tax),
+        total: lineTotal,
+        deductDiscount: item.deductDiscount,
+        ...(isMongoHex24(performedBySave) ? { performedBy: performedBySave } : {}),
         assistedBy: (bundle.assistedBy || [])
           .map((x: { userId?: string }) => x?.userId)
-          .filter(Boolean),
+          .filter((uid: string | undefined): uid is string => !!uid && isMongoHex24(uid)),
         receptionStaff: (bundle.receptionStaff || [])
           .map((x: { userId?: string }) => x?.userId)
-          .filter(Boolean),
-        doctorAmount: item.doctorAmount,
-        hospitalAmount: item.hospitalAmount,
+          .filter((uid: string | undefined): uid is string => !!uid && isMongoHex24(uid)),
+        doctorAmount: numField(resolvedShares.doctorAmount),
+        hospitalAmount: numField(resolvedShares.hospitalAmount),
          expenses: shownExpenses,
          doctorShares: shares,
-         consumptions: bundle.consumptions || [],
-        });
+         consumptions: (bundle.consumptions || []).filter((c: any) => isMongoHex24(c?.pharmItemId)),
+        };
       }),
-      invoiceExpenses: (localExpenses.find(e => e.procedureRowId == null)?.expenses || []).filter((exp: any) => exp.showInPrint),
-      invoiceConsumptions: localExpenses.find(e => e.procedureRowId == null)?.consumptions || [],
+      invoiceExpenses: (localExpenses.find(e => e.procedureRowId == null)?.expenses || [])
+        .filter((exp: any) => exp.showInPrint)
+        .filter((exp: any) => isMongoHex24(exp?.expenseCategoryId ?? exp?.categoryId)),
+      invoiceConsumptions: (localExpenses.find(e => e.procedureRowId == null)?.consumptions || []).filter((c: any) =>
+        isMongoHex24(c?.pharmItemId),
+      ),
       subTotalBill: calculateSubTotal(),
       discountBill: calculateTotalDiscount(),
       taxBill: 0,
@@ -850,11 +1063,14 @@ export default function InvoiceCreation() {
       console.log('Invoice created successfully:', response.data);
       toast.success('Invoice created successfully!'); 
        navigate('/invoice');
-    } catch (error) {
-      console.error('Detailed error:', error.response?.data || error.message);
+    } catch (error: unknown) {
+      const ax = error as { response?: { data?: { error?: string; message?: string } } };
+      const data = ax.response?.data;
+      console.error('Detailed error:', data ?? (error instanceof Error ? error.message : error));
       toast.error(
-        error.response?.data?.message ||
-          'An error occurred while creating invoice',
+        data?.error ||
+          data?.message ||
+          (error instanceof Error ? error.message : 'An error occurred while creating invoice'),
       );
     }finally {
     setIsSubmitting(false); 
@@ -1290,7 +1506,8 @@ export default function InvoiceCreation() {
                       </button>
                    
                       <button className={`text-primary ${!item.procedureId ? 'opacity-50 cursor-not-allowed' : ''}`} disabled={!item.procedureId} onClick={() => { 
-                        const existing = localExpenses.find(e => e.procedureRowId === item.id || e.procedureId === item.procedureId) || null;
+                        const existing =
+                          localExpenses.find((e) => e.procedureRowId === item.id) || null;
                         setSelectedProcedureRowId(item.id);
                         setEditingExpense(existing);
                         setIsProcedureExpenseModalOpen(true); 
@@ -1776,6 +1993,26 @@ export default function InvoiceCreation() {
                   {calculateDue() < 0 && '(Credit)'}
                 </span>
               </div>
+              <div className="border-t pt-2 mt-2 flex justify-between">
+                <span>Doctor Discount Burden:</span>
+                <span className="font-medium text-red-600">
+                  - Rs. {calculateTotalDoctorDiscountBurden().toFixed(2)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>Hospital Discount Burden:</span>
+                <span className="font-medium text-red-600">
+                  - Rs. {calculateTotalHospitalDiscountBurden().toFixed(2)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>Doctor Share:</span>
+                <span className="font-medium">Rs. {calculateTotalDoctorDiscountBurden().toFixed(2)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span>Hospital Share:</span>
+                <span className="font-medium">Rs. {calculateTotalHospitalDiscountBurden().toFixed(2)}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -1833,6 +2070,8 @@ export default function InvoiceCreation() {
         selectedExpense={editingExpense}
         categories={categories}
         selectedProcedureId={selectedProcedureRowId}
+        procedureDate={procedures.find((p) => p.id === selectedProcedureRowId)?.procedureDate}
+        performedBy={procedures.find((p) => p.id === selectedProcedureRowId)?.performedBy}
         onLocalExpenseAdd={handleLocalExpenseAdd}
       />
 

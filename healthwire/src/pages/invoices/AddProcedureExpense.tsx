@@ -7,6 +7,17 @@ import { Base_url } from '../../utils/Base_url';
 import { AsyncPaginate, LoadOptions } from 'react-select-async-paginate';
 import { FaTrashAlt } from 'react-icons/fa';
 
+/** Populated refs from API (`{ _id, name }`) — normalize for selects and save */
+function refId(value: unknown): string {
+  if (value == null || value === '') return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'object' && value !== null && '_id' in value) {
+    const idVal = (value as { _id: unknown })._id;
+    if (idVal != null && idVal !== '') return String(idVal);
+  }
+  return '';
+}
+
 type Category = {
   _id: string;
   name: string;
@@ -18,6 +29,36 @@ type Doctor = {
   sharePrice?: string;
   shareType?: string;
 };
+
+/** Full doctor row from API so procedure share can default to registration sharePrice / shareType */
+function doctorFromApi(raw: unknown): Doctor | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const o = raw as Record<string, unknown>;
+  const id = refId(o._id);
+  if (!id) return null;
+  const name = String(o.name || '');
+  const sp = o.sharePrice;
+  const st = o.shareType;
+  const doc: Doctor = { _id: id, name };
+  if (sp != null && String(sp).trim() !== '') doc.sharePrice = String(sp);
+  if (st != null && String(st).trim() !== '') doc.shareType = String(st);
+  return doc;
+}
+
+function defaultShareAmountFromDoctor(doc: Doctor | null | undefined): number | undefined {
+  if (!doc) return undefined;
+  const raw = doc.sharePrice;
+  if (raw == null || String(raw).trim() === '') return undefined;
+  const n = Number(String(raw).replace(/,/g, ''));
+  return Number.isFinite(n) ? n : undefined;
+}
+
+function defaultShareTypeFromDoctor(doc: Doctor | null | undefined): 'value' | 'percentage' {
+  if (!doc?.shareType || String(doc.shareType).trim() === '') return 'value';
+  const t = String(doc.shareType).toLowerCase();
+  if (t.includes('percent')) return 'percentage';
+  return 'value';
+}
 
 type StaffUser = {
   _id: string;
@@ -70,12 +111,33 @@ type StaffOption = { value: string; label: string; staffData: StaffUser };
 type ItemOption = { value: string; label: string; itemData: PharmItem };
 type CategoryOption = { value: string; label: string; categoryData: Category };
 
+function isProcCostingRequiredFromDate(procedureDate: string | undefined): boolean {
+  const trimmed = String(procedureDate ?? '').trim();
+  if (!trimmed) return false;
+  const ymd = trimmed.slice(0, 10);
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(ymd);
+  if (!m) return false;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const day = Number(m[3]);
+  if (!y || !mo || !day) return false;
+  const procStart = new Date(y, mo - 1, day);
+  procStart.setHours(0, 0, 0, 0);
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  return procStart.getTime() <= todayStart.getTime();
+}
+
 type AddProcedureExpenseProps = {
   isModalOpen: boolean;
   setIsModalOpen: (open: boolean) => void;
   selectedExpense: any;
   categories: Category[];
   selectedProcedureId: number | null;
+  /** Procedure row date (YYYY-MM-DD…); doctor/staff rules apply only when today or earlier */
+  procedureDate?: string;
+  /** Row-level Performed By — counts as doctor for validation when costing is required */
+  performedBy?: string;
   onLocalExpenseAdd: (procedureRowId: number | null, expenseBundle: any) => void;
 };
 
@@ -85,6 +147,8 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
   selectedExpense,
   categories,
   selectedProcedureId,
+  procedureDate,
+  performedBy,
   onLocalExpenseAdd,
 }) => {
   const [isSaving, setIsSaving] = useState(false);
@@ -116,12 +180,15 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
         const normalizedDoctorShares: DoctorShareRow[] = Array.isArray(selectedExpense.doctorShares)
           ? selectedExpense.doctorShares.map((d: any, i: number) => ({
               id: typeof d.id === 'number' ? d.id : i + 1,
-              doctorId: d.doctorId || d.userId || d.doctor?._id || '',
+              doctorId: refId(d?.doctorId ?? d?.userId ?? d?.doctor),
               share: (() => {
                 const v = d.share ?? d.shareValue ?? d.amount;
                 return typeof v === 'number' ? v : (v === '' || v == null ? NaN : Number(v));
               })(),
-              shareType: (d.shareType || d.type) === 'percentage' ? 'percentage' : 'value',
+              shareType:
+                String(d.shareType || d.type || '').toLowerCase() === 'percentage'
+                  ? 'percentage'
+                  : 'value',
             }))
           : [];
         const normalizedConsumptions: ConsumptionRow[] = Array.isArray(selectedExpense.consumptions)
@@ -193,8 +260,23 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
       const doctorsData = Array.isArray(responseData?.data) ? responseData.data : [];
       const totalPages = responseData?.totalPages || 1;
       const currentPage = responseData?.currentPage || 1;
-      
-      const options = doctorsData.map((doctor: Doctor) => ({
+
+      const mergedDocs = doctorsData
+        .map((d: unknown) => doctorFromApi(d))
+        .filter((d): d is Doctor => d != null);
+      if (mergedDocs.length > 0) {
+        setDoctors((prev) => {
+          const out = [...prev];
+          for (const nd of mergedDocs) {
+            const i = out.findIndex((x) => x._id === nd._id);
+            if (i >= 0) out[i] = { ...out[i], ...nd };
+            else out.push(nd);
+          }
+          return out;
+        });
+      }
+
+      const options = mergedDocs.map((doctor) => ({
         value: doctor._id,
         label: doctor.name,
         doctorData: doctor,
@@ -214,13 +296,21 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
   const loadDoctorById = async (doctorId: string): Promise<Doctor | null> => {
     try {
       const response = await axios.get(`${Base_url}/apis/user/get/${doctorId}`);
-      const docData = response.data?.data;
-      if (docData) {
-        const newDoc: Doctor = { _id: docData._id, name: docData.name };
-        setDoctors(prev => [...prev, newDoc]);
+      const newDoc = doctorFromApi(response.data?.data);
+      if (newDoc) {
+        setDoctors((prev) => {
+          const i = prev.findIndex((x) => x._id === newDoc._id);
+          if (i >= 0) {
+            const next = [...prev];
+            next[i] = { ...next[i], ...newDoc };
+            return next;
+          }
+          return [...prev, newDoc];
+        });
         return newDoc;
       }
     } catch {
+      /* skip */
     }
     return null;
   };
@@ -411,25 +501,61 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
     setDoctorShares((prev) => prev.map((r) => (r.id === id ? { ...r, [field]: value } : r)));
   };
   
-  const handleDoctorSelect = async (rowId: number, option: any) => {
-    const selectedId = option?.value || '';
-    let doc: Doctor | null = option?.doctorData || null;
-    if (!doc && selectedId) {
-      doc = doctors.find(d => d._id === selectedId) || await loadDoctorById(selectedId);
+  const handleDoctorSelect = async (rowId: number, option: DoctorOption | null) => {
+    const selectedId = option?.value?.trim() || '';
+    if (!selectedId) {
+      setDoctorShares((prev) =>
+        prev.map((r) =>
+          r.id === rowId ? { ...r, doctorId: '', share: NaN, shareType: 'value' } : r,
+        ),
+      );
+      return;
     }
-    const defaultShare = doc?.sharePrice ? Number(doc.sharePrice) : NaN;
-    const defaultType: 'value' | 'percentage' = doc?.shareType === 'percentage' ? 'percentage' : 'value';
-    setDoctorShares(prev =>
-      prev.map(r =>
+
+    let doc: Doctor | null = option?.doctorData
+      ? doctorFromApi(option.doctorData as unknown)
+      : null;
+    const hasProfileShare =
+      !!doc &&
+      (String(doc.sharePrice ?? '').trim() !== '' ||
+        (!!doc.shareType && String(doc.shareType).trim() !== ''));
+    if (!hasProfileShare && selectedId) {
+      const cached = doctors.find((d) => d._id === selectedId);
+      if (
+        cached &&
+        (String(cached.sharePrice ?? '').trim() !== '' ||
+          String(cached.shareType ?? '').trim() !== '')
+      ) {
+        doc = { ...cached };
+      } else {
+        const enriched = await loadDoctorById(selectedId);
+        if (enriched) doc = enriched;
+      }
+    }
+
+    const shareFromProfile = defaultShareAmountFromDoctor(doc);
+    const typeFromProfile = defaultShareTypeFromDoctor(doc);
+
+    if (doc) {
+      setDoctors((prev) => {
+        if (prev.some((x) => x._id === doc._id)) {
+          return prev.map((x) => (x._id === doc._id ? { ...x, ...doc } : x));
+        }
+        return [...prev, doc];
+      });
+    }
+
+    setDoctorShares((prev) =>
+      prev.map((r) =>
         r.id === rowId
           ? {
               ...r,
               doctorId: selectedId,
-              share: Number.isFinite(defaultShare) ? defaultShare : r.share,
-              shareType: doc?.shareType ? defaultType : r.shareType,
+              share: shareFromProfile !== undefined ? shareFromProfile : r.share,
+              shareType: doc ? typeFromProfile : r.shareType,
             }
-          : r
-      )
+          : r,
+      ),
     );
   };
 
@@ -497,31 +623,39 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
       toast.error('Each expense row needs a category and a positive amount (or leave rows empty)');
       return;
     }
-    const hasDoctor = doctorShares.some((d) => hexId(String(d.doctorId || '').trim()));
-    if (!hasDoctor) {
-      toast.error('Add at least one doctor under Doctor (procedure share)');
+    const costingRequired = isProcCostingRequiredFromDate(procedureDate);
+    const hasDoctorShare = doctorShares.some((d) => hexId(String(d.doctorId || '').trim()));
+    const hasPerformedByRow = hexId(String(performedBy || '').trim());
+    if (costingRequired && !hasDoctorShare && !hasPerformedByRow) {
+      toast.error(
+        'Add at least one doctor under Doctor (procedure share), or set Performed By on the procedure row (required for dates today or earlier).',
+      );
       return;
     }
-    // Staff (Assisted By) compulsory — invoice creation rule
-    const hasAssisted = assistedByRows.some((r) => hexId(String(r.userId || '').trim()));
-    if (!hasAssisted) {
-      toast.error('Add at least one staff under Assisted By');
-      return;
-    }
-    // Reception compulsory — invoice creation rule
-    const hasReception = receptionRows.some((r) => hexId(String(r.userId || '').trim()));
-    if (!hasReception) {
-      toast.error('Add at least one staff under Reception');
-      return;
+    if (costingRequired) {
+      const hasAssisted = assistedByRows.some((r) => hexId(String(r.userId || '').trim()));
+      if (!hasAssisted) {
+        toast.error('Add at least one staff under Assisted By (required when procedure date is today or earlier)');
+        return;
+      }
+      const hasReception = receptionRows.some((r) => hexId(String(r.userId || '').trim()));
+      if (!hasReception) {
+        toast.error('Add at least one staff under Reception (required when procedure date is today or earlier)');
+        return;
+      }
     }
     const enrichedExpenses = expenses.map((e) => ({
       ...e,
       categoryName: categories.find((c) => c._id === e.expenseCategoryId)?.name || '',
     }));
-    const enrichedDoctorShares = doctorShares.map((d) => ({
-      ...d,
-      doctorName: doctors.find((doc) => doc._id === d.doctorId)?.name || '',
-    }));
+    const enrichedDoctorShares = doctorShares.map((d) => {
+      const parsed = Number(d.share);
+      return {
+        ...d,
+        share: Number.isFinite(parsed) ? parsed : 0,
+        doctorName: doctors.find((doc) => doc._id === d.doctorId)?.name || '',
+      };
+    });
     const assistedByClean = assistedByRows
       .filter((r) => hexId(r.userId))
       .map((r) => ({
@@ -535,9 +669,22 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
         userName: staffList.find((s) => s._id === r.userId)?.name || '',
       }));
 
+    const primaryDoctorProfile =
+      enrichedDoctorShares
+        .map((d) => doctors.find((doc) => doc._id === d.doctorId) || null)
+        .find((doc) => !!doc) || null;
+
     const bundle = {
       expenses: enrichedExpenses,
       doctorShares: enrichedDoctorShares,
+      primaryDoctorProfile: primaryDoctorProfile
+        ? {
+            _id: primaryDoctorProfile._id,
+            name: primaryDoctorProfile.name,
+            sharePrice: primaryDoctorProfile.sharePrice,
+            shareType: primaryDoctorProfile.shareType,
+          }
+        : null,
       assistedBy: assistedByClean,
       receptionStaff: receptionClean,
       consumptions,

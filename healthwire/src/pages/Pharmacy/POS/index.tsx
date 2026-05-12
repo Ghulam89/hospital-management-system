@@ -6,7 +6,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 import { AsyncPaginate, LoadOptions } from 'react-select-async-paginate';
 import Modal from '../../../components/modal';
-import { getStoredUserForPermissions, hasAnyPermission } from '../../../utils/permissions';
+import { getStoredUserForPermissions, getUserRoleSlug, hasAnyPermission } from '../../../utils/permissions';
 
 // Enhanced type definitions
 // Custom option types for AsyncPaginate
@@ -107,6 +107,74 @@ function localTodayYmd(): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
+/** Line discount base: % on return slice uses return qty; if return qty 0, use full sold qty. */
+function posGetBaseAmountForPercent(item: PosItem): number {
+  if (item.isReturn) {
+    const Q = Math.max(0, Number(item.quantity) || 0);
+    const R = Q > 0 ? Math.min(Math.max(0, Number(item.returnQuantity) || 0), Q) : Math.max(0, Number(item.returnQuantity) || 0);
+    if (R > 0) return Math.abs(item.rate * R);
+    return Math.abs(item.rate * Math.max(Q, 1));
+  }
+  return item.rate * item.quantity;
+}
+
+/** Sale: same as before. Return: proportional discount (same % or value scaled by return qty / reference qty). */
+function posGetDiscountAmount(item: PosItem): number {
+  if (item.isReturn) {
+    const rq = Number(item.returnQuantity) || 0;
+    if (rq <= 0) return 0;
+    const base = item.rate * rq;
+    const discountValue = Number(item.discount) || 0;
+    if (item.discountMode === 'percentage') {
+      return (base * discountValue) / 100;
+    }
+    const refQty = Math.max(Number(item.quantity) || 0, rq, 1);
+    return (discountValue * rq) / refQty;
+  }
+  const base = posGetBaseAmountForPercent(item);
+  const discountValue = Number(item.discount) || 0;
+  if (item.discountMode === 'percentage') {
+    return (base * discountValue) / 100;
+  }
+  return discountValue;
+}
+
+/** Full-line discount as if this row were a normal sale (qty × rate). */
+function posGetFullSaleLineDiscount(item: PosItem): number {
+  return posGetDiscountAmount({ ...item, isReturn: false });
+}
+
+/** Discount still affecting net after a partial/full return (for totals + payload). */
+function posGetEffectiveLineDiscountForTotals(item: PosItem): number {
+  if (!item.isReturn) return posGetDiscountAmount(item);
+  const Q = Math.max(0, Number(item.quantity) || 0);
+  const R = Q > 0 ? Math.min(Math.max(0, Number(item.returnQuantity) || 0), Q) : Math.max(0, Number(item.returnQuantity) || 0);
+  const full = posGetFullSaleLineDiscount(item);
+  const slice = R > 0 ? posGetDiscountAmount({ ...item, isReturn: true, returnQuantity: R }) : 0;
+  return Math.max(0, full - slice);
+}
+
+/** Recalculate netAmount / totalAmount for one row (used on load and on every edit). */
+function posRecalcItemTotals(item: PosItem): PosItem {
+  if (item.isReturn) {
+    const Q = Math.max(0, Number(item.quantity) || 0);
+    const Rraw = Math.max(0, Number(item.returnQuantity) || 0);
+    const R = Q > 0 ? Math.min(Rraw, Q) : Rraw;
+    const fullSaleDiscount = posGetFullSaleLineDiscount(item);
+    const returnSliceDiscount =
+      R > 0 ? posGetDiscountAmount({ ...item, isReturn: true, returnQuantity: R }) : 0;
+    const remainderDiscount = Math.max(0, fullSaleDiscount - returnSliceDiscount);
+    const grossKept = item.rate * Math.max(0, Q - R);
+    const netAmount = grossKept;
+    const totalAmount = grossKept - remainderDiscount;
+    return { ...item, returnQuantity: R, netAmount, totalAmount };
+  }
+  const discountAmount = posGetDiscountAmount(item);
+  const netAmount = item.rate * (Number(item.quantity) || 0);
+  const totalAmount = netAmount - discountAmount;
+  return { ...item, netAmount, totalAmount };
+}
+
 export default function PharmacyPOS() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -136,6 +204,7 @@ export default function PharmacyPOS() {
   const [editingInvoiceNumber, setEditingInvoiceNumber] = useState<string>('');
 
   const permUser = useMemo(() => getStoredUserForPermissions(), []);
+  const isSuperAdminRole = getUserRoleSlug(permUser) === 'superadmin';
   const canPosChangeQuantity = hasAnyPermission(permUser, 'pharmPosChangeQuantity');
   const canPosBackdateBills = hasAnyPermission(permUser, 'pharmPosBackdateBills');
   const lockQtyOnEdit = Boolean(id) && !canPosChangeQuantity;
@@ -271,10 +340,23 @@ export default function PharmacyPOS() {
         setRemarks(String(inv.note || ''));
 
         const items = Array.isArray(inv.allItem) ? inv.allItem : [];
+        const invNo = String(inv.invoiceNumber || '');
         const mappedItems: PosItem[] = items.map((it: any, idx: number) => {
           const rate = Number(it?.rate || 0);
-          const qty = Number(it?.quantity || 0);
-          const discount = Number(it?.discount || 0);
+          let qty = Number(it?.quantity || 0);
+          const isRet = Boolean(it?.isReturn);
+          const rQty = Number(it?.returnQuantity || 0);
+          if (isRet && rQty > 0 && qty < rQty) {
+            qty = rQty;
+          }
+          let discount = Number(it?.discount || 0);
+          if (isRet && rQty > 0 && rate > 0 && discount <= 0) {
+            const storedTotal = Number(it?.totalAmount);
+            if (storedTotal < 0) {
+              const inferred = rate * rQty + storedTotal;
+              if (inferred > 0.0001) discount = inferred;
+            }
+          }
           const convUnit = Number(it?.conversionUnit || 1);
           const unit = String(it?.unit || 'pack');
           const computedUnitQty =
@@ -282,9 +364,7 @@ export default function PharmacyPOS() {
               ? (convUnit > 0 ? qty * convUnit : qty)
               : qty;
           const unitQuantity = Number(it?.unitQuantity || 0) > 0 ? Number(it?.unitQuantity) : computedUnitQty;
-          const netAmount = Number(it?.netAmount ?? rate * qty);
-          const totalAmount = Number(it?.totalAmount ?? netAmount - discount);
-          return {
+          const row: PosItem = {
             id: idx + 1,
             pharmItemId:
               typeof it?.pharmItemId === 'object' && it?.pharmItemId?._id
@@ -301,16 +381,19 @@ export default function PharmacyPOS() {
             unitCost: Number(it?.unitCost || 0),
             rate,
             quantity: qty,
-            returnQuantity: Number(it?.returnQuantity || 0),
+            returnQuantity: rQty,
             discountMode: 'value',
             discount,
             taxMode: 'percentage',
             tax: 0,
-            netAmount,
-            totalAmount,
-            isReturn: Boolean(it?.isReturn),
-            originalInvoiceNumber: String(it?.originalInvoiceNumber || (it?.isReturn ? inv.invoiceNumber || '' : '')),
+            netAmount: 0,
+            totalAmount: 0,
+            isReturn: isRet,
+            originalInvoiceNumber: String(
+              it?.originalInvoiceNumber || (isRet ? invNo : '')
+            ),
           };
+          return posRecalcItemTotals(row);
         });
         setPosItems(mappedItems.length ? mappedItems : [
           {
@@ -538,7 +621,7 @@ export default function PharmacyPOS() {
 
   const applySelectedPharmItem = (rowId: number, selectedItem: PharmItem) => {
     const sel = selectedItem as PharmItem & { catalogMasterOnly?: boolean; sellablePharmItemId?: string | null };
-    if (sel.catalogMasterOnly) {
+    if (sel.catalogMasterOnly && !isSuperAdminRole) {
       toast.error('Pehle apni branch par stock add karein (Manage stock / purchase inbound).');
       return;
     }
@@ -568,10 +651,7 @@ export default function PharmacyPOS() {
         const tax = 0;
         const quantity = row.quantity || 1;
         const unitQuantity = quantity * conversionUnit;
-        const netAmount = rate * quantity;
-        const totalAmount = netAmount - (row.discount || 0);
-
-        return {
+        const merged: PosItem = {
           ...row,
           pharmItemId: String(saleId),
           itemName: normalizedItem.name,
@@ -582,9 +662,10 @@ export default function PharmacyPOS() {
           unitCost,
           tax,
           unitQuantity,
-          netAmount,
-          totalAmount,
+          netAmount: 0,
+          totalAmount: 0,
         };
+        return posRecalcItemTotals(merged);
       })
     );
   };
@@ -644,12 +725,13 @@ export default function PharmacyPOS() {
           const qtyDisplay = item.conversionUnit > 1 
             ? `${packQty} ${item.unit || 'pack'} ${pieceQty > 0 ? `${pieceQty} piece` : ''}`.trim()
             : `${item.availableQuantity} ${item.unit || 'pack'}`;
-          const catalogNote = meta.catalogMasterOnly ? ' · catalog (stock add karein)' : '';
-          
+          const catalogNote =
+            meta.catalogMasterOnly && !isSuperAdminRole ? ' · catalog (stock add karein)' : '';
+
           return {
             label: `${item.name} ${item.barcode ? `(${item.barcode})` : ''} (${qtyDisplay} available)${catalogNote} - Rs.${item.retailPrice}`,
             value: item._id,
-            isDisabled: !!meta.catalogMasterOnly,
+            isDisabled: isSuperAdminRole ? false : !!meta.catalogMasterOnly,
             itemData: item,
           };
         }),
@@ -732,39 +814,8 @@ export default function PharmacyPOS() {
     setPosItems(posItems.filter(item => item.id !== id));
   };
 
-  const getBaseAmountForPercent = (item: PosItem) => {
-    if (item.isReturn && item.returnQuantity > 0) {
-      return Math.abs(item.rate * item.returnQuantity);
-    }
-    return item.rate * item.quantity;
-  };
-
-  const getDiscountAmount = (item: PosItem) => {
-    if (item.isReturn) {
-      return 0;
-    }
-    const base = getBaseAmountForPercent(item);
-    const discountValue = Number(item.discount) || 0;
-    if (item.discountMode === 'percentage') {
-      return (base * discountValue) / 100;
-    }
-    return discountValue;
-  };
-
   const getTaxAmount = (_item: PosItem) => {
     return 0;
-  };
-
-  const recalcItemTotals = (item: PosItem) => {
-    const discountAmount = getDiscountAmount(item);
-    if (item.isReturn) {
-      const netAmount = -(item.rate * (Number(item.returnQuantity) || 0));
-      const totalAmount = netAmount;
-      return { ...item, netAmount, totalAmount };
-    }
-    const netAmount = item.rate * (Number(item.quantity) || 0);
-    const totalAmount = netAmount - discountAmount;
-    return { ...item, netAmount, totalAmount };
   };
 
   const updatePosItem = (id: number, field: keyof PosItem, value: any) => {
@@ -798,7 +849,7 @@ export default function PharmacyPOS() {
             updatedItem.batchNumber = selectedItem.batches[0].batchNumber;
             updatedItem.unitCost = selectedItem.batches[0].purchasePrice;
           }
-          updatedItem = recalcItemTotals(updatedItem);
+          updatedItem = posRecalcItemTotals(updatedItem);
         }
       }
       
@@ -814,7 +865,7 @@ export default function PharmacyPOS() {
               ? selectedItem.retailPrice / selectedItem.conversionUnit 
               : selectedItem.retailPrice;
           }
-          updatedItem = recalcItemTotals(updatedItem);
+          updatedItem = posRecalcItemTotals(updatedItem);
         }
       }
       
@@ -825,7 +876,7 @@ export default function PharmacyPOS() {
           if (selectedBatch) {
             updatedItem.unitCost = selectedBatch.purchasePrice;
           }
-          updatedItem = recalcItemTotals(updatedItem);
+          updatedItem = posRecalcItemTotals(updatedItem);
         }
       }
       
@@ -836,7 +887,7 @@ export default function PharmacyPOS() {
           updatedItem.unitQuantity = updatedItem.quantity * updatedItem.conversionUnit;
         }
 
-        updatedItem = recalcItemTotals(updatedItem);
+        updatedItem = posRecalcItemTotals(updatedItem);
       }
       
       
@@ -862,13 +913,13 @@ export default function PharmacyPOS() {
             // Reset to minimum value of 1
             updatedItem.unitQuantity = 1;
             updatedItem.quantity = updatedItem.conversionUnit > 0 ? 1 / updatedItem.conversionUnit : 1;
-            updatedItem = recalcItemTotals(updatedItem);
+            updatedItem = posRecalcItemTotals(updatedItem);
             return updatedItem;
           }
         }
         
         updatedItem.quantity = updatedItem.conversionUnit > 0 ? updatedItem.unitQuantity / updatedItem.conversionUnit : 0;
-        updatedItem = recalcItemTotals(updatedItem);
+        updatedItem = posRecalcItemTotals(updatedItem);
       }
       
       if (field === 'isReturn') {
@@ -878,13 +929,13 @@ export default function PharmacyPOS() {
         } else if (!updatedItem.originalInvoiceNumber) {
           updatedItem.originalInvoiceNumber = editingInvoiceNumber || '';
         }
-        updatedItem = recalcItemTotals(updatedItem);
+        updatedItem = posRecalcItemTotals(updatedItem);
       }
       
       // Calculate profit - for return items, profit should be negative (loss)
       if (field === 'isReturn' || field === 'quantity' || field === 'rate' || field === 'unitCost' || field === 'returnQuantity') {
         if (updatedItem.isReturn && updatedItem.returnQuantity > 0) {
-          updatedItem = recalcItemTotals(updatedItem);
+          updatedItem = posRecalcItemTotals(updatedItem);
         }
       }
       
@@ -985,17 +1036,14 @@ export default function PharmacyPOS() {
   };
 
   const calculateSubTotal = () => {
-    return posItems.reduce((sum, item) => {
-      // For return items with returnQuantity, use negative amount
-      if (item.isReturn && item.returnQuantity > 0) {
-        return sum - (item.rate * item.returnQuantity);
-      }
-      return sum + item.netAmount;
-    }, 0);
+    return posItems.reduce((sum, item) => sum + item.netAmount, 0);
   };
 
   const calculateTotalDiscount = () => {
-    return posItems.reduce((sum, item) => sum + getDiscountAmount(item), 0);
+    return posItems.reduce(
+      (sum, item) => sum + posGetEffectiveLineDiscountForTotals(item),
+      0
+    );
   };
 
   const calculateTotalTax = () => {
@@ -1035,7 +1083,22 @@ export default function PharmacyPOS() {
         return;
       }
       
-      for (const item of posItems) {
+      const rowsToValidate = posItems.map((item) => {
+        if (
+          item.isReturn &&
+          item.returnQuantity > 0 &&
+          id &&
+          !(item.originalInvoiceNumber || '').trim()
+        ) {
+          return {
+            ...item,
+            originalInvoiceNumber: editingInvoiceNumber || item.originalInvoiceNumber || '',
+          };
+        }
+        return item;
+      });
+
+      for (const item of rowsToValidate) {
         if (!item.pharmItemId) {
           toast.error(`Please select an item for row ${item.id}`);
           return;
@@ -1048,7 +1111,6 @@ export default function PharmacyPOS() {
         }
         
         const conversionUnit = selectedItem.conversionUnit || 1;
-        const actualQty = item.quantity;
         
         // Validate: Unit quantity should not be below 1 for certain product types
         if (item.unitQuantity < 1 && !item.isReturn) {
@@ -1095,12 +1157,9 @@ export default function PharmacyPOS() {
       const totalPaid = calculateTotalPaid();
       const grandTotal = calculateGrandTotal();
       
-      // Check if this is a return-only transaction
-      const hasRegularItems = posItems.some(item => !item.isReturn);
-      const hasReturnItems = posItems.some(item => item.isReturn && item.returnQuantity > 0);
-      
-      // For return-only transactions, don't require payment
-      if (hasRegularItems) {
+      const billHasPositiveNet = grandTotal > 0.000001;
+      // Pure refunds (net ≤ 0) may omit payment; any bill where customer still owes must have payments.
+      if (billHasPositiveNet) {
         if (totalPaid <= 0) {
           toast.error('At least one payment with positive amount is required');
           return;
@@ -1136,7 +1195,7 @@ export default function PharmacyPOS() {
         paid: calculateTotalPaid(),
         note: remarks,
         createdBy: currentUserId,
-        allItem: posItems.map(item => ({
+        allItem: rowsToValidate.map(item => ({
           pharmItemId: item.pharmItemId,
           unit: item.unit,
           batchNumber: item.batchNumber,
@@ -1144,12 +1203,16 @@ export default function PharmacyPOS() {
           rate: item.rate,
           quantity: item.quantity,
           returnQuantity: item.isReturn ? item.returnQuantity : 0,
-          discount: getDiscountAmount(item),
+          discount: posGetEffectiveLineDiscountForTotals(item),
           tax: 0,
           netAmount: item.netAmount,
           totalAmount: item.totalAmount,
           isReturn: item.isReturn,
-          originalInvoiceNumber: item.isReturn ? item.originalInvoiceNumber : undefined
+          originalInvoiceNumber: item.isReturn
+            ? (item.originalInvoiceNumber?.trim() ||
+                (id ? editingInvoiceNumber : '') ||
+                '')
+            : undefined
         })),
         payment: paymentInstallments.map(payment => ({
           method: payment.method,
@@ -1223,7 +1286,8 @@ export default function PharmacyPOS() {
             Editing existing invoice
             {lockQtyOnEdit ? (
               <span className="block mt-1 font-normal text-yellow-900">
-                Line quantities are read-only without the &quot;POS: change quantities on bills&quot; permission.
+                Sold pack / piece quantities are read-only without the &quot;POS: change quantities on bills&quot;
+                permission. You can still enter <strong>return quantity</strong> and adjust payments for returns.
               </span>
             ) : null}
           </div>
@@ -1409,11 +1473,12 @@ export default function PharmacyPOS() {
         <div className="p-4 space-y-4">
           {posItems.map((item, index) => {
             let profit = 0;
-            const discountAmount = getDiscountAmount(item);
+            const discountAmount = posGetDiscountAmount(item);
             if (item.isReturn) {
-              const qty = Number(item.returnQuantity) || 0;
-              const revenue = -(item.rate * qty);
-              profit = revenue - (item.unitCost * qty);
+              const Q = Math.max(0, Number(item.quantity) || 0);
+              const R = Q > 0 ? Math.min(Math.max(0, Number(item.returnQuantity) || 0), Q) : Math.max(0, Number(item.returnQuantity) || 0);
+              const kept = Math.max(0, Q - R);
+              profit = item.totalAmount - item.unitCost * kept;
             } else {
               const qty = Number(item.quantity) || 0;
               const revenue = (item.rate * qty) - discountAmount;
@@ -1676,21 +1741,30 @@ export default function PharmacyPOS() {
                     })()}
                     {item.isReturn && (
                       <input
-                        type="number"
+                        type="text"
+                        inputMode="numeric"
+                        autoComplete="off"
                         className="w-full h-11 mt-2 rounded-lg border border-red-300 bg-red-50 px-3 text-sm text-gray-700 outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-200"
-                        value={item.returnQuantity}
-                        onChange={(e) =>
-                          updatePosItem(
-                            item.id,
-                            'returnQuantity',
-                            parseInt(e.target.value)
-                          )
-                        }
-                        onWheel={(e) => e.currentTarget.blur()}
-                        min="0"
-                        max={item.quantity}
+                        value={item.returnQuantity === 0 ? '' : String(item.returnQuantity)}
+                        onChange={(e) => {
+                          const digits = e.target.value.replace(/\D/g, '');
+                          if (digits === '') {
+                            updatePosItem(item.id, 'returnQuantity', 0);
+                            return;
+                          }
+                          let v = parseInt(digits, 10);
+                          if (!Number.isFinite(v) || v < 0) return;
+                          const cap = Math.max(0, Number(item.quantity) || 0);
+                          if (cap > 0 && v > cap) v = cap;
+                          updatePosItem(item.id, 'returnQuantity', v);
+                        }}
+                        onBlur={() => {
+                          if (!Number.isFinite(item.returnQuantity) || item.returnQuantity < 0) {
+                            updatePosItem(item.id, 'returnQuantity', 0);
+                          }
+                        }}
                         placeholder="Return Qty"
-                        disabled={lockQtyOnEdit}
+                        title="Return qty is always editable on an open bill (even when sold pack qty is locked)."
                       />
                     )}
                     {item.isReturn && (() => {
@@ -1771,10 +1845,17 @@ export default function PharmacyPOS() {
                         max={
                           item.discountMode === 'percentage'
                             ? 100
-                            : Math.abs(item.netAmount || 0)
+                            : item.isReturn
+                              ? Math.max(
+                                  0,
+                                  Math.abs(
+                                    item.rate * (Number(item.quantity) || 0)
+                                  )
+                                )
+                              : Math.abs(item.netAmount || 0)
                         }
                         step="0.01"
-                        disabled={!item.pharmItemId || item.isReturn}
+                        disabled={!item.pharmItemId}
                       />
                     </div>
                   </div>
@@ -1783,7 +1864,7 @@ export default function PharmacyPOS() {
 
                   <div>
                     <div className="mb-1 text-xs font-semibold text-gray-600">
-                      Amount
+                      {item.isReturn ? 'Amount' : 'Amount'}
                     </div>
                     <div className="w-full h-11 flex items-center rounded-lg border border-gray-300 bg-gray-50 px-3 text-sm text-gray-700 font-semibold">
                       {item.netAmount.toFixed(2)}
@@ -1792,7 +1873,7 @@ export default function PharmacyPOS() {
 
                   <div>
                     <div className="mb-1 text-xs font-semibold text-gray-600">
-                      Total
+                      {item.isReturn ? 'Total' : 'Total'}
                     </div>
                     <div className="w-full h-11 flex items-center rounded-lg border-2 border-blue-300 bg-blue-50 px-3 text-sm text-blue-700 font-bold">
                       Rs. {item.totalAmount.toFixed(2)}
@@ -1814,6 +1895,8 @@ export default function PharmacyPOS() {
                     </div>
                   </div>
                 </div>
+                
+
               </div>
             );
           })}

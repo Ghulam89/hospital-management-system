@@ -89,6 +89,18 @@ function idInList(id, list) {
   return list.some((x) => String(x) === s);
 }
 
+/**
+ * Compare branch ids safely even when Mongoose has populated `branchId`
+ * into a full document like `{ _id, name, ... }`.
+ */
+function normalizeBranchComparableId(value) {
+  if (value == null || value === '') return null;
+  if (typeof value === 'object' && value !== null && '_id' in value && value._id != null) {
+    return String(value._id);
+  }
+  return String(value);
+}
+
 function toObjectIdMaybe(value) {
   if (value == null || value === '') return null;
   if (value instanceof mongoose.Types.ObjectId) return value;
@@ -245,10 +257,12 @@ async function branchDocumentVisible(req, branchIdOnDoc) {
   }
   const q = await mergeBranchScopedQuery(req);
   if (q === null) return true;
+  // Legacy invoices created before branch scoping often have no branchId — do not hide them
+  // from branch staff (otherwise edit page 404s while the invoice still appears in lists/reports).
   if (branchIdOnDoc == null || branchIdOnDoc === '') {
-    return false;
+    return true;
   }
-  return String(branchIdOnDoc) === String(q.branchId);
+  return normalizeBranchComparableId(branchIdOnDoc) === normalizeBranchComparableId(q.branchId);
 }
 
 /**
@@ -262,7 +276,7 @@ async function catalogEntityVisibleForStaff(req, branchIdOnDoc) {
   if (branchIdOnDoc == null || branchIdOnDoc === '') return true;
   const branchId = await resolveBranchIdForNonSuperAdmin(req);
   if (!branchId) return false;
-  return String(branchIdOnDoc) === String(branchId);
+  return normalizeBranchComparableId(branchIdOnDoc) === normalizeBranchComparableId(branchId);
 }
 
 /**

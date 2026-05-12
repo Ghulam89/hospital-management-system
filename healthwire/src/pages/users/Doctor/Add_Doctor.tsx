@@ -486,6 +486,7 @@ const AddDoctor = () => {
                       <select 
                         onChange={(e) => setDepartmentId(e.target.value)}
                         value={departmentId}
+                        required
                         className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary"
                       >
                         <option value="">Select department</option>

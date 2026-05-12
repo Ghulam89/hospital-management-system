@@ -39,10 +39,12 @@ interface POSSale {
     unit: string;
     rate: number;
     quantity: number;
+    returnQuantity?: number;
     totalAmount: number;
     discount?: number;
     tax?: number;
     isReturn?: boolean;
+    originalInvoiceNumber?: string;
   }>;
   payment: Array<{
     method: string;
@@ -287,9 +289,34 @@ const PharmacySales: React.FC = () => {
   ];
 
   const handleView = (record: POSSale) => {
-    const patientName = record.patientId?.name || record.patientName || 'Walk-in Customer';
-    const doctorName = record.referId?.name || record.doctorName || 'N/A';
+    const patientName = escapeHtmlSwal(
+      String(record.patientId?.name || record.patientName || 'Walk-in Customer'),
+    );
+    const doctorName = escapeHtmlSwal(String(record.referId?.name || record.doctorName || 'N/A'));
     const total = record.paid + record.due;
+
+    const itemQtyHtml = (item: POSSale['allItem'][number]) => {
+      const Q = Number(item.quantity) || 0;
+      const R = Math.max(0, Number(item.returnQuantity) || 0);
+      const u = String(item.unit || '').trim() || 'units';
+      const isRet = Boolean(item.isReturn);
+      const net = Math.max(0, Q - R);
+      if (R > 0 || isRet) {
+        return `
+                <p style="margin: 6px 0; font-size: 13px; color: #374151; line-height: 1.5;">
+                  <span style="display:block;margin-bottom:4px;"><strong>Bought / sold:</strong> ${Q} ${escapeHtmlSwal(u)}</span>
+                  <span style="display:block;margin-bottom:4px;"><strong>Returned:</strong> ${R} ${escapeHtmlSwal(u)}</span>
+                  <span style="display:block;"><strong>Net (billed):</strong> ${net} ${escapeHtmlSwal(u)}</span>
+                </p>
+                <p style="margin: 2px 0; font-size: 12px; color: #666;">Rate: Rs. ${Number(item.rate) || 0} / ${escapeHtmlSwal(u)}</p>`;
+      }
+      return `
+                <p style="margin: 4px 0; font-size: 13px; color: #374151;">
+                  <strong>Bought / sold:</strong> ${Q} ${escapeHtmlSwal(u)}
+                  <span style="color:#6b7280;font-size:12px;"> &nbsp;·&nbsp; Returned: 0</span>
+                </p>
+                <p style="margin: 2px 0; font-size: 12px; color: #666;">Rate: Rs. ${Number(item.rate) || 0} / ${escapeHtmlSwal(u)}</p>`;
+    };
 
     Swal.fire({
       title: `Sale #${record._id.slice(-6).toUpperCase()}`,
@@ -303,20 +330,37 @@ const PharmacySales: React.FC = () => {
           
           <div style="background: #dbeafe; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
             <h4 style="margin-top: 0; color: #1e40af;">Items (${record.allItem?.length || 0})</h4>
-            ${record.allItem?.map((item, index) => `
+            ${record.allItem
+              ?.map((item, index) => {
+                const nm = escapeHtmlSwal(
+                  String(item.pharmItemId?.name || (item as { itemName?: string }).itemName || 'Item'),
+                );
+                const retRef =
+                  item.isReturn && item.originalInvoiceNumber
+                    ? `<p style="margin:4px 0;font-size:11px;color:#92400e;"><strong>Return ref:</strong> ${escapeHtmlSwal(
+                        String(item.originalInvoiceNumber),
+                      )}</p>`
+                    : '';
+                return `
               <div style="border-bottom: 1px solid #e5e7eb; padding: 8px 0;">
-                <p style="margin: 4px 0;"><strong>${index + 1}. ${item.pharmItemId?.name || 'Item'}</strong></p>
-                <p style="margin: 4px 0;">Quantity: ${item.quantity} ${item.unit} @ Rs. ${item.rate}</p>
+                <p style="margin: 4px 0;"><strong>${index + 1}. ${nm}</strong>${
+                  item.isReturn
+                    ? ' <span style="background:#fee2e2;color:#991b1b;padding:2px 6px;border-radius:4px;font-size:11px;">Return</span>'
+                    : ''
+                }</p>
+                ${itemQtyHtml(item)}
                 ${(Number(item.tax) || 0) > 0 || (Number(item.discount) || 0) > 0 ? `
                   <p style="margin: 4px 0; font-size: 12px; color: #666;">
                     ${(Number(item.tax) || 0) > 0 ? `Tax: ${Number(item.tax)}%` : ''}
                     ${(Number(item.tax) || 0) > 0 && (Number(item.discount) || 0) > 0 ? ' | ' : ''}
-                    ${(Number(item.discount) || 0) > 0 ? `Discount: Rs. ${Number(item.discount).toFixed(2)}` : ''}
+                    ${(Number(item.discount) || 0) > 0 ? `Line discount: Rs. ${Number(item.discount).toFixed(2)}` : ''}
                   </p>
                 ` : ''}
-                <p style="margin: 4px 0;">Amount: Rs. ${item.totalAmount?.toFixed(2)}</p>
-              </div>
-            `).join('') || '<p>No items found</p>'}
+                <p style="margin: 4px 0;"><strong>Line amount:</strong> Rs. ${Number(item.totalAmount || 0).toFixed(2)}</p>
+                ${retRef}
+              </div>`;
+              })
+              .join('') || '<p>No items found</p>'}
           </div>
           
           <div style="background: #dcfce7; padding: 15px; border-radius: 8px;">
@@ -332,7 +376,7 @@ const PharmacySales: React.FC = () => {
 
           ${record.note ? `
             <div style="background: #fef3c7; padding: 15px; border-radius: 8px; margin-top: 15px;">
-              <p style="margin: 0;"><strong>Notes:</strong> ${record.note}</p>
+              <p style="margin: 0;"><strong>Notes:</strong> ${escapeHtmlSwal(String(record.note))}</p>
             </div>
           ` : ''}
         </div>

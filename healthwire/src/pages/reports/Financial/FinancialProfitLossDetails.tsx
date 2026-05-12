@@ -116,9 +116,22 @@ const FinancialProfitLossDetails = () => {
 
   const fetchInvoices = async () => {
     try {
-     
+      const fromDate =
+        filters.dateRange?.[0] && moment.isMoment(filters.dateRange[0])
+          ? filters.dateRange[0].format('YYYY-MM-DD')
+          : '';
+      const toDate =
+        filters.dateRange?.[1] && moment.isMoment(filters.dateRange[1])
+          ? filters.dateRange[1].format('YYYY-MM-DD')
+          : '';
 
-      const response = await axios.get(`${Base_url}/apis/invoice/get`);
+      const params: Record<string, string> = {};
+      if (fromDate && toDate) {
+        params.startDate = fromDate;
+        params.endDate = toDate;
+      }
+
+      const response = await axios.get(`${Base_url}/apis/invoice/get`, { params });
 
       const data = response?.data?.data || [];
 
@@ -127,7 +140,7 @@ const FinancialProfitLossDetails = () => {
         _id: invoice._id,
         type: 'revenue',
         voucherNo: invoice.invoiceNo,
-        date: invoice.createdAt,
+        date: invoice.invoiceDate || invoice.date || invoice.createdAt,
         description: 'Treatment Invoice',
         category: 'Revenue',
         paymentMode: invoice.payment?.[0]?.method || 'Multiple',
@@ -195,8 +208,11 @@ const FinancialProfitLossDetails = () => {
   }, [filters, expenseCategories]);
 
   const calculateSummary = () => {
-    const totalRevenue = invoices.reduce((sum, i) => sum + i.amount, 0);
-    const totalExpenses = expenses.reduce((sum, e) => sum + e.amount, 0);
+    // Always summarize what is actually shown after current filters/date range.
+    const visibleRevenue = filteredData.filter((row) => row.type === 'revenue');
+    const visibleExpenses = filteredData.filter((row) => row.type === 'expense');
+    const totalRevenue = visibleRevenue.reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
+    const totalExpenses = visibleExpenses.reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
     const netProfit = totalRevenue - totalExpenses;
     
     return {

@@ -93,6 +93,43 @@ function shareRowHasValidDoctorId(s: unknown): boolean {
   return !!id && /^[0-9a-fA-F]{24}$/i.test(id);
 }
 
+/** Do not send "" for ObjectId fields — Mongoose CastError → HTTP 500 */
+function isMongoHex24(id: unknown): boolean {
+  return /^[0-9a-fA-F]{24}$/i.test(String(refId(id) || '').trim());
+}
+
+function numField(v: unknown, fallback = 0): number {
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+/** Normalize GET /invoice/get/:id JSON (envelopes differ; some proxies wrap `data` oddly). */
+function looksLikeInvoiceDoc(x: unknown): boolean {
+  if (!x || typeof x !== 'object') return false;
+  const o = x as Record<string, unknown>;
+  const idOk =
+    typeof o._id === 'string'
+      ? /^[a-fA-F0-9]{24}$/i.test(o._id)
+      : o._id != null && typeof o._id === 'object' && 'toString' in o._id;
+  if (!idOk) return false;
+  return (
+    'patientId' in o ||
+    Array.isArray(o.item) ||
+    typeof o.totalBill === 'number' ||
+    typeof o.invoiceNo === 'string'
+  );
+}
+
+function extractInvoiceFromApiBody(raw: unknown): any | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  for (const c of [r.data, r.invoice, r.result]) {
+    if (looksLikeInvoiceDoc(c)) return c;
+  }
+  if (looksLikeInvoiceDoc(raw)) return raw;
+  return null;
+}
+
 /**
  * Prefer row id so two lines with the same procedure each keep their own costing bundle.
  * Fallback by procedureId only when exactly one row uses that procedure (legacy / odd data).
@@ -313,7 +350,10 @@ export default function InvoiceUpdate() {
         discount: Number(item.discount) || 0,
         discountType: item.discountType ?? 0,
         tax: Number(item.tax) === 0 ? 'value' : 'exempt',
-        deductDiscount: 'Hospital & Doctor',
+        deductDiscount:
+          item.deductDiscount === 'Hospital' || item.deductDiscount === 'Doctor'
+            ? item.deductDiscount
+            : 'Hospital & Doctor',
         performedBy: refId(item.performedBy),
         doctorAmount: Number(item.doctorAmount) || 0,
         hospitalAmount: Number(item.hospitalAmount) || 0,
@@ -326,7 +366,16 @@ export default function InvoiceUpdate() {
           procedureRowId: index + 1,
           procedureId: refId(srcItem?.procedureId),
           expenses: asArray(srcItem?.expenses),
-          doctorShares: asArray(srcItem?.doctorShares),
+          doctorShares: asArray(srcItem?.doctorShares).map((d: any) => {
+            const parsedShare = Number(d?.share ?? d?.shareValue);
+            return {
+              ...d,
+              doctorId: doctorIdFromShareRow(d),
+              share: Number.isFinite(parsedShare) ? parsedShare : 0,
+              shareType:
+                String(d?.shareType || '').toLowerCase() === 'percentage' ? 'percentage' : 'value',
+            };
+          }),
           assistedBy: Array.isArray(srcItem?.assistedBy)
             ? srcItem.assistedBy.map((u: any) => ({
                 userId: String(refId(u) || refId((u as any)?.userId) || ''),
@@ -364,7 +413,16 @@ export default function InvoiceUpdate() {
           procedureRowId: typeof bundle.procedureRowId === 'number' ? bundle.procedureRowId : null,
           procedureId: '',
           expenses: asArray(bundle.expenses),
-          doctorShares: asArray(bundle.doctorShares),
+          doctorShares: asArray(bundle.doctorShares).map((d: any) => {
+            const parsedShare = Number(d?.share ?? d?.shareValue);
+            return {
+              ...d,
+              doctorId: doctorIdFromShareRow(d),
+              share: Number.isFinite(parsedShare) ? parsedShare : 0,
+              shareType:
+                String(d?.shareType || '').toLowerCase() === 'percentage' ? 'percentage' : 'value',
+            };
+          }),
           consumptions: asArray(bundle.consumptions),
           _id: bundle._id || Date.now().toString(),
         }))
@@ -418,11 +476,11 @@ export default function InvoiceUpdate() {
     if (!id) return;
     try {
       const invoiceRes = await axios.get(`${Base_url}/apis/invoice/get/${id}`);
-      const data = invoiceRes.data?.data;
+      const data = extractInvoiceFromApiBody(invoiceRes?.data);
       if (data) applyLoadedInvoice(data);
     } catch (e) {
       console.error('Error reloading invoice:', e);
-      toast.error('Could not reload invoice');
+      toast.error('Could not reload invoice', { toastId: 'invoice-reload-fail' });
     }
   };
 
@@ -455,27 +513,50 @@ export default function InvoiceUpdate() {
         const mongoIdOk = /^[a-fA-F0-9]{24}$/.test(invoiceId);
 
         if (invoiceId && mongoIdOk) {
-          try {
-            const invoiceRes = await axios.get(`${Base_url}/apis/invoice/get/${invoiceId}`);
-            const raw = invoiceRes?.data;
-            const data = raw?.data ?? raw?.invoice ?? raw?.result;
-            if (!data || typeof data !== 'object') {
-              toast.error(
+          const loadInvoiceByMongoId = async (mongoId: string) => {
+            const invoiceRes = await axios.get(`${Base_url}/apis/invoice/get/${mongoId}`);
+            const data = extractInvoiceFromApiBody(invoiceRes?.data);
+            if (!data) {
+              const raw = invoiceRes?.data as Record<string, unknown> | undefined;
+              throw new Error(
                 (typeof raw?.message === 'string' && raw.message) ||
                   (typeof raw?.error === 'string' && raw.error) ||
-                  'Invoice not found'
+                  'Invoice not found',
               );
-              setIsLoading(false);
-              return;
             }
-            applyLoadedInvoice(data);
+            return data;
+          };
+
+          try {
+            let invoicePayload: any;
+            try {
+              invoicePayload = await loadInvoiceByMongoId(invoiceId);
+            } catch (firstErr: any) {
+              const alt = String(patientId ?? '').trim();
+              const altOk = /^[a-fA-F0-9]{24}$/i.test(alt) && alt !== invoiceId;
+              const is404 = firstErr?.response?.status === 404;
+              if (altOk && is404) {
+                try {
+                  invoicePayload = await loadInvoiceByMongoId(alt);
+                  navigate(`/invoice/edit/${alt}/${invoiceId}`, { replace: true });
+                } catch {
+                  throw firstErr;
+                }
+              } else {
+                throw firstErr;
+              }
+            }
+            applyLoadedInvoice(invoicePayload);
           } catch (invoiceErr: any) {
             console.error('Invoice load error:', invoiceErr);
             const msg =
               invoiceErr.response?.data?.message ||
               invoiceErr.response?.data?.error ||
+              (typeof invoiceErr.message === 'string' ? invoiceErr.message : null) ||
               invoiceErr.message;
-            toast.error(typeof msg === 'string' ? msg : 'Failed to load invoice data');
+            toast.error(typeof msg === 'string' ? msg : 'Failed to load invoice data', {
+              toastId: 'invoice-load-fail',
+            });
             setIsLoading(false);
             return;
           }
@@ -523,7 +604,7 @@ export default function InvoiceUpdate() {
     };
 
     fetchData();
-  }, [id]);
+  }, [id, patientId, navigate]);
 
   useEffect(() => {
     const fetchCategories = async () => {
@@ -615,60 +696,111 @@ export default function InvoiceUpdate() {
     return () => clearTimeout(debounceTimer);
   }, [searchTerm, patientId]);
 
+  const getPrimaryDoctorProfile = (bundle: any) => {
+    if (!bundle || typeof bundle !== 'object') return null;
+    const raw = (bundle as Record<string, unknown>).primaryDoctorProfile;
+    if (!raw || typeof raw !== 'object') return null;
+    const row = raw as Record<string, unknown>;
+    const id = refId(row._id);
+    if (!id) return null;
+    return {
+      _id: id,
+      name: String(row.name || ''),
+      sharePrice: row.sharePrice != null ? String(row.sharePrice) : undefined,
+      shareType: row.shareType != null ? String(row.shareType) : undefined,
+    };
+  };
+
+  const calculateDoctorGrossShareFromBundle = (bundle: any, gross: number) => {
+    const validRows = asArray(bundle?.doctorShares).filter((s: unknown) => {
+      const id = doctorIdFromShareRow(s);
+      const row = s as Record<string, unknown>;
+      const rawShare = Number(row.share ?? row.shareValue);
+      return id && /^[0-9a-fA-F]{24}$/i.test(id) && Number.isFinite(rawShare) && rawShare > 0;
+    });
+    if (validRows.length === 0) return null;
+    const total = validRows.reduce((sum: number, s: unknown) => {
+      const row = s as Record<string, unknown>;
+      const rawShare = Number(row.share ?? row.shareValue) || 0;
+      const isPct = String(row.shareType || '').toLowerCase() === 'percentage';
+      return sum + (isPct ? gross * (rawShare / 100) : rawShare);
+    }, 0);
+    return Math.min(total, gross);
+  };
+
   // Calculate doctor and hospital shares
-  const calculateShares = (item: ProcedureItem) => {
-    const totalAmount = item.rate * item.quantity;
+  const calculateShares = (item: ProcedureItem, bundle?: any) => {
+    const gross = item.rate * item.quantity;
     let discountAmount = item.discount;
 
-    // Calculate discount amount based on type
-    if (item.discountType === 1) { // percentage
-      discountAmount = totalAmount * (item.discount / 100);
+    if (item.discountType === 1) {
+      discountAmount = gross * (item.discount / 100);
     }
 
-    const remainingAmount = totalAmount - discountAmount;
+    const net = Math.max(0, gross - discountAmount);
 
-    // Find the selected doctor to get share info
-    const selectedDoctor = usersList.find(user => user._id === item.performedBy);
-    
-    let doctorShare = 0;
-    let hospitalShare = remainingAmount; // Default to hospital getting full amount
+    const selectedDoctor = usersList.find((user) => user._id === item.performedBy);
+    const primaryDoctorProfile = getPrimaryDoctorProfile(bundle);
 
-    if (selectedDoctor && selectedDoctor.sharePrice && selectedDoctor.shareType) {
-      const sharePrice = parseFloat(selectedDoctor.sharePrice);
-      
-      if (selectedDoctor.shareType === 'percentage') {
-        // Doctor gets percentage of total amount (before discount)
-        doctorShare = totalAmount * (sharePrice / 100);
-      } else {
-        // Doctor gets fixed amount
-        doctorShare = sharePrice;
+    let doctorShareGross = 0;
+    let hospitalShareGross = gross;
+
+    const manualDoctorShare = calculateDoctorGrossShareFromBundle(bundle, gross);
+    if (manualDoctorShare != null) {
+      doctorShareGross = manualDoctorShare;
+      hospitalShareGross = gross - doctorShareGross;
+    } else {
+      const sharePrice =
+        primaryDoctorProfile?.sharePrice != null && String(primaryDoctorProfile.sharePrice).trim() !== ''
+          ? parseFloat(String(primaryDoctorProfile.sharePrice).replace(/,/g, ''))
+          : selectedDoctor?.sharePrice != null && String(selectedDoctor.sharePrice).trim() !== ''
+            ? parseFloat(String(selectedDoctor.sharePrice).replace(/,/g, ''))
+            : NaN;
+      if (Number.isFinite(sharePrice)) {
+        if (
+          String(primaryDoctorProfile?.shareType || '').toLowerCase().includes('percent') ||
+          String(selectedDoctor?.shareType || '').toLowerCase().includes('percent')
+        ) {
+          doctorShareGross = gross * (sharePrice / 100);
+        } else {
+          doctorShareGross = sharePrice;
+        }
+        doctorShareGross = Math.min(doctorShareGross, gross);
+        hospitalShareGross = gross - doctorShareGross;
       }
-
-      // Ensure doctor doesn't get more than the remaining amount
-      doctorShare = Math.min(doctorShare, remainingAmount);
-      hospitalShare = remainingAmount - doctorShare;
     }
 
-    // Apply discount distribution based on deductDiscount selection
+    let doctorShare = doctorShareGross;
+    let hospitalShare = hospitalShareGross;
+
+    // Who bears the line discount (customer net is still `net` = gross − discount).
+    // Split on gross first, then subtract discount only once from the chosen side(s).
     switch (item.deductDiscount) {
       case 'Hospital & Doctor':
-        // Split discount equally between hospital and doctor
-        doctorShare = doctorShare - (discountAmount / 2);
-        hospitalShare = hospitalShare - (discountAmount / 2);
+        doctorShare = Math.max(0, doctorShareGross - discountAmount / 2);
+        hospitalShare = Math.max(0, hospitalShareGross - discountAmount / 2);
         break;
       case 'Hospital':
-        // Apply full discount to hospital share only
-        hospitalShare = hospitalShare - discountAmount;
+        hospitalShare = Math.max(0, hospitalShareGross - discountAmount);
+        doctorShare = doctorShareGross;
         break;
       case 'Doctor':
-        // Apply full discount to doctor share only
-        doctorShare = doctorShare - discountAmount;
+        doctorShare = Math.max(0, doctorShareGross - discountAmount);
+        hospitalShare = hospitalShareGross;
+        break;
+      default:
         break;
     }
 
-    // Ensure shares don't go negative
-    doctorShare = Math.max(0, doctorShare);
-    hospitalShare = Math.max(0, hospitalShare);
+    // Keep doctor + hospital exactly equal to net (fixes rounding / clamp edge cases).
+    const sumAfter = doctorShare + hospitalShare;
+    if (net <= 0) {
+      doctorShare = 0;
+      hospitalShare = 0;
+    } else if (Math.abs(sumAfter - net) > 0.0001) {
+      hospitalShare = Math.max(0, net - doctorShare);
+      doctorShare = Math.max(0, net - hospitalShare);
+    }
 
     return {
       doctorAmount: parseFloat(doctorShare.toFixed(2)),
@@ -677,15 +809,27 @@ export default function InvoiceUpdate() {
   };
 
   const handleLocalExpenseAdd = (procedureRowId: number | null, bundle: any) => {
+    const proc = procedureRowId != null ? procedures.find((p) => p.id === procedureRowId) : null;
+    const payload = {
+      procedureRowId,
+      procedureId: proc?.procedureId || '',
+      invoiceId: invoiceData?._id || '',
+      ...bundle,
+    };
+    const primaryDoctorProfile = getPrimaryDoctorProfile(payload);
+    if (primaryDoctorProfile) {
+      setUsersList((prev) => {
+        const idx = prev.findIndex((u) => u._id === primaryDoctorProfile._id);
+        if (idx >= 0) {
+          const next = [...prev];
+          next[idx] = { ...next[idx], ...primaryDoctorProfile };
+          return next;
+        }
+        return [...prev, primaryDoctorProfile];
+      });
+    }
     setLocalExpenses((prev) => {
       const idx = prev.findIndex((e) => e.procedureRowId === procedureRowId);
-      const proc = procedureRowId != null ? procedures.find((p) => p.id === procedureRowId) : null;
-      const payload = {
-        procedureRowId,
-        procedureId: proc?.procedureId || '',
-        invoiceId: invoiceData?._id || '',
-        ...bundle,
-      };
       if (idx >= 0) {
         const next = [...prev];
         next[idx] = payload;
@@ -701,7 +845,7 @@ export default function InvoiceUpdate() {
           prev.map((p) => {
             if (p.id !== procedureRowId) return p;
             const next = { ...p, performedBy: docId };
-            const sh = calculateShares(next);
+            const sh = calculateShares(next, payload);
             return { ...next, doctorAmount: sh.doctorAmount, hospitalAmount: sh.hospitalAmount };
           }),
         );
@@ -898,7 +1042,10 @@ export default function InvoiceUpdate() {
             updatedItem.amount = selectedProcedure.amount * updatedItem.quantity;
             
             // Calculate shares when procedure changes
-            const shares = calculateShares(updatedItem);
+            const shares = calculateShares(
+              updatedItem,
+              expenseBundleForProcedureRow(localExpenses, updatedItem, procedures),
+            );
             updatedItem.doctorAmount = shares.doctorAmount;
             updatedItem.hospitalAmount = shares.hospitalAmount;
           }
@@ -923,7 +1070,10 @@ export default function InvoiceUpdate() {
             }
           }
           
-          const shares = calculateShares(updatedItem);
+          const shares = calculateShares(
+            updatedItem,
+            expenseBundleForProcedureRow(localExpenses, updatedItem, procedures),
+          );
           updatedItem.doctorAmount = shares.doctorAmount;
           updatedItem.hospitalAmount = shares.hospitalAmount;
         }
@@ -937,13 +1087,19 @@ export default function InvoiceUpdate() {
         }
 
         if (field === 'discount' || field === 'discountType' || field === 'deductDiscount') {
-          const shares = calculateShares(updatedItem);
+          const shares = calculateShares(
+            updatedItem,
+            expenseBundleForProcedureRow(localExpenses, updatedItem, procedures),
+          );
           updatedItem.doctorAmount = shares.doctorAmount;
           updatedItem.hospitalAmount = shares.hospitalAmount;
         }
 
         if (field === 'performedBy') {
-          const shares = calculateShares(updatedItem);
+          const shares = calculateShares(
+            updatedItem,
+            expenseBundleForProcedureRow(localExpenses, updatedItem, procedures),
+          );
           updatedItem.doctorAmount = shares.doctorAmount;
           updatedItem.hospitalAmount = shares.hospitalAmount;
         }
@@ -984,6 +1140,23 @@ export default function InvoiceUpdate() {
 
   const isProcDated = (item: ProcedureItem) =>
     !!(item.procedureDate && String(item.procedureDate).trim());
+
+  /** Doctor / assisted / reception costing required only when procedure date is set and not in the future. */
+  const isProcCostingRequired = (item: ProcedureItem): boolean => {
+    if (!isProcDated(item)) return false;
+    const ymd = String(item.procedureDate).trim().slice(0, 10);
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(ymd);
+    if (!m) return false;
+    const y = Number(m[1]);
+    const mo = Number(m[2]);
+    const day = Number(m[3]);
+    if (!y || !mo || !day) return false;
+    const procStart = new Date(y, mo - 1, day);
+    procStart.setHours(0, 0, 0, 0);
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    return procStart.getTime() <= todayStart.getTime();
+  };
 
   const lineNetAfterDiscount = (item: ProcedureItem) => {
     const disc =
@@ -1061,12 +1234,73 @@ export default function InvoiceUpdate() {
   };
 
   const calculateTotalDoctorShare = () => {
-    return procedures.reduce((sum, item) => sum + item.doctorAmount, 0);
+    return procedures
+      .filter(isProcDated)
+      .reduce((sum, item) => {
+        const shares = calculateShares(
+          item,
+          expenseBundleForProcedureRow(localExpenses, item, procedures),
+        );
+        return sum + shares.doctorAmount;
+      }, 0);
   };
 
   const calculateTotalHospitalShare = () => {
-    return procedures.reduce((sum, item) => sum + item.hospitalAmount, 0);
+    return procedures
+      .filter(isProcDated)
+      .reduce((sum, item) => {
+        const shares = calculateShares(
+          item,
+          expenseBundleForProcedureRow(localExpenses, item, procedures),
+        );
+        return sum + shares.hospitalAmount;
+      }, 0);
   };
+
+  const calculateShareBreakdown = (item: ProcedureItem) => {
+    const bundle = expenseBundleForProcedureRow(localExpenses, item, procedures);
+    const gross = numField(item.rate) * numField(item.quantity, 1);
+    const selectedDoctor = usersList.find((user) => user._id === item.performedBy);
+    const primaryDoctorProfile = getPrimaryDoctorProfile(bundle);
+
+    let doctorShareGross = 0;
+    let hospitalShareGross = gross;
+    const manualDoctorShare = calculateDoctorGrossShareFromBundle(bundle, gross);
+    if (manualDoctorShare != null) {
+      doctorShareGross = manualDoctorShare;
+      hospitalShareGross = gross - doctorShareGross;
+    } else {
+      const sharePrice =
+        primaryDoctorProfile?.sharePrice != null && String(primaryDoctorProfile.sharePrice).trim() !== ''
+          ? parseFloat(String(primaryDoctorProfile.sharePrice).replace(/,/g, ''))
+          : selectedDoctor?.sharePrice != null && String(selectedDoctor.sharePrice).trim() !== ''
+            ? parseFloat(String(selectedDoctor.sharePrice).replace(/,/g, ''))
+            : NaN;
+      if (Number.isFinite(sharePrice)) {
+        const isPct =
+          String(primaryDoctorProfile?.shareType || '').toLowerCase().includes('percent') ||
+          String(selectedDoctor?.shareType || '').toLowerCase().includes('percent');
+        doctorShareGross = Math.min(isPct ? gross * (sharePrice / 100) : sharePrice, gross);
+        hospitalShareGross = gross - doctorShareGross;
+      }
+    }
+
+    const finalShares = calculateShares(item, bundle);
+    return {
+      doctorDiscountBurden: Math.max(0, doctorShareGross - finalShares.doctorAmount),
+      hospitalDiscountBurden: Math.max(0, hospitalShareGross - finalShares.hospitalAmount),
+    };
+  };
+
+  const calculateTotalDoctorDiscountBurden = () =>
+    procedures
+      .filter(isProcDated)
+      .reduce((sum, item) => sum + calculateShareBreakdown(item).doctorDiscountBurden, 0);
+
+  const calculateTotalHospitalDiscountBurden = () =>
+    procedures
+      .filter(isProcDated)
+      .reduce((sum, item) => sum + calculateShareBreakdown(item).hospitalDiscountBurden, 0);
   
   const calculateAdditionalExpensesTotal = () =>
     localExpenses
@@ -1107,6 +1341,7 @@ export default function InvoiceUpdate() {
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsSubmitting(true);
+    const loadedInvoiceState = invoiceData;
     
     if (!patientInfo) {
       toast.error('Please select a patient');
@@ -1128,40 +1363,80 @@ export default function InvoiceUpdate() {
         setIsSubmitting(false);
         return;
       }
+      if (!isProcCostingRequired(item)) continue;
+
       const costing = expenseBundleForProcedureRow(localExpenses, item, procedures);
       const hasDoctorInCosting = asArray(costing?.doctorShares).some((s: unknown) =>
         shareRowHasValidDoctorId(s),
       );
-      // Legacy invoices stored the doctor on `item.performedBy` only — accept that too,
-      // otherwise users can't re-save existing invoices without re-keying every row.
       const performedById = refId(item.performedBy);
       const hasPerformedBy = !!performedById && /^[0-9a-fA-F]{24}$/i.test(performedById);
       if (!hasDoctorInCosting && !hasPerformedBy) {
         toast.error(
-          `Procedure "${item.procedure || item.id}": open costing (document icon) and add at least one doctor`,
+          `Procedure "${item.procedure || item.id}" (${item.procedureDate}): open costing and add at least one doctor, or set Performed By.`,
         );
         setIsSubmitting(false);
         return;
       }
-      // Assisted By / Reception are optional on update — staff can stay on the line only or be empty.
+      const hasAssisted = asArray(costing?.assistedBy).some(
+        (s: unknown) =>
+          s &&
+          typeof s === 'object' &&
+          (s as { userId?: string }).userId &&
+          /^[0-9a-fA-F]{24}$/i.test(String((s as { userId?: string }).userId)),
+      );
+      if (!hasAssisted) {
+        toast.error(
+          `Procedure "${item.procedure || item.id}" (${item.procedureDate}): open costing and add at least one staff (Assisted By).`,
+        );
+        setIsSubmitting(false);
+        return;
+      }
+      const hasReception = asArray(costing?.receptionStaff).some(
+        (s: unknown) =>
+          s &&
+          typeof s === 'object' &&
+          (s as { userId?: string }).userId &&
+          /^[0-9a-fA-F]{24}$/i.test(String((s as { userId?: string }).userId)),
+      );
+      if (!hasReception) {
+        toast.error(
+          `Procedure "${item.procedure || item.id}" (${item.procedureDate}): open costing and add at least one Reception staff.`,
+        );
+        setIsSubmitting(false);
+        return;
+      }
     }
 
-    const firstProc = procedures[0];
-    const firstBundle = expenseBundleForProcedureRow(localExpenses, firstProc, procedures) || {};
-    const doctorId =
-      doctorIdFromShareRow(asArray(firstBundle.doctorShares).find((s: unknown) => shareRowHasValidDoctorId(s))) ||
-      refId(firstProc?.performedBy);
-    if (!doctorId || String(doctorId).trim() === '') {
-      toast.error('Add at least one doctor in costing for the first procedure');
-      setIsSubmitting(false);
-      return;
+    const anyProcRequiringCosting = procedures.some((p) => isProcCostingRequired(p));
+
+    let doctorId: string | undefined;
+    if (anyProcRequiringCosting) {
+      const headerProc = procedures.find((p) => isProcCostingRequired(p)) ?? procedures[0];
+      const firstBundle = expenseBundleForProcedureRow(localExpenses, headerProc, procedures) || {};
+      doctorId =
+        doctorIdFromShareRow(asArray(firstBundle.doctorShares).find((s: unknown) => shareRowHasValidDoctorId(s))) ||
+        refId(headerProc?.performedBy);
+      if (!doctorId || String(doctorId).trim() === '') {
+        toast.error(
+          'Invoice needs a doctor: add doctor shares or Performed By on a procedure dated today or earlier.',
+        );
+        setIsSubmitting(false);
+        return;
+      }
+    } else {
+      const headerProc = procedures[0];
+      const firstBundle = expenseBundleForProcedureRow(localExpenses, headerProc, procedures) || {};
+      doctorId =
+        doctorIdFromShareRow(asArray(firstBundle.doctorShares).find((s: unknown) => shareRowHasValidDoctorId(s))) ||
+        refId(headerProc?.performedBy) ||
+        refId(loadedInvoiceState?.doctorId) ||
+        undefined;
     }
 
     const billingTotal = calculateGrandTotal();
     const paidSum = calculateTotalPaid();
     const rawDue = billingTotal - paidSum;
-
-    const shareBaseForSave = calculateDoctorShareBase();
 
     const invoiceEditDateIso = (() => {
       const t = String(invoiceEditDate || '').trim();
@@ -1174,24 +1449,29 @@ export default function InvoiceUpdate() {
     const invoiceDataBase = {
       patientId: patientInfo._id,
       patientMr: patientInfo.mr,
-      doctorId: doctorId,
+      ...(isMongoHex24(doctorId) ? { doctorId } : {}),
       ...(invoiceEditDateIso ? { invoiceDate: invoiceEditDateIso } : {}),
       item: procedures.map((item) => {
         const bundle = expenseBundleForProcedureRow(localExpenses, item, procedures) || {};
-        const shownExpenses = asArray(bundle.expenses);
+        const resolvedShares = calculateShares(item, bundle);
+        const shownExpenses = asArray(bundle.expenses).filter((e: unknown) => {
+          const row = e as Record<string, unknown>;
+          return isMongoHex24(row?.expenseCategoryId ?? row?.categoryId ?? row?.category);
+        });
         const shares = asArray(bundle.doctorShares)
           .filter((share: any) => {
             const id = doctorIdFromShareRow(share);
-            const val = Number(share.share ?? share.shareValue);
-            return /^[0-9a-fA-F]{24}$/i.test(id) && Number.isFinite(val) && val > 0;
+            return /^[0-9a-fA-F]{24}$/i.test(id);
           })
           .map((share: any) => {
             const id = doctorIdFromShareRow(share);
-            const val = Number(share.share ?? share.shareValue) || 0;
-            const amount = share.shareType === 'percentage' ? shareBaseForSave * (val / 100) : val;
+            const parsed = Number(share.share ?? share.shareValue);
+            const val = Number.isFinite(parsed) ? parsed : 0;
+            const amount = share.shareType === 'percentage' ? numField(item.amount) * (val / 100) : val;
+            const st = String(share.shareType || 'value').toLowerCase();
             return {
               doctorId: id,
-              shareType: share.shareType,
+              shareType: st === 'percentage' ? 'percentage' : 'value',
               shareValue: val,
               amount,
             };
@@ -1200,6 +1480,11 @@ export default function InvoiceUpdate() {
           doctorIdFromShareRow(
             asArray(bundle.doctorShares).find((s: unknown) => shareRowHasValidDoctorId(s)),
           ) || refId(item.performedBy);
+        const performedBySave = refId(primaryDoc);
+        const amt = numField(item.amount);
+        const disc = numField(item.discount);
+        const qty = numField(item.quantity, 1);
+        const lineTotal = amt - (item.discountType === 0 ? disc : amt * (disc / 100));
         return {
           procedureId: item.procedureId,
           description:
@@ -1207,25 +1492,29 @@ export default function InvoiceUpdate() {
             item.description ||
             item.procedure,
           procedureDate: procedureDateToIso(item.procedureDate),
-          rate: item.rate,
-          quantity: item.quantity,
-          amount: item.amount,
-          discount: item.discount,
-          discountType: item.discountType,
-          tax: item.tax === 'value' ? 0 : 0,
-          total: item.amount - (item.discountType === 0 ? item.discount : (item.amount * (item.discount / 100))),
-          performedBy: refId(primaryDoc),
+          rate: numField(item.rate),
+          quantity: qty,
+          amount: amt,
+          discount: disc,
+          discountType: numField(item.discountType),
+          tax: item.tax === 'value' ? 0 : numField(item.tax),
+          total: lineTotal,
+          deductDiscount: item.deductDiscount,
+          ...(isMongoHex24(performedBySave) ? { performedBy: performedBySave } : {}),
           assistedBy: asArray<{ userId?: string }>(bundle.assistedBy)
             .map((x) => x?.userId)
-            .filter(Boolean),
+            .filter((uid): uid is string => !!uid && isMongoHex24(uid)),
           receptionStaff: asArray<{ userId?: string }>(bundle.receptionStaff)
             .map((x) => x?.userId)
-            .filter(Boolean),
-          doctorAmount: item.doctorAmount,
-          hospitalAmount: item.hospitalAmount,
+            .filter((uid): uid is string => !!uid && isMongoHex24(uid)),
+          doctorAmount: numField(resolvedShares.doctorAmount),
+          hospitalAmount: numField(resolvedShares.hospitalAmount),
           expenses: shownExpenses,
           doctorShares: shares,
-          consumptions: asArray(bundle.consumptions),
+          consumptions: asArray(bundle.consumptions).filter((c: unknown) => {
+            const row = c as Record<string, unknown>;
+            return isMongoHex24(row?.pharmItemId);
+          }),
         };
       }),
       subTotalBill: calculateSubTotal(),
@@ -1235,18 +1524,18 @@ export default function InvoiceUpdate() {
       note: remarks,
     };
     
-    const invoiceData: any = { ...invoiceDataBase };
+    const updatePayload: any = { ...invoiceDataBase };
     {
-      invoiceData.duePay = rawDue > 0 ? rawDue : 0;
+      updatePayload.duePay = rawDue > 0 ? rawDue : 0;
       // Advance = sirf wahi paid amount jo billed (dated procedures) se zyada hai.
       // Pehle `undatedAdv` ko bhi add kiya ja raha tha jo same paisa double count karta tha
       // (e.g. 50k paid for an undated procedure → 50k + 50k = 100k advance shown). Fixed.
-      invoiceData.advancePay = rawDue < 0 ? Math.abs(rawDue) : 0;
-      invoiceData.totalPay = paidSum;
-      invoiceData.status = rawDue < 0 ? 'credit' : rawDue === 0 ? 'completed' : 'pending';
+      updatePayload.advancePay = rawDue < 0 ? Math.abs(rawDue) : 0;
+      updatePayload.totalPay = paidSum;
+      updatePayload.status = rawDue < 0 ? 'credit' : rawDue === 0 ? 'completed' : 'pending';
     }
     if (paymentsDirty) {
-      invoiceData.payment = paymentInstallments.map(payment => ({
+      updatePayload.payment = paymentInstallments.map(payment => ({
         method: payment.method,
         payDate: (() => {
           if (!payment.date) return payment.date;
@@ -1273,7 +1562,7 @@ export default function InvoiceUpdate() {
     }
   
     try {
-      const response = await axios.put(`${Base_url}/apis/invoice/update/${id}`, invoiceData);
+      const response = await axios.put(`${Base_url}/apis/invoice/update/${id}`, updatePayload);
       if(response.data.status === "ok") {
         toast.success('Invoice updated successfully!');
         if (isPaymentComplete) {
@@ -1283,9 +1572,15 @@ export default function InvoiceUpdate() {
       } else {
         toast.error(response.data.message || 'Failed to update invoice');
       }
-    } catch (error) {
-      console.error('Detailed error:', error.response?.data || error.message);
-      toast.error(error.response?.data?.message || 'An error occurred while updating invoice');
+    } catch (error: unknown) {
+      const ax = error as { response?: { data?: { error?: string; message?: string } } };
+      const data = ax.response?.data;
+      console.error('Detailed error:', data ?? (error instanceof Error ? error.message : error));
+      toast.error(
+        data?.error ||
+          data?.message ||
+          (error instanceof Error ? error.message : 'An error occurred while updating invoice'),
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -1657,6 +1952,8 @@ export default function InvoiceUpdate() {
           selectedExpense={editingExpense}
           categories={categories}
           selectedProcedureId={selectedProcedureRowId}
+          procedureDate={procedures.find((p) => p.id === selectedProcedureRowId)?.procedureDate}
+          performedBy={procedures.find((p) => p.id === selectedProcedureRowId)?.performedBy}
           onLocalExpenseAdd={handleLocalExpenseAdd}
         />
 
@@ -1810,12 +2107,24 @@ export default function InvoiceUpdate() {
                 </span>
               </div>
               <div className="border-t pt-2 mt-2 flex justify-between">
+                <span>Doctor Discount Burden:</span>
+                <span className="font-medium text-red-600">
+                  - Rs. {calculateTotalDoctorDiscountBurden().toFixed(2)}
+                </span>
+              </div>
+              <div className="flex justify-between">
+                <span>Hospital Discount Burden:</span>
+                <span className="font-medium text-red-600">
+                  - Rs. {calculateTotalHospitalDiscountBurden().toFixed(2)}
+                </span>
+              </div>
+              <div className="flex justify-between">
                 <span>Doctor Share:</span>
-                <span className="font-medium">Rs. {calculateTotalDoctorShare().toFixed(2)}</span>
+                <span className="font-medium">Rs. {calculateTotalDoctorDiscountBurden().toFixed(2)}</span>
               </div>
               <div className="flex justify-between">
                 <span>Hospital Share:</span>
-                <span className="font-medium">Rs. {calculateTotalHospitalShare().toFixed(2)}</span>
+                <span className="font-medium">Rs. {calculateTotalHospitalDiscountBurden().toFixed(2)}</span>
               </div>
             </div>
           </div>

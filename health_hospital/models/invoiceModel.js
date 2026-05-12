@@ -17,6 +17,8 @@ const invoiceSchema = new mongoose.Schema({
             expenseAmount: { type: Number, allowNull: true },
             discount: { type: Number, allowNull: true },
             discountType: { type: Number, allowNull: true },
+            /** How line discount applies to hospital vs doctor share (UI + calculations) */
+            deductDiscount: { type: String, default: 'Hospital & Doctor' },
             tax: { type: Number, allowNull: true },
             total: { type: Number, allowNull: true },
             performedBy: {

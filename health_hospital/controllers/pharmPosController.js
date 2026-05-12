@@ -638,16 +638,199 @@ const getpharmPosSummary = async (req, res) => {
           docTotals: [
             { $match: baseQuery },
             {
+              $addFields: {
+                // Legacy lines often lack totalAmount; fall back to netAmount (new POS sends both).
+                _linesTotal: {
+                  $reduce: {
+                    input: { $ifNull: ['$allItem', []] },
+                    initialValue: 0,
+                    in: {
+                      $add: [
+                        '$$value',
+                        {
+                          $ifNull: [
+                            {
+                              $convert: {
+                                input: '$$this.totalAmount',
+                                to: 'double',
+                                onError: null,
+                                onNull: null,
+                              },
+                            },
+                            {
+                              $convert: {
+                                input: '$$this.netAmount',
+                                to: 'double',
+                                onError: 0,
+                                onNull: 0,
+                              },
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                  },
+                },
+                // Sum installments: support legacy `amount`; some DB rows use `payments` instead of `payment`.
+                _payFromInstallments: {
+                  $max: [
+                    {
+                      $reduce: {
+                        input: { $ifNull: ['$payment', []] },
+                        initialValue: 0,
+                        in: {
+                          $add: [
+                            '$$value',
+                            {
+                              $max: [
+                                {
+                                  $convert: {
+                                    input: '$$this.paid',
+                                    to: 'double',
+                                    onError: 0,
+                                    onNull: 0,
+                                  },
+                                },
+                                {
+                                  $convert: {
+                                    input: '$$this.amount',
+                                    to: 'double',
+                                    onError: 0,
+                                    onNull: 0,
+                                  },
+                                },
+                              ],
+                            },
+                          ],
+                        },
+                      },
+                    },
+                    {
+                      $reduce: {
+                        input: { $ifNull: ['$payments', []] },
+                        initialValue: 0,
+                        in: {
+                          $add: [
+                            '$$value',
+                            {
+                              $max: [
+                                {
+                                  $convert: {
+                                    input: '$$this.paid',
+                                    to: 'double',
+                                    onError: 0,
+                                    onNull: 0,
+                                  },
+                                },
+                                {
+                                  $convert: {
+                                    input: '$$this.amount',
+                                    to: 'double',
+                                    onError: 0,
+                                    onNull: 0,
+                                  },
+                                },
+                              ],
+                            },
+                          ],
+                        },
+                      },
+                    },
+                  ],
+                },
+                _paidN: {
+                  $convert: { input: '$paid', to: 'double', onError: 0, onNull: 0 },
+                },
+                _dueN: {
+                  $convert: { input: '$due', to: 'double', onError: 0, onNull: 0 },
+                },
+                _advanceN: {
+                  $convert: { input: '$advance', to: 'double', onError: 0, onNull: 0 },
+                },
+                // When line totals were never stored, bill total still equals paid + due − advance on the header.
+                _headerBillTotal: {
+                  $max: [
+                    0,
+                    {
+                      $add: [
+                        {
+                          $convert: { input: '$paid', to: 'double', onError: 0, onNull: 0 },
+                        },
+                        {
+                          $convert: { input: '$due', to: 'double', onError: 0, onNull: 0 },
+                        },
+                        {
+                          $multiply: [
+                            -1,
+                            {
+                              $convert: { input: '$advance', to: 'double', onError: 0, onNull: 0 },
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+            {
+              $addFields: {
+                // Some legacy rows only have installments populated; use max of header paid vs installment sums.
+                _paidEffective: {
+                  $max: ['$_paidN', '$_payFromInstallments'],
+                },
+                // Use the larger of line sum vs header (paid+due−advance): legacy rows often under-sum lines
+                // but header totals are still correct — picking only lines when >0 understated totalDue.
+                _linesForDue: {
+                  $max: ['$_linesTotal', '$_headerBillTotal'],
+                },
+              },
+            },
+            {
+              $addFields: {
+                // Prefer stored due when > 0; else max(0, billLines + advance − paid) matches POS (paid+due−advance ≈ bill)
+                _dueResolved: {
+                  $cond: [
+                    { $gt: ['$_dueN', 0] },
+                    '$_dueN',
+                    {
+                      $max: [
+                        0,
+                        {
+                          $subtract: [
+                            { $add: ['$_linesForDue', '$_advanceN'] },
+                            '$_paidEffective',
+                          ],
+                        },
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+            {
               $group: {
                 _id: null,
                 totalTransactions: { $sum: 1 },
-                totalPaid: { $sum: { $ifNull: ['$paid', 0] } },
-                totalDue: { $sum: { $ifNull: ['$due', 0] } },
-                totalDiscount: { $sum: { $ifNull: ['$totalDiscount', 0] } },
-                totalTax: { $sum: { $ifNull: ['$totalTax', 0] } },
-                totalAdvance: { $sum: { $ifNull: ['$advance', 0] } },
-              }
-            }
+                totalPaid: { $sum: '$_paidEffective' },
+                totalDue: { $sum: '$_dueResolved' },
+                totalDiscount: {
+                  $sum: {
+                    $convert: { input: '$totalDiscount', to: 'double', onError: 0, onNull: 0 },
+                  },
+                },
+                totalTax: {
+                  $sum: {
+                    $convert: { input: '$totalTax', to: 'double', onError: 0, onNull: 0 },
+                  },
+                },
+                totalAdvance: {
+                  $sum: {
+                    $convert: { input: '$advance', to: 'double', onError: 0, onNull: 0 },
+                  },
+                },
+              },
+            },
           ],
           // Line-level totals with special date handling for returns
           lineTotals: [
@@ -682,15 +865,30 @@ const getpharmPosSummary = async (req, res) => {
             {
               $group: {
                 _id: null,
+                // Sum line totalAmount as stored: sale lines positive; pure return/refund lines
+                // negative; partial-return rows (same line) store net kept (positive).
                 totalSales: {
                   $sum: {
-                    $cond: [
-                      { $eq: [{ $ifNull: ['$allItem.isReturn', false] }, true] },
-                      { $multiply: [{ $ifNull: ['$allItem.totalAmount', 0] }, -1] },
-                      { $ifNull: ['$allItem.totalAmount', 0] }
-                    ]
-                  }
-                }
+                    $ifNull: [
+                      {
+                        $convert: {
+                          input: '$allItem.totalAmount',
+                          to: 'double',
+                          onError: null,
+                          onNull: null,
+                        },
+                      },
+                      {
+                        $convert: {
+                          input: '$allItem.netAmount',
+                          to: 'double',
+                          onError: 0,
+                          onNull: 0,
+                        },
+                      },
+                    ],
+                  },
+                },
               }
             }
           ]

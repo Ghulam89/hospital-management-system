@@ -35,6 +35,7 @@ import { getInvoiceHeaderForPdf } from '../../../utils/branchPdfHeader';
 import { enrichInvoiceForPdf } from '../../../utils/enrichInvoiceForPdf';
 import { Document, Image, Page, pdf, StyleSheet, Text, View } from '@react-pdf/renderer';
 import { useBranchScopeEpoch } from '../../../context/BranchScopeEpochContext';
+import { sumInvoiceDoctorHospitalShare } from '../../../utils/invoiceShare';
 
 // TypeScript interfaces
 interface TransactionItem {
@@ -109,6 +110,8 @@ interface RawTransaction {
   _id: string;
   invoiceNo: string;
   createdAt: string;
+  invoiceDate?: string;
+  date?: string;
   patientId: Patient;
   doctorId: Doctor;
   departmentData?: Department;
@@ -191,6 +194,9 @@ interface ApiResponse {
   currentPage: number;
   limit: number;
 }
+
+const effectiveInvoiceDate = (t: RawTransaction): string =>
+  (t.invoiceDate as string) || (t.date as string) || t.createdAt;
 
 const { RangePicker } = DatePicker;
 const { Option } = Select;
@@ -342,26 +348,19 @@ const [filters, setFilters] = useState<Filters>({
       let filteredData: RawTransaction[] = allRaw;
       if (filters.startDate && filters.endDate && filters.startDate.isSame(filters.endDate, 'day')) {
         const selectedDate = filters.startDate.format('YYYY-MM-DD');
-        filteredData = allRaw.filter((t) => moment(t.createdAt).format('YYYY-MM-DD') === selectedDate);
+        filteredData = allRaw.filter((t) => moment(effectiveInvoiceDate(t)).format('YYYY-MM-DD') === selectedDate);
       } else if (filters.startDate && filters.endDate) {
         const startDate = filters.startDate.format('YYYY-MM-DD');
         const endDate = filters.endDate.format('YYYY-MM-DD');
         filteredData = allRaw.filter((t) => {
-          const txDate = moment(t.createdAt).format('YYYY-MM-DD');
+          const txDate = moment(effectiveInvoiceDate(t)).format('YYYY-MM-DD');
           return txDate >= startDate && txDate <= endDate;
         });
       }
 
       // Transform for export similar to table
       const transformed = filteredData.map((transaction: RawTransaction) => {
-        const doctorShare = transaction.item?.reduce(
-          (sum: number, item: TransactionItem) => sum + (item.doctorAmount || 0),
-          0,
-        ) || 0;
-        const hospitalShare = transaction.item?.reduce(
-          (sum: number, item: TransactionItem) => sum + (item.hospitalAmount || 0),
-          0,
-        ) || 0;
+        const { doctorShare, hospitalShare } = sumInvoiceDoctorHospitalShare(transaction);
         const refund = Array.isArray(transaction.payment)
           ? transaction.payment.reduce((sum: number, p: any) => {
               const v = Number(p?.paid) || 0;
@@ -370,7 +369,7 @@ const [filters, setFilters] = useState<Filters>({
           : 0;
         return {
           invoiceNo: transaction.invoiceNo,
-          date: transaction['invoiceDate' as any] || (transaction as any).date || transaction.createdAt,
+          date: effectiveInvoiceDate(transaction),
           patientMR: transaction.patientId?.mr || 'N/A',
           patientName: transaction.patientId?.name || 'N/A',
           patientPhone: transaction.patientId?.phone || 'N/A',
@@ -807,21 +806,21 @@ const [filters, setFilters] = useState<Filters>({
       });
       console.log('Raw data from API:', data.map(item => ({
         invoiceNo: item.invoiceNo,
-        date: item.createdAt,
-        formattedDate: moment(item.createdAt).format('YYYY-MM-DD')
+        date: effectiveInvoiceDate(item),
+        formattedDate: moment(effectiveInvoiceDate(item)).format('YYYY-MM-DD')
       })));
       
       if (filters.startDate && filters.endDate && filters.startDate.isSame(filters.endDate, 'day')) {
         const selectedDate = filters.startDate.format('YYYY-MM-DD');
         filteredData = data.filter((transaction: RawTransaction) => {
-          const transactionDate = moment(transaction.createdAt).format('YYYY-MM-DD');
+          const transactionDate = moment(effectiveInvoiceDate(transaction)).format('YYYY-MM-DD');
           return transactionDate === selectedDate;
         });
         
         console.log('Filtered data for same day:', filteredData.map(item => ({
           invoiceNo: item.invoiceNo,
-          date: item.createdAt,
-          formattedDate: moment(item.createdAt).format('YYYY-MM-DD')
+          date: effectiveInvoiceDate(item),
+          formattedDate: moment(effectiveInvoiceDate(item)).format('YYYY-MM-DD')
         })));
         
         // If no data matches the exact date, show message and set empty data
@@ -839,14 +838,14 @@ const [filters, setFilters] = useState<Filters>({
         const endDate = filters.endDate.format('YYYY-MM-DD');
         
         filteredData = data.filter((transaction: RawTransaction) => {
-          const transactionDate = moment(transaction.createdAt).format('YYYY-MM-DD');
+          const transactionDate = moment(effectiveInvoiceDate(transaction)).format('YYYY-MM-DD');
           return transactionDate >= startDate && transactionDate <= endDate;
         });
         
         console.log('Filtered data for date range:', filteredData.map(item => ({
           invoiceNo: item.invoiceNo,
-          date: item.createdAt,
-          formattedDate: moment(item.createdAt).format('YYYY-MM-DD')
+          date: effectiveInvoiceDate(item),
+          formattedDate: moment(effectiveInvoiceDate(item)).format('YYYY-MM-DD')
         })));
         
         // If filtered data is different from original data, show warning
@@ -896,14 +895,7 @@ const [filters, setFilters] = useState<Filters>({
           fullTransaction: transaction
         });
         
-        const doctorShare = transaction.item.reduce(
-          (sum: number, item: TransactionItem) => sum + (item.doctorAmount || 0),
-          0,
-        );
-        const hospitalShare = transaction.item.reduce(
-          (sum: number, item: TransactionItem) => sum + (item.hospitalAmount || 0),
-          0,
-        );
+        const { doctorShare, hospitalShare } = sumInvoiceDoctorHospitalShare(transaction);
         const paymentEntries = Array.isArray(transaction.payment) ? transaction.payment : [];
         const paymentEntriesWithTs = paymentEntries
           .map((p: any) => ({
@@ -938,7 +930,7 @@ const [filters, setFilters] = useState<Filters>({
           key: transaction._id,
           _id: transaction._id,
           invoiceNo: transaction.invoiceNo,
-          date: transaction.createdAt,
+          date: effectiveInvoiceDate(transaction),
           patientId: transaction.patientId,
           patientMR: transaction.patientId?.mr || 'N/A',
           patientName: transaction.patientId?.name || 'N/A',
@@ -1222,30 +1214,76 @@ const [filters, setFilters] = useState<Filters>({
     return queryParams;
   };
 
-  // Fetch summary from BACKEND with same filters/date-range as table
+  // Fetch summary from invoice list (frontend computed) so it always matches invoiceDate filtering.
   const fetchSummaryData = async () => {
     try {
       const queryParams = buildSummaryQueryParams();
-      const summaryUrl = `${Base_url}/apis/invoice/summary${queryParams.toString() ? `?${queryParams.toString()}` : ''}`;
+      // IMPORTANT: remove start/end from backend query because backend may apply createdAt.
+      // We apply invoiceDate/date/createdAt date filtering on frontend for exact parity.
+      const baseFetchParams = new URLSearchParams(queryParams.toString());
+      baseFetchParams.delete('startDate');
+      baseFetchParams.delete('endDate');
 
-      const response = await axios.get(summaryUrl);
+      const firstParams = new URLSearchParams(baseFetchParams.toString());
+      firstParams.set('page', '1');
+      firstParams.set('limit', '200');
+      const firstResp = await axios.get(`${Base_url}/apis/invoice/get?${firstParams.toString()}`);
+      const firstData: RawTransaction[] = firstResp?.data?.data || [];
+      const totalPages: number = firstResp?.data?.totalPages || 1;
+      const limit: number = firstResp?.data?.limit || 200;
 
-      if (response.data.status === 'ok' && response.data.summary) {
-        const backendSummary = response.data.summary;
-
-        setSummaryData({
-          totalRevenue: backendSummary.totalRevenue || 0,
-          totalTax: backendSummary.totalTax || 0,
-          totalDiscount: backendSummary.totalDiscount || 0,
-          totalPaid: backendSummary.totalPaid || 0,
-          totalDue: backendSummary.totalDue || 0,
-          totalDoctorShare: backendSummary.totalDoctorShare || 0,
-          totalHospitalShare: backendSummary.totalHospitalShare || 0,
-          transactionCount: backendSummary.totalTransactions || 0,
-        });
-      } else {
-        console.warn('⚠️ Invalid summary response format:', response.data);
+      const allRaw: RawTransaction[] = [...firstData];
+      const requests: Promise<any>[] = [];
+      for (let page = 2; page <= totalPages; page++) {
+        const p = new URLSearchParams(baseFetchParams.toString());
+        p.set('page', String(page));
+        p.set('limit', String(limit));
+        requests.push(axios.get(`${Base_url}/apis/invoice/get?${p.toString()}`));
       }
+      const responses = await Promise.all(requests);
+      for (const res of responses) {
+        const dataChunk: RawTransaction[] = res?.data?.data || [];
+        allRaw.push(...dataChunk);
+      }
+
+      let filtered = allRaw;
+      if (filters.startDate && filters.endDate && filters.startDate.isSame(filters.endDate, 'day')) {
+        const selectedDate = filters.startDate.format('YYYY-MM-DD');
+        filtered = allRaw.filter((t) => moment(effectiveInvoiceDate(t)).format('YYYY-MM-DD') === selectedDate);
+      } else if (filters.startDate && filters.endDate) {
+        const start = filters.startDate.format('YYYY-MM-DD');
+        const end = filters.endDate.format('YYYY-MM-DD');
+        filtered = allRaw.filter((t) => {
+          const txDate = moment(effectiveInvoiceDate(t)).format('YYYY-MM-DD');
+          return txDate >= start && txDate <= end;
+        });
+      }
+
+      const computed = filtered.reduce(
+        (acc, t) => {
+          const { doctorShare, hospitalShare } = sumInvoiceDoctorHospitalShare(t);
+          acc.totalRevenue += Number(t.totalBill) || 0;
+          acc.totalTax += Number(t.taxBill) || 0;
+          acc.totalDiscount += Number(t.discountBill) || 0;
+          acc.totalPaid += Number(t.totalPay) || 0;
+          acc.totalDue += Number(t.duePay) || 0;
+          acc.totalDoctorShare += doctorShare;
+          acc.totalHospitalShare += hospitalShare;
+          acc.transactionCount += 1;
+          return acc;
+        },
+        {
+          totalRevenue: 0,
+          totalTax: 0,
+          totalDiscount: 0,
+          totalPaid: 0,
+          totalDue: 0,
+          totalDoctorShare: 0,
+          totalHospitalShare: 0,
+          transactionCount: 0,
+        },
+      );
+      setSummaryData(computed);
     } catch (error: any) {
       console.error('❌ Error fetching summary from backend:', error);
       console.error('❌ Error details:', {
@@ -1272,7 +1310,7 @@ const [filters, setFilters] = useState<Filters>({
     }
   };
 
-  // No calculation needed - just use backend data directly
+  // Summary must represent full filtered dataset (all pages), not current table page.
   const summary = summaryData;
 
   // Handle pagination change

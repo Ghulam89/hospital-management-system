@@ -13,6 +13,7 @@ import Breadcrumb from '../../components/Breadcrumbs/Breadcrumb';
 import { AsyncPaginate, type LoadOptions } from 'react-select-async-paginate';
 import { canMenuAction, getStoredUserForPermissions, hasAnyPermission } from '../../utils/permissions';
 import { useBranchScopeEpoch } from '../../context/BranchScopeEpochContext';
+import { sumInvoiceDoctorHospitalShare } from '../../utils/invoiceShare';
 import { buildAxiosBranchScopedParams } from '../../utils/branchScope';
 
 import {
@@ -1101,14 +1102,7 @@ const Invoice = () => {
       }
       
       const transformedData = filteredData.map((invoice) => {
-        const doctorShare = invoice.item.reduce(
-          (sum, item) => sum + (item.doctorAmount || 0),
-          0,
-        );
-        const hospitalShare = invoice.item.reduce(
-          (sum, item) => sum + (item.hospitalAmount || 0),
-          0,
-        );
+        const { doctorShare, hospitalShare } = sumInvoiceDoctorHospitalShare(invoice);
 
         // Get payment date (latest payment date from payment array)
         const paymentEntries = Array.isArray(invoice.payment) ? invoice.payment : [];
