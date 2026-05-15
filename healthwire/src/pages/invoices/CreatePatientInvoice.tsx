@@ -89,6 +89,8 @@ type InvoiceData = {
   }[];
   subTotalBill: number;
   discountBill: number;
+  invoiceDiscount?: number;
+  invoiceDiscountType?: number;
   taxBill: number;
   totalBill: number;
   duePay: number;
@@ -118,6 +120,8 @@ export default function CreatePatientInvoice() {
   const [usersList, setUsersList] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [remarks, setRemarks] = useState('');
+  const [invoiceDiscount, setInvoiceDiscount] = useState(0);
+  const [invoiceDiscountType, setInvoiceDiscountType] = useState(0);
   const [searchError, setSearchError] = useState('');
   const [invoiceData, setInvoiceData] = useState<InvoiceData | null>(null);
   const [getPatinetData, setGetPatientData] = useState<Patient | null>(null);
@@ -189,6 +193,25 @@ const [isSubmitting, setIsSubmitting] = useState(false);
     e.currentTarget.blur();
   };
 
+  const normalizeInstallmentAmount = (value: string) => {
+    if (value === '') return 0;
+    return Math.max(0, Number(value) || 0);
+  };
+
+  const validateFirstInstallment = () => {
+    if (!paymentInstallments.length) {
+      toast.error('First payment installment is required');
+      return false;
+    }
+
+    if ((Number(paymentInstallments[0]?.amount) || 0) <= 0) {
+      toast.error('Please enter the first payment installment amount');
+      return false;
+    }
+
+    return true;
+  };
+
   // Calculate payment status whenever payments or total changes
   useEffect(() => {
     const due = calculateDue();
@@ -202,7 +225,7 @@ const [isSubmitting, setIsSubmitting] = useState(false);
       setIsPaymentComplete(false);
       setPaymentStatus(`Due: Rs. ${due.toFixed(2)}`);
     }
-  }, [paymentInstallments, procedures]);
+  }, [paymentInstallments, procedures, invoiceDiscount, invoiceDiscountType]);
 
   // Fetch invoice data, procedures and users
   useEffect(() => {
@@ -508,7 +531,7 @@ const [isSubmitting, setIsSubmitting] = useState(false);
     return procedures.filter(isProcDated).reduce((sum, item) => sum + item.amount, 0);
   };
 
-  const calculateTotalDiscount = () => {
+  const calculateProcedureDiscountTotal = () => {
     return procedures.filter(isProcDated).reduce((sum, item) => {
       if (item.discountType === 0) {
         return sum + item.discount;
@@ -518,12 +541,26 @@ const [isSubmitting, setIsSubmitting] = useState(false);
     }, 0);
   };
 
-  const calculateGrandTotal = () => {
-    return calculateSubTotal() - calculateTotalDiscount();
+  const calculateBillBeforeInvoiceDiscount = () =>
+    Math.max(0, calculateSubTotal() - calculateProcedureDiscountTotal());
+
+  const calculateInvoiceLevelDiscount = () => {
+    const base = calculateBillBeforeInvoiceDiscount();
+    if (base <= 0) return 0;
+    if (invoiceDiscountType === 1) {
+      return Math.min(base, Math.max(0, base * ((Number(invoiceDiscount) || 0) / 100)));
+    }
+    return Math.min(base, Math.max(0, Number(invoiceDiscount) || 0));
   };
 
+  const calculateTotalDiscount = () =>
+    calculateProcedureDiscountTotal() + calculateInvoiceLevelDiscount();
+
+  const calculateGrandTotal = () =>
+    Math.max(0, calculateBillBeforeInvoiceDiscount() - calculateInvoiceLevelDiscount());
+
   const calculateTotalPaid = () => {
-    return paymentInstallments.reduce((sum, item) => sum + item.amount, 0);
+    return paymentInstallments.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
   };
 
   const calculateDue = () => {
@@ -679,6 +716,11 @@ const [isSubmitting, setIsSubmitting] = useState(false);
         procedures.map((p) => p.performedBy).find((id) => id && String(id).trim()) || undefined;
     }
 
+    if (!validateFirstInstallment()) {
+      setIsSubmitting(false);
+      return;
+    }
+
     const procedureDateToIso = (ds: string) => {
       const t = String(ds || '').trim();
       if (!t) return undefined;
@@ -725,6 +767,8 @@ const [isSubmitting, setIsSubmitting] = useState(false);
       })),
       subTotalBill: calculateSubTotal(),
       discountBill: calculateTotalDiscount(),
+      invoiceDiscount: Number(invoiceDiscount) || 0,
+      invoiceDiscountType: Number(invoiceDiscountType) || 0,
       taxBill: 0,
       totalBill: billingTotal,
       duePay: rawDue > 0 ? rawDue : 0,
@@ -1200,9 +1244,17 @@ const [isSubmitting, setIsSubmitting] = useState(false);
                     <td className="px-4 py-3 whitespace-nowrap">
                       <input
                         type="number"
+                        min={0}
                         className="w-full rounded border-[1.5px] border-stroke bg-transparent py-2 px-3 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
-                        value={item.amount}
-                        onChange={(e) => updatePaymentInstallment(item.id, 'amount', parseFloat(e.target.value))}
+                        value={(Number(item.amount) || 0) === 0 ? '' : item.amount}
+                        placeholder="Enter amount"
+                        onChange={(e) =>
+                          updatePaymentInstallment(
+                            item.id,
+                            'amount',
+                            normalizeInstallmentAmount(e.target.value),
+                          )
+                        }
                         onWheel={handleNumberInputWheel}
                       />
                     </td>
@@ -1218,8 +1270,17 @@ const [isSubmitting, setIsSubmitting] = useState(false);
                     <td className="px-4 py-3 whitespace-nowrap">
                       <button
                         onClick={() => removePaymentInstallment(item.id)}
-                        className="text-red-500 hover:text-red-700"
-                        title="Remove"
+                        disabled={paymentInstallments.length === 1}
+                        className={`text-red-500 hover:text-red-700 ${
+                          paymentInstallments.length === 1
+                            ? 'cursor-not-allowed opacity-50'
+                            : ''
+                        }`}
+                        title={
+                          paymentInstallments.length === 1
+                            ? 'First installment is required'
+                            : 'Remove'
+                        }
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                           <path fillRule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
@@ -1255,13 +1316,71 @@ const [isSubmitting, setIsSubmitting] = useState(false);
                 <span className="font-medium">Rs. {calculateSubTotal().toFixed(2)}</span>
               </div>
               <div className="flex justify-between">
-                <span>Discount:</span>
+                <span>Procedure Discount:</span>
+                <span className="font-medium text-red-500">
+                  - Rs. {calculateProcedureDiscountTotal().toFixed(2)}
+                </span>
+              </div>
+              <div className="rounded border border-stroke p-2">
+                <div className="flex items-center justify-between gap-3">
+                  <span>Total Invoice Discount:</span>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={0}
+                      max={invoiceDiscountType === 1 ? 100 : undefined}
+                      value={invoiceDiscount === 0 ? '' : invoiceDiscount}
+                      placeholder="0"
+                      onWheel={handleNumberInputWheel}
+                      onChange={(e) =>
+                        setInvoiceDiscount(
+                          Math.max(
+                            0,
+                            invoiceDiscountType === 1
+                              ? Math.min(100, Number(e.target.value) || 0)
+                              : Number(e.target.value) || 0,
+                          ),
+                        )
+                      }
+                      className="w-28 rounded border border-stroke px-2 py-1"
+                    />
+                    <select
+                      value={invoiceDiscountType}
+                      onChange={(e) => {
+                        const nextType = Number(e.target.value) || 0;
+                        setInvoiceDiscountType(nextType);
+                        if (nextType === 1 && invoiceDiscount > 100) setInvoiceDiscount(100);
+                      }}
+                      className="rounded border border-stroke px-2 py-1"
+                    >
+                      <option value={0}>Amount</option>
+                      <option value={1}>%</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="mt-2 flex justify-between text-sm">
+                  <span>Applied Invoice Discount:</span>
+                  <span className="font-medium text-red-500">
+                    - Rs. {calculateInvoiceLevelDiscount().toFixed(2)}
+                  </span>
+                </div>
+              </div>
+              <div className="flex justify-between">
+                <span>Total Discount:</span>
                 <span className="font-medium text-red-500">- Rs. {calculateTotalDiscount().toFixed(2)}</span>
               </div>
               <div className="flex justify-between">
                 <span>Tax:</span>
                 <span className="font-medium">Rs. 0.00</span>
               </div>
+              {undatedProcedureAdvance() > 0 && (
+                <div className="flex justify-between">
+                  <span>Procedure Advance:</span>
+                  <span className="font-medium text-amber-600">
+                    Rs. {undatedProcedureAdvance().toFixed(2)}
+                  </span>
+                </div>
+              )}
               <div className="border-t pt-2 mt-2 flex justify-between font-bold text-lg">
                 <span>Grand Total:</span>
                 <span>Rs. {calculateGrandTotal().toFixed(2)}</span>
@@ -1283,25 +1402,18 @@ const [isSubmitting, setIsSubmitting] = useState(false);
                 </span>
               </div>
               <div className="border-t pt-2 mt-2 flex justify-between">
-                <span>Doctor Discount Burden:</span>
+                <span className="text-gray-700">Doctor Share:</span>
                 <span className="font-medium text-red-600">
                   - Rs. {calculateTotalDoctorDiscountBurden().toFixed(2)}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span>Hospital Discount Burden:</span>
+                <span className="text-gray-700">Hospital Share:</span>
                 <span className="font-medium text-red-600">
                   - Rs. {calculateTotalHospitalDiscountBurden().toFixed(2)}
                 </span>
               </div>
-              <div className="flex justify-between">
-                <span>Doctor Share:</span>
-                <span className="font-medium">Rs. {calculateTotalDoctorDiscountBurden().toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Hospital Share:</span>
-                <span className="font-medium">Rs. {calculateTotalHospitalDiscountBurden().toFixed(2)}</span>
-              </div>
+             
             </div>
           </div>
         </div>

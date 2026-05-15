@@ -7,6 +7,7 @@ import { toast } from 'react-toastify';
 import { useNavigate } from 'react-router-dom';
 import { BsFillFileEarmarkPdfFill } from 'react-icons/bs';
 import AddProcedureExpense from './AddProcedureExpense';
+import { expenseDeductBeforeDoctorShareTotal } from './invoiceExpenseUtils';
 import { AsyncPaginate, LoadOptions } from 'react-select-async-paginate';
 import AddPatients from '../Patients/AddPatients';
 
@@ -102,6 +103,8 @@ export default function InvoiceCreation() {
   const [usersList, setUsersList] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [remarks, setRemarks] = useState('');
+  const [invoiceDiscount, setInvoiceDiscount] = useState(0);
+  const [invoiceDiscountType, setInvoiceDiscountType] = useState(0);
   const [searchError, setSearchError] = useState('');
    const navigate = useNavigate()
    const [isSubmitting, setIsSubmitting] = useState(false);
@@ -143,16 +146,6 @@ export default function InvoiceCreation() {
     },
   ]);
 
-  // Auto-update payment when grand total changes
-  useEffect(() => {
-    const grandTotal = calculateGrandTotal();
-    if (paymentInstallments.length > 0) {
-      setPaymentInstallments(prev => prev.map((payment, index) => 
-        index === 0 ? { ...payment, amount: grandTotal } : payment
-      ));
-    }
-  }, [procedures]);
-
   const [localExpenses, setLocalExpenses] = useState<any[]>([]);
   const [selectedProcedureRowId, setSelectedProcedureRowId] = useState<number | null>(null);
   const [isAddPatientModalOpen, setIsAddPatientModalOpen] = useState(false);
@@ -167,6 +160,25 @@ export default function InvoiceCreation() {
   const handleNumberInputWheel = (e: React.WheelEvent<HTMLInputElement>) => {
     e.preventDefault();
     e.currentTarget.blur();
+  };
+
+  const normalizeInstallmentAmount = (value: string) => {
+    if (value === '') return 0;
+    return Math.max(0, Number(value) || 0);
+  };
+
+  const validateFirstInstallment = () => {
+    if (!paymentInstallments.length) {
+      toast.error('First payment installment is required');
+      return false;
+    }
+
+    if ((Number(paymentInstallments[0]?.amount) || 0) <= 0) {
+      toast.error('Please enter the first payment installment amount');
+      return false;
+    }
+
+    return true;
   };
 
   const isProcDated = (item: ProcedureItem) =>
@@ -195,52 +207,29 @@ export default function InvoiceCreation() {
     return Math.max(0, item.amount - disc);
   };
 
+  /** Same gross as `calculateShares` / `calculateDoctorGrossShareFromBundle` — % shares use this, not net. */
+  const procedureLineGrossForSharePct = (item: ProcedureItem) =>
+    numField(item.rate) * numField(item.quantity, 1);
+
   const undatedProcedureAdvance = () =>
     procedures.filter((p) => !isProcDated(p)).reduce((sum, p) => sum + lineNetAfterDiscount(p), 0);
 
-  const expenseAddOnTotal = (procedureRowId: number | null) => {
-    const bundle = localExpenses.find((e) => e.procedureRowId === procedureRowId);
-    if (!bundle?.expenses) return 0;
-    return bundle.expenses
-      .filter((row: { deductBeforeDoctorShare?: boolean }) => !row.deductBeforeDoctorShare)
-      .reduce((s: number, row: { amount?: number }) => s + (Number(row.amount) || 0), 0);
-  };
-
-  const calculateDoctorShareBase = () => {
-    const procedureTotal = calculateSubTotal() - calculateTotalDiscount();
-    const preDoctorShareDeductExpenses = localExpenses
-      .filter((expense) => {
-        if (expense.procedureRowId == null) return false;
-        const proc = procedures.find((p) => p.id === expense.procedureRowId);
-        return proc ? isProcDated(proc) : false;
-      })
-      .reduce((sum, expense) => {
-      const deductSum = expense.expenses
-        ?.filter((exp: any) => exp.deductBeforeDoctorShare)
-        .reduce((expSum: number, exp: any) => expSum + (exp.amount || 0), 0) || 0;
-      return sum + deductSum;
-    }, 0);
-    return Math.max(0, procedureTotal - preDoctorShareDeductExpenses);
-  };
-
   const calculateDoctorSharesTotal = () => {
-    const base = calculateDoctorShareBase();
     return localExpenses
-      .filter((expense) => {
-        if (expense.procedureRowId == null) return false;
-        const proc = procedures.find((p) => p.id === expense.procedureRowId);
-        return proc ? isProcDated(proc) : false;
-      })
+      .filter((expense) => expense.procedureRowId != null)
       .reduce((sum, expense) => {
-      const sharesTotal =
-        expense.doctorShares
-          ?.reduce((shareSum: number, share: any) => {
-            const val = share.share || 0;
-            const amt = share.shareType === 'percentage' ? base * (val / 100) : val;
+        const proc = procedures.find((p) => p.id === expense.procedureRowId);
+        if (!proc) return sum;
+        const pctBase = procedureLineGrossForSharePct(proc);
+        const sharesTotal =
+          expense.doctorShares?.reduce((shareSum: number, share: any) => {
+            const val = Number(share.share ?? share.shareValue) || 0;
+            const st = String(share.shareType || '').toLowerCase();
+            const amt = st === 'percentage' ? pctBase * (val / 100) : val;
             return shareSum + amt;
           }, 0) || 0;
-      return sum + sharesTotal;
-    }, 0);
+        return sum + sharesTotal;
+      }, 0);
   };
 
   // Fetch procedures and users
@@ -439,6 +428,8 @@ export default function InvoiceCreation() {
 
   const calculateShares = (item: ProcedureItem, bundle?: any) => {
     const gross = numField(item.rate) * numField(item.quantity, 1);
+    const expenseDeduct = expenseDeductBeforeDoctorShareTotal(bundle?.expenses);
+    const shareBaseGross = Math.max(0, gross - expenseDeduct);
     let discountAmount = numField(item.discount);
 
     if (item.discountType === 1) {
@@ -451,12 +442,12 @@ export default function InvoiceCreation() {
     const primaryDoctorProfile = getPrimaryDoctorProfile(bundle);
 
     let doctorShareGross = 0;
-    let hospitalShareGross = gross;
+    let hospitalShareGross = shareBaseGross;
 
-    const manualDoctorShare = calculateDoctorGrossShareFromBundle(bundle, gross);
+    const manualDoctorShare = calculateDoctorGrossShareFromBundle(bundle, shareBaseGross);
     if (manualDoctorShare != null) {
       doctorShareGross = manualDoctorShare;
-      hospitalShareGross = gross - doctorShareGross;
+      hospitalShareGross = shareBaseGross - doctorShareGross;
     } else {
       const sharePrice =
         primaryDoctorProfile?.sharePrice != null && String(primaryDoctorProfile.sharePrice).trim() !== ''
@@ -470,9 +461,9 @@ export default function InvoiceCreation() {
           String(selectedDoctor?.shareType || '')
             .toLowerCase()
             .includes('percent');
-        doctorShareGross = isPct ? gross * (sharePrice / 100) : sharePrice;
-        doctorShareGross = Math.min(doctorShareGross, gross);
-        hospitalShareGross = gross - doctorShareGross;
+        doctorShareGross = isPct ? shareBaseGross * (sharePrice / 100) : sharePrice;
+        doctorShareGross = Math.min(doctorShareGross, shareBaseGross);
+        hospitalShareGross = shareBaseGross - doctorShareGross;
       }
     }
 
@@ -577,16 +568,14 @@ export default function InvoiceCreation() {
         return id && /^[0-9a-fA-F]{24}$/i.test(id);
       });
       const docId = firstDoc ? refId(firstDoc.doctorId ?? firstDoc.userId ?? firstDoc.doctor) : '';
-      if (docId) {
-        setProcedures((prev) =>
-          prev.map((p) => {
-            if (p.id !== procedureRowId) return p;
-            const next = { ...p, performedBy: docId };
-            const sh = calculateShares(next, payload);
-            return { ...next, doctorAmount: sh.doctorAmount, hospitalAmount: sh.hospitalAmount };
-          }),
-        );
-      }
+      setProcedures((prev) =>
+        prev.map((p) => {
+          if (p.id !== procedureRowId) return p;
+          const next = docId ? { ...p, performedBy: docId } : p;
+          const sh = calculateShares(next, payload);
+          return { ...next, doctorAmount: sh.doctorAmount, hospitalAmount: sh.hospitalAmount };
+        }),
+      );
     }
     setIsProcedureExpenseModalOpen(false);
     setEditingExpense(null);
@@ -675,6 +664,12 @@ export default function InvoiceCreation() {
   updatedItem.hospitalAmount = shares.hospitalAmount;
 }
 
+        if (field === 'procedureDate') {
+          const shares = calculateShares(updatedItem, getBundleForProcedureRow(id));
+          updatedItem.doctorAmount = shares.doctorAmount;
+          updatedItem.hospitalAmount = shares.hospitalAmount;
+        }
+
         return updatedItem;
       }
       return item;
@@ -720,7 +715,7 @@ export default function InvoiceCreation() {
     return procedures.filter(isProcDated).reduce((sum, item) => sum + item.amount, 0);
   };
 
-  const calculateTotalDiscount = () => {
+  const calculateProcedureDiscountTotal = () => {
     return procedures.filter(isProcDated).reduce((sum, item) => {
       if (item.discountType === 0) {
         return sum + item.discount;
@@ -730,25 +725,33 @@ export default function InvoiceCreation() {
     }, 0);
   };
 
-  const calculateGrandTotal = () => {
+  /** Patient bill: dated procedure lines only. Popup (costing) expenses are not added to grand total. */
+  const calculateBillBeforeInvoiceDiscount = () => {
     let procedureNet = 0;
-    let expenseFromRows = 0;
     for (const p of procedures) {
       if (!isProcDated(p)) continue;
       procedureNet += lineNetAfterDiscount(p);
-      expenseFromRows += expenseAddOnTotal(p.id);
     }
-    const invBundle = localExpenses.find((e) => e.procedureRowId == null);
-    const invoiceExtra = Array.isArray(invBundle?.expenses)
-      ? invBundle.expenses
-          .filter((row: { deductBeforeDoctorShare?: boolean }) => !row.deductBeforeDoctorShare)
-          .reduce((s: number, row: { amount?: number }) => s + (Number(row.amount) || 0), 0)
-      : 0;
-    return procedureNet + expenseFromRows + invoiceExtra;
+    return procedureNet;
   };
 
+  const calculateInvoiceLevelDiscount = () => {
+    const base = calculateBillBeforeInvoiceDiscount();
+    if (base <= 0) return 0;
+    if (invoiceDiscountType === 1) {
+      return Math.min(base, Math.max(0, base * (numField(invoiceDiscount) / 100)));
+    }
+    return Math.min(base, Math.max(0, numField(invoiceDiscount)));
+  };
+
+  const calculateTotalDiscount = () =>
+    calculateProcedureDiscountTotal() + calculateInvoiceLevelDiscount();
+
+  const calculateGrandTotal = () =>
+    Math.max(0, calculateBillBeforeInvoiceDiscount() - calculateInvoiceLevelDiscount());
+
   const calculateTotalPaid = () => {
-    return paymentInstallments.reduce((sum, item) => sum + item.amount, 0);
+    return paymentInstallments.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
   };
 
   const calculateDue = () => {
@@ -756,36 +759,28 @@ export default function InvoiceCreation() {
   };
 
   const calculateTotalDoctorDiscountBurden = () =>
-    procedures
-      .filter(isProcDated)
-      .reduce((sum, item) => {
-        const breakdown = calculateShareBreakdown(item, getBundleForProcedureRow(item.id));
-        return sum + breakdown.doctorDiscountBurden;
-      }, 0);
+    procedures.reduce((sum, item) => {
+      const breakdown = calculateShareBreakdown(item, getBundleForProcedureRow(item.id));
+      return sum + breakdown.doctorDiscountBurden;
+    }, 0);
 
   const calculateTotalHospitalDiscountBurden = () =>
-    procedures
-      .filter(isProcDated)
-      .reduce((sum, item) => {
-        const breakdown = calculateShareBreakdown(item, getBundleForProcedureRow(item.id));
-        return sum + breakdown.hospitalDiscountBurden;
-      }, 0);
+    procedures.reduce((sum, item) => {
+      const breakdown = calculateShareBreakdown(item, getBundleForProcedureRow(item.id));
+      return sum + breakdown.hospitalDiscountBurden;
+    }, 0);
 
   const calculateTotalDoctorShare = () =>
-    procedures
-      .filter(isProcDated)
-      .reduce((sum, item) => {
-        const breakdown = calculateShareBreakdown(item, getBundleForProcedureRow(item.id));
-        return sum + breakdown.doctorShare;
-      }, 0);
+    procedures.reduce((sum, item) => {
+      const breakdown = calculateShareBreakdown(item, getBundleForProcedureRow(item.id));
+      return sum + breakdown.doctorShare;
+    }, 0);
 
   const calculateTotalHospitalShare = () =>
-    procedures
-      .filter(isProcDated)
-      .reduce((sum, item) => {
-        const breakdown = calculateShareBreakdown(item, getBundleForProcedureRow(item.id));
-        return sum + breakdown.hospitalShare;
-      }, 0);
+    procedures.reduce((sum, item) => {
+      const breakdown = calculateShareBreakdown(item, getBundleForProcedureRow(item.id));
+      return sum + breakdown.hospitalShare;
+    }, 0);
 
   const handleSaveDraft = async () => {
     setIsSubmitting(true);
@@ -922,6 +917,11 @@ export default function InvoiceCreation() {
         undefined;
     }
 
+    if (!validateFirstInstallment()) {
+      setIsSubmitting(false);
+      return;
+    }
+
     const billingTotal = calculateGrandTotal();
     const paidSum = calculateTotalPaid();
     const rawDue = billingTotal - paidSum;
@@ -961,7 +961,8 @@ export default function InvoiceCreation() {
           .map((share: any) => {
             const val = Number(share.share ?? share.shareValue) || 0;
             const st = String(share.shareType || '').toLowerCase();
-            const amount = st === 'percentage' ? numField(item.amount) * (val / 100) : val;
+            const grossLine = numField(item.rate) * numField(item.quantity, 1);
+            const amount = st === 'percentage' ? grossLine * (val / 100) : val;
             return {
               doctorId: refId(share.doctorId ?? share.userId ?? share.doctor),
               shareType: st === 'percentage' ? 'percentage' : 'value',
@@ -1011,14 +1012,16 @@ export default function InvoiceCreation() {
          consumptions: (bundle.consumptions || []).filter((c: any) => isMongoHex24(c?.pharmItemId)),
         };
       }),
-      invoiceExpenses: (localExpenses.find(e => e.procedureRowId == null)?.expenses || [])
-        .filter((exp: any) => exp.showInPrint)
-        .filter((exp: any) => isMongoHex24(exp?.expenseCategoryId ?? exp?.categoryId)),
+      invoiceExpenses: (localExpenses.find(e => e.procedureRowId == null)?.expenses || []).filter(
+        (exp: any) => isMongoHex24(exp?.expenseCategoryId ?? exp?.categoryId),
+      ),
       invoiceConsumptions: (localExpenses.find(e => e.procedureRowId == null)?.consumptions || []).filter((c: any) =>
         isMongoHex24(c?.pharmItemId),
       ),
       subTotalBill: calculateSubTotal(),
       discountBill: calculateTotalDiscount(),
+      invoiceDiscount: numField(invoiceDiscount),
+      invoiceDiscountType: numField(invoiceDiscountType),
       taxBill: 0,
        invoiceDate: invoiceDate,
       totalBill: billingTotal,
@@ -1606,39 +1609,7 @@ export default function InvoiceCreation() {
           </div>
         )}
 
-        {localExpenses.some(expense => expense.doctorShares?.length > 0) && (
-          <div className="mb-8 bg-white p-4 rounded-lg shadow">
-            <h2 className="text-xl font-semibold mb-4 text-gray-700">Doctor Shares</h2>
-            <div className="overflow-x-auto">
-              <table className="min-w-full divide-y divide-gray-200">
-                <thead className="bg-gray-50">
-                  <tr>
-                    <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 tracking-wider">Procedure</th>
-                    <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 tracking-wider">Doctor</th>
-                    <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 tracking-wider">Share</th>
-                    <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 tracking-wider">Type</th>
-                  </tr>
-                </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
-                  {localExpenses.flatMap((expense, expenseIndex) =>
-                    (expense.doctorShares || []).map((share: any, shareIndex: number) => {
-                      const procedure = procedures.find(p => p.id === expense.procedureRowId);
-                      return (
-                        <tr key={`doc-${expenseIndex}-${shareIndex}`} className="hover:bg-gray-50">
-                          <td className="px-4 py-3 text-sm text-gray-900">{procedure?.procedure || 'N/A'}</td>
-                          <td className="px-4 py-3 text-sm text-gray-900">{share.doctorId || 'N/A'}</td>
-                          <td className="px-4 py-3 text-sm text-gray-900">{Number.isFinite(share.share) ? share.share : 0}</td>
-                          <td className="px-4 py-3 text-sm text-gray-900">{share.shareType || 'value'}</td>
-                        </tr>
-                      );
-                    })
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
+       
         {/* Payment Section */}
         <div className="mb-8 bg-white p-4 rounded-lg shadow">
           <div className="flex justify-between items-center mb-4">
@@ -1764,13 +1735,15 @@ export default function InvoiceCreation() {
                     <td className="px-4 py-3 whitespace-nowrap">
                       <input
                         type="number"
+                        min={0}
                         className="rounded border-[1.5px] border-stroke bg-transparent py-2 px-1 w-40 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
-                        value={item.amount}
+                        value={(Number(item.amount) || 0) === 0 ? '' : item.amount}
+                        placeholder="Enter amount"
                         onChange={(e) =>
                           updatePaymentInstallment(
                             item.id,
                             'amount',
-                            parseFloat(e.target.value),
+                            normalizeInstallmentAmount(e.target.value),
                           )
                         }
                         onWheel={handleNumberInputWheel}
@@ -1795,8 +1768,17 @@ export default function InvoiceCreation() {
                     <td className="px-4 py-3 whitespace-nowrap">
                       <button
                         onClick={() => removePaymentInstallment(item.id)}
-                        className="text-red-500 hover:text-red-700"
-                        title="Remove"
+                        disabled={paymentInstallments.length === 1}
+                        className={`text-red-500 hover:text-red-700 ${
+                          paymentInstallments.length === 1
+                            ? 'cursor-not-allowed opacity-50'
+                            : ''
+                        }`}
+                        title={
+                          paymentInstallments.length === 1
+                            ? 'First installment is required'
+                            : 'Remove'
+                        }
                       >
                         <svg
                           xmlns="http://www.w3.org/2000/svg"
@@ -1863,7 +1845,7 @@ export default function InvoiceCreation() {
         )}
 
         {/* Doctor Shares Section - shows deductions applied */}
-        {localExpenses.some(expense => (expense.doctorShares?.length || 0) > 0) && (
+        {/* {localExpenses.some(expense => (expense.doctorShares?.length || 0) > 0) && (
           <div className="mb-8 bg-white p-4 rounded-lg shadow">
             <h2 className="text-xl font-semibold mb-4 text-gray-700">Doctor Shares</h2>
             <div className="overflow-x-auto">
@@ -1885,9 +1867,10 @@ export default function InvoiceCreation() {
                   {localExpenses.flatMap((expense, expenseIndex) =>
                     (expense.doctorShares || []).map((share: any, shareIndex: number) => {
                       const doctor = usersList.find(u => u._id === share.doctorId);
-                      const base = calculateDoctorShareBase();
+                      const procRow = procedures.find((p) => p.id === expense.procedureRowId);
+                      const pctBase = procRow ? procedureLineGrossForSharePct(procRow) : 0;
                       const val = share.share || 0;
-                      const amount = share.shareType === 'percentage' ? base * (val / 100) : val;
+                      const amount = share.shareType === 'percentage' ? pctBase * (val / 100) : val;
                       return (
                         <tr key={`ds-${expenseIndex}-${shareIndex}`} className="hover:bg-gray-50">
                           <td className="px-4 py-3 text-sm text-gray-900">
@@ -1907,7 +1890,7 @@ export default function InvoiceCreation() {
               </table>
             </div>
           </div>
-        )}
+        )} */}
 
         {/* Remarks Section */}
         <div className="mb-8 bg-white p-4 rounded-lg shadow">
@@ -1935,7 +1918,57 @@ export default function InvoiceCreation() {
                 </span>
               </div>
               <div className="flex justify-between">
-                <span>Discount:</span>
+                <span>Procedure Discount:</span>
+                <span className="font-medium text-red-500">
+                  - Rs. {calculateProcedureDiscountTotal().toFixed(2)}
+                </span>
+              </div>
+              <div className="rounded border border-stroke p-2">
+                <div className="flex items-center justify-between gap-3">
+                  <span>Total Invoice Discount:</span>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={0}
+                      max={invoiceDiscountType === 1 ? 100 : undefined}
+                      value={invoiceDiscount === 0 ? '' : invoiceDiscount}
+                      placeholder="0"
+                      onWheel={handleNumberInputWheel}
+                      onChange={(e) =>
+                        setInvoiceDiscount(
+                          Math.max(
+                            0,
+                            invoiceDiscountType === 1
+                              ? Math.min(100, Number(e.target.value) || 0)
+                              : Number(e.target.value) || 0,
+                          ),
+                        )
+                      }
+                      className="w-28 rounded border border-stroke px-2 py-1"
+                    />
+                    <select
+                      value={invoiceDiscountType}
+                      onChange={(e) => {
+                        const nextType = Number(e.target.value) || 0;
+                        setInvoiceDiscountType(nextType);
+                        if (nextType === 1 && invoiceDiscount > 100) setInvoiceDiscount(100);
+                      }}
+                      className="rounded border border-stroke px-2 py-1"
+                    >
+                      <option value={0}>Amount</option>
+                      <option value={1}>%</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="mt-2 flex justify-between text-sm">
+                  <span>Applied Invoice Discount:</span>
+                  <span className="font-medium text-red-500">
+                    - Rs. {calculateInvoiceLevelDiscount().toFixed(2)}
+                  </span>
+                </div>
+              </div>
+              <div className="flex justify-between">
+                <span>Total Discount:</span>
                 <span className="font-medium text-red-500">
                   - Rs. {calculateTotalDiscount().toFixed(2)}
                 </span>
@@ -1944,23 +1977,40 @@ export default function InvoiceCreation() {
                 <span>Tax:</span>
                 <span className="font-medium">Rs. 0.00</span>
               </div>
-              {localExpenses.some(expense => expense.expenses?.some(exp => exp.showInPrint)) && (
+              {undatedProcedureAdvance() > 0 && (
                 <div className="flex justify-between">
-                  <span>Additional Expenses:</span>
-                  <span className="font-medium text-green-600">
-                    + Rs. {localExpenses
-                      .reduce((sum, expense) => 
-                        sum + (expense.expenses?.filter(exp => exp.showInPrint).reduce((expSum, exp) => expSum + (exp.amount || 0), 0) || 0), 0
-                      ).toFixed(2)
-                    }
+                  <span>Procedure Advance:</span>
+                  <span className="font-medium text-amber-600">
+                    Rs. {undatedProcedureAdvance().toFixed(2)}
                   </span>
+                </div>
+              )}
+              {localExpenses.some(expense => expense.expenses?.some(exp => exp.showInPrint)) && (
+                <div className="flex flex-col gap-0.5">
+                  <div className="flex justify-between">
+                    <span>Additional Expenses (print / costing):</span>
+                    <span className="font-medium text-green-600">
+                      Rs.{' '}
+                      {localExpenses
+                        .reduce(
+                          (sum, expense) =>
+                            sum +
+                            (expense.expenses
+                              ?.filter((exp) => exp.showInPrint)
+                              .reduce((expSum, exp) => expSum + (exp.amount || 0), 0) || 0),
+                          0,
+                        )
+                        .toFixed(2)}
+                    </span>
+                  </div>
+                  <span className="text-xs text-gray-500">Not included in grand total.</span>
                 </div>
               )}
               {localExpenses.some(expense => (expense.doctorShares?.length || 0) > 0) && (
                 <div className="flex justify-between">
-                  <span>Doctor Shares Deduction:</span>
-                  <span className="font-medium text-red-600">
-                    - Rs. {calculateDoctorSharesTotal().toFixed(2)}
+                  <span className="text-gray-700">Doctor shares (costing reference):</span>
+                  <span className="font-medium text-gray-700">
+                    Rs. {calculateDoctorSharesTotal().toFixed(2)}
                   </span>
                 </div>
               )}
@@ -1968,6 +2018,10 @@ export default function InvoiceCreation() {
                 <span>Grand Total:</span>
                 <span>Rs. {calculateGrandTotal().toFixed(2)}</span>
               </div>
+              <p className="text-xs text-gray-500 mt-1">
+                Expenses from the costing popup are not added to grand total or due amount.
+              </p>
+              
             </div>
           </div>
 
@@ -1994,25 +2048,18 @@ export default function InvoiceCreation() {
                 </span>
               </div>
               <div className="border-t pt-2 mt-2 flex justify-between">
-                <span>Doctor Discount Burden:</span>
+                <span className="text-gray-700">Doctor Share:</span>
                 <span className="font-medium text-red-600">
                   - Rs. {calculateTotalDoctorDiscountBurden().toFixed(2)}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span>Hospital Discount Burden:</span>
+                <span className="text-gray-700">Hospital Share:</span>
                 <span className="font-medium text-red-600">
                   - Rs. {calculateTotalHospitalDiscountBurden().toFixed(2)}
                 </span>
               </div>
-              <div className="flex justify-between">
-                <span>Doctor Share:</span>
-                <span className="font-medium">Rs. {calculateTotalDoctorDiscountBurden().toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Hospital Share:</span>
-                <span className="font-medium">Rs. {calculateTotalHospitalDiscountBurden().toFixed(2)}</span>
-              </div>
+             
             </div>
           </div>
         </div>

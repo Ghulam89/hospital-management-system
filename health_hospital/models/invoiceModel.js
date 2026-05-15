@@ -89,6 +89,8 @@ const invoiceSchema = new mongoose.Schema({
     ],
     subTotalBill: { type: Number, allowNull: true },
     discountBill: { type: Number, allowNull: true },
+    invoiceDiscount: { type: Number, default: 0 },
+    invoiceDiscountType: { type: Number, default: 0 },
     taxBill: { type: Number, allowNull: true },
     totalBill: { type: Number, allowNull: true },
     duePay: { type: Number, allowNull: true },

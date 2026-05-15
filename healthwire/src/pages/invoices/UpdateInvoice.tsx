@@ -8,6 +8,10 @@ import { AsyncPaginate, LoadOptions } from 'react-select-async-paginate';
 import { BsFillFileEarmarkPdfFill } from 'react-icons/bs';
 import { RiRefund2Line } from 'react-icons/ri';
 import AddProcedureExpense from './AddProcedureExpense';
+import {
+  expenseDeductBeforeDoctorShareTotal,
+  normalizeProcedureExpenseRow,
+} from './invoiceExpenseUtils';
 import { getStoredUserForPermissions, hasAnyPermission } from '../../utils/permissions';
 
 type Procedure = {
@@ -201,6 +205,8 @@ type InvoiceData = {
   }[];
   subTotalBill: number;
   discountBill: number;
+  invoiceDiscount?: number;
+  invoiceDiscountType?: number;
   taxBill: number;
   totalBill: number;
   duePay: number;
@@ -235,6 +241,8 @@ export default function InvoiceUpdate() {
   const [usersList, setUsersList] = useState<User[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [remarks, setRemarks] = useState('');
+  const [invoiceDiscount, setInvoiceDiscount] = useState(0);
+  const [invoiceDiscountType, setInvoiceDiscountType] = useState(0);
   const [searchError, setSearchError] = useState('');
   const [invoiceData, setInvoiceData] = useState<InvoiceData | null>(null);
   const [invoiceEditDate, setInvoiceEditDate] = useState<string>('');
@@ -361,11 +369,16 @@ export default function InvoiceUpdate() {
       setProcedures(mappedProcedures);
     }
 
+    setInvoiceDiscount(numField(data.invoiceDiscount));
+    setInvoiceDiscountType(numField(data.invoiceDiscountType));
+
     const seededFromItems = Array.isArray(data.item)
       ? data.item.map((srcItem: any, index: number) => ({
           procedureRowId: index + 1,
           procedureId: refId(srcItem?.procedureId),
-          expenses: asArray(srcItem?.expenses),
+          expenses: asArray(srcItem?.expenses).map((e: unknown, ei: number) =>
+            normalizeProcedureExpenseRow(e, ei),
+          ),
           doctorShares: asArray(srcItem?.doctorShares).map((d: any) => {
             const parsedShare = Number(d?.share ?? d?.shareValue);
             return {
@@ -402,7 +415,9 @@ export default function InvoiceUpdate() {
     const invoiceLevelBundle = {
       procedureRowId: null,
       procedureId: '',
-      expenses: asArray(data.invoiceExpenses),
+      expenses: asArray(data.invoiceExpenses).map((e: unknown, ei: number) =>
+        normalizeProcedureExpenseRow(e, ei),
+      ),
       doctorShares: [],
       consumptions: asArray(data.invoiceConsumptions),
       _id: `${data._id || 'inv'}-invoice`,
@@ -501,7 +516,7 @@ export default function InvoiceUpdate() {
     } catch (e) {
       console.error('Invoice totals:', e);
     }
-  }, [paymentInstallments, procedures]);
+  }, [paymentInstallments, procedures, localExpenses, invoiceDiscount, invoiceDiscountType]);
 
   // Fetch invoice data, procedures and users
   useEffect(() => {
@@ -731,6 +746,8 @@ export default function InvoiceUpdate() {
   // Calculate doctor and hospital shares
   const calculateShares = (item: ProcedureItem, bundle?: any) => {
     const gross = item.rate * item.quantity;
+    const expenseDeduct = expenseDeductBeforeDoctorShareTotal(bundle?.expenses);
+    const shareBaseGross = Math.max(0, gross - expenseDeduct);
     let discountAmount = item.discount;
 
     if (item.discountType === 1) {
@@ -743,12 +760,12 @@ export default function InvoiceUpdate() {
     const primaryDoctorProfile = getPrimaryDoctorProfile(bundle);
 
     let doctorShareGross = 0;
-    let hospitalShareGross = gross;
+    let hospitalShareGross = shareBaseGross;
 
-    const manualDoctorShare = calculateDoctorGrossShareFromBundle(bundle, gross);
+    const manualDoctorShare = calculateDoctorGrossShareFromBundle(bundle, shareBaseGross);
     if (manualDoctorShare != null) {
       doctorShareGross = manualDoctorShare;
-      hospitalShareGross = gross - doctorShareGross;
+      hospitalShareGross = shareBaseGross - doctorShareGross;
     } else {
       const sharePrice =
         primaryDoctorProfile?.sharePrice != null && String(primaryDoctorProfile.sharePrice).trim() !== ''
@@ -840,16 +857,14 @@ export default function InvoiceUpdate() {
     if (procedureRowId != null) {
       const firstDoc = asArray(bundle?.doctorShares).find((s: unknown) => shareRowHasValidDoctorId(s));
       const docId = doctorIdFromShareRow(firstDoc);
-      if (docId) {
-        setProcedures((prev) =>
-          prev.map((p) => {
-            if (p.id !== procedureRowId) return p;
-            const next = { ...p, performedBy: docId };
-            const sh = calculateShares(next, payload);
-            return { ...next, doctorAmount: sh.doctorAmount, hospitalAmount: sh.hospitalAmount };
-          }),
-        );
-      }
+      setProcedures((prev) =>
+        prev.map((p) => {
+          if (p.id !== procedureRowId) return p;
+          const next = docId ? { ...p, performedBy: docId } : p;
+          const sh = calculateShares(next, payload);
+          return { ...next, doctorAmount: sh.doctorAmount, hospitalAmount: sh.hospitalAmount };
+        }),
+      );
     }
     setIsProcedureExpenseModalOpen(false);
     setEditingExpense(null);
@@ -1103,7 +1118,16 @@ export default function InvoiceUpdate() {
           updatedItem.doctorAmount = shares.doctorAmount;
           updatedItem.hospitalAmount = shares.hospitalAmount;
         }
-        
+
+        if (field === 'procedureDate') {
+          const shares = calculateShares(
+            updatedItem,
+            expenseBundleForProcedureRow(localExpenses, updatedItem, procedures),
+          );
+          updatedItem.doctorAmount = shares.doctorAmount;
+          updatedItem.hospitalAmount = shares.hospitalAmount;
+        }
+
         return updatedItem;
       }
       return item;
@@ -1164,22 +1188,18 @@ export default function InvoiceUpdate() {
     return Math.max(0, item.amount - disc);
   };
 
+  /** Same gross as `calculateShares` / bundle manual share — % uses this (matches save payload). */
+  const procedureLineGrossForSharePct = (item: ProcedureItem) =>
+    numField(item.rate) * numField(item.quantity, 1);
+
   const undatedProcedureAdvance = () =>
     procedures.filter((p) => !isProcDated(p)).reduce((sum, p) => sum + lineNetAfterDiscount(p), 0);
-
-  const expenseAddOnTotal = (procedureRowId: number | null) => {
-    const bundle = localExpenses.find((e) => e.procedureRowId === procedureRowId);
-    if (!bundle?.expenses) return 0;
-    return bundle.expenses
-      .filter((row: { deductBeforeDoctorShare?: boolean }) => !row.deductBeforeDoctorShare)
-      .reduce((s: number, row: { amount?: number }) => s + (Number(row.amount) || 0), 0);
-  };
 
   const calculateSubTotal = () => {
     return procedures.filter(isProcDated).reduce((sum, item) => sum + item.amount, 0);
   };
 
-  const calculateTotalDiscount = () => {
+  const calculateProcedureDiscountTotal = () => {
     return procedures.filter(isProcDated).reduce((sum, item) => {
       if (item.discountType === 0) {
         return sum + item.discount;
@@ -1189,41 +1209,30 @@ export default function InvoiceUpdate() {
     }, 0);
   };
 
-  const calculateDoctorShareBase = () => {
-    const procedureTotal = calculateSubTotal() - calculateTotalDiscount();
-    const preDoctorShareDeductExpenses = localExpenses
-      .filter((expense) => {
-        if (expense.procedureRowId == null) return false;
-        const proc = procedures.find((p) => p.id === expense.procedureRowId);
-        return proc ? isProcDated(proc) : false;
-      })
-      .reduce((sum, expense) => {
-        const deductSum = asArray<{ deductBeforeDoctorShare?: boolean; amount?: number }>(
-          expense.expenses,
-        )
-          .filter((exp) => exp.deductBeforeDoctorShare)
-          .reduce((expSum, exp) => expSum + (exp.amount || 0), 0);
-        return sum + deductSum;
-      }, 0);
-    return Math.max(0, procedureTotal - preDoctorShareDeductExpenses);
-  };
-
-  const calculateGrandTotal = () => {
+  /** Patient bill: dated procedure lines only. Popup (costing) expenses are not added to grand total. */
+  const calculateBillBeforeInvoiceDiscount = () => {
     let procedureNet = 0;
-    let expenseFromRows = 0;
     for (const p of procedures) {
       if (!isProcDated(p)) continue;
       procedureNet += lineNetAfterDiscount(p);
-      expenseFromRows += expenseAddOnTotal(p.id);
     }
-    const invBundle = localExpenses.find((e) => e.procedureRowId == null);
-    const invoiceExtra = Array.isArray(invBundle?.expenses)
-      ? invBundle.expenses
-          .filter((row: { deductBeforeDoctorShare?: boolean }) => !row.deductBeforeDoctorShare)
-          .reduce((s: number, row: { amount?: number }) => s + (Number(row.amount) || 0), 0)
-      : 0;
-    return procedureNet + expenseFromRows + invoiceExtra;
+    return procedureNet;
   };
+
+  const calculateInvoiceLevelDiscount = () => {
+    const base = calculateBillBeforeInvoiceDiscount();
+    if (base <= 0) return 0;
+    if (invoiceDiscountType === 1) {
+      return Math.min(base, Math.max(0, base * (numField(invoiceDiscount) / 100)));
+    }
+    return Math.min(base, Math.max(0, numField(invoiceDiscount)));
+  };
+
+  const calculateTotalDiscount = () =>
+    calculateProcedureDiscountTotal() + calculateInvoiceLevelDiscount();
+
+  const calculateGrandTotal = () =>
+    Math.max(0, calculateBillBeforeInvoiceDiscount() - calculateInvoiceLevelDiscount());
 
   const calculateTotalPaid = () => {
     return paymentInstallments.reduce((sum, item) => sum + item.amount, 0);
@@ -1234,27 +1243,23 @@ export default function InvoiceUpdate() {
   };
 
   const calculateTotalDoctorShare = () => {
-    return procedures
-      .filter(isProcDated)
-      .reduce((sum, item) => {
-        const shares = calculateShares(
-          item,
-          expenseBundleForProcedureRow(localExpenses, item, procedures),
-        );
-        return sum + shares.doctorAmount;
-      }, 0);
+    return procedures.reduce((sum, item) => {
+      const shares = calculateShares(
+        item,
+        expenseBundleForProcedureRow(localExpenses, item, procedures),
+      );
+      return sum + shares.doctorAmount;
+    }, 0);
   };
 
   const calculateTotalHospitalShare = () => {
-    return procedures
-      .filter(isProcDated)
-      .reduce((sum, item) => {
-        const shares = calculateShares(
-          item,
-          expenseBundleForProcedureRow(localExpenses, item, procedures),
-        );
-        return sum + shares.hospitalAmount;
-      }, 0);
+    return procedures.reduce((sum, item) => {
+      const shares = calculateShares(
+        item,
+        expenseBundleForProcedureRow(localExpenses, item, procedures),
+      );
+      return sum + shares.hospitalAmount;
+    }, 0);
   };
 
   const calculateShareBreakdown = (item: ProcedureItem) => {
@@ -1293,14 +1298,10 @@ export default function InvoiceUpdate() {
   };
 
   const calculateTotalDoctorDiscountBurden = () =>
-    procedures
-      .filter(isProcDated)
-      .reduce((sum, item) => sum + calculateShareBreakdown(item).doctorDiscountBurden, 0);
+    procedures.reduce((sum, item) => sum + calculateShareBreakdown(item).doctorDiscountBurden, 0);
 
   const calculateTotalHospitalDiscountBurden = () =>
-    procedures
-      .filter(isProcDated)
-      .reduce((sum, item) => sum + calculateShareBreakdown(item).hospitalDiscountBurden, 0);
+    procedures.reduce((sum, item) => sum + calculateShareBreakdown(item).hospitalDiscountBurden, 0);
   
   const calculateAdditionalExpensesTotal = () =>
     localExpenses
@@ -1320,18 +1321,17 @@ export default function InvoiceUpdate() {
       }, 0);
 
   const calculateDoctorSharesDeduction = () => {
-    const base = calculateDoctorShareBase();
     return localExpenses
-      .filter((expense) => {
-        if (expense.procedureRowId == null) return false;
-        const proc = procedures.find((p) => p.id === expense.procedureRowId);
-        return proc ? isProcDated(proc) : false;
-      })
+      .filter((expense) => expense.procedureRowId != null)
       .reduce((sum, expense) => {
+        const proc = procedures.find((p) => p.id === expense.procedureRowId);
+        if (!proc) return sum;
+        const pctBase = procedureLineGrossForSharePct(proc);
         const shares = asArray<{ share?: number; shareType?: string }>(expense.doctorShares);
         const sharesTotal = shares.reduce((s, share: any) => {
           const val = Number(share.share ?? share.shareValue) || 0;
-          const amt = share.shareType === 'percentage' ? base * (val / 100) : val;
+          const st = String(share.shareType || '').toLowerCase();
+          const amt = st === 'percentage' ? pctBase * (val / 100) : val;
           return s + amt;
         }, 0);
         return sum + sharesTotal;
@@ -1467,7 +1467,8 @@ export default function InvoiceUpdate() {
             const id = doctorIdFromShareRow(share);
             const parsed = Number(share.share ?? share.shareValue);
             const val = Number.isFinite(parsed) ? parsed : 0;
-            const amount = share.shareType === 'percentage' ? numField(item.amount) * (val / 100) : val;
+            const grossLine = numField(item.rate) * numField(item.quantity, 1);
+            const amount = share.shareType === 'percentage' ? grossLine * (val / 100) : val;
             const st = String(share.shareType || 'value').toLowerCase();
             return {
               doctorId: id,
@@ -1519,6 +1520,8 @@ export default function InvoiceUpdate() {
       }),
       subTotalBill: calculateSubTotal(),
       discountBill: calculateTotalDiscount(),
+      invoiceDiscount: numField(invoiceDiscount),
+      invoiceDiscountType: numField(invoiceDiscountType),
       taxBill: 0,
       totalBill: billingTotal,
       note: remarks,
@@ -2067,29 +2070,98 @@ export default function InvoiceUpdate() {
                 <span className="font-medium">Rs. {calculateSubTotal().toFixed(2)}</span>
               </div>
               <div className="flex justify-between">
-                <span>Discount:</span>
+                <span>Procedure Discount:</span>
+                <span className="font-medium text-red-500">
+                  - Rs. {calculateProcedureDiscountTotal().toFixed(2)}
+                </span>
+              </div>
+              <div className="rounded border border-stroke p-2">
+                <div className="flex items-center justify-between gap-3">
+                  <span>Total Invoice Discount:</span>
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={0}
+                      max={invoiceDiscountType === 1 ? 100 : undefined}
+                      value={invoiceDiscount === 0 ? '' : invoiceDiscount}
+                      placeholder="0"
+                      onWheel={handleNumberInputWheel}
+                      onChange={(e) =>
+                        setInvoiceDiscount(
+                          Math.max(
+                            0,
+                            invoiceDiscountType === 1
+                              ? Math.min(100, Number(e.target.value) || 0)
+                              : Number(e.target.value) || 0,
+                          ),
+                        )
+                      }
+                      className="w-28 rounded border border-stroke px-2 py-1"
+                    />
+                    <select
+                      value={invoiceDiscountType}
+                      onChange={(e) => {
+                        const nextType = Number(e.target.value) || 0;
+                        setInvoiceDiscountType(nextType);
+                        if (nextType === 1 && invoiceDiscount > 100) setInvoiceDiscount(100);
+                      }}
+                      className="rounded border border-stroke px-2 py-1"
+                    >
+                      <option value={0}>Amount</option>
+                      <option value={1}>%</option>
+                    </select>
+                  </div>
+                </div>
+                <div className="mt-2 flex justify-between text-sm">
+                  <span>Applied Invoice Discount:</span>
+                  <span className="font-medium text-red-500">
+                    - Rs. {calculateInvoiceLevelDiscount().toFixed(2)}
+                  </span>
+                </div>
+              </div>
+              <div className="flex justify-between">
+                <span>Total Discount:</span>
                 <span className="font-medium text-red-500">- Rs. {calculateTotalDiscount().toFixed(2)}</span>
               </div>
               <div className="flex justify-between">
                 <span>Tax:</span>
                 <span className="font-medium">Rs. 0.00</span>
               </div>
-              <div className="flex justify-between">
-                <span>Additional Expenses:</span>
-                <span className="font-medium text-green-600">
-                  + Rs. {calculateAdditionalExpensesTotal().toFixed(2)}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span>Doctor Shares Deduction:</span>
-                <span className="font-medium text-red-600">
-                  - Rs. {calculateDoctorSharesDeduction().toFixed(2)}
-                </span>
-              </div>
+              {undatedProcedureAdvance() > 0 && (
+                <div className="flex justify-between">
+                  <span>Procedure Advance:</span>
+                  <span className="font-medium text-amber-600">
+                    Rs. {undatedProcedureAdvance().toFixed(2)}
+                  </span>
+                </div>
+              )}
+              {calculateAdditionalExpensesTotal() > 0 && (
+                <div className="flex flex-col gap-0.5">
+                  <div className="flex justify-between">
+                    <span>Additional Expenses (costing / print):</span>
+                    <span className="font-medium text-green-600">
+                      Rs. {calculateAdditionalExpensesTotal().toFixed(2)}
+                    </span>
+                  </div>
+                  <span className="text-xs text-gray-500">Not included in grand total.</span>
+                </div>
+              )}
+              {localExpenses.some((expense) => (expense.doctorShares?.length || 0) > 0) && (
+                <div className="flex justify-between">
+                  <span className="text-gray-700">Doctor shares (costing reference):</span>
+                  <span className="font-medium text-gray-700">
+                    Rs. {calculateDoctorSharesDeduction().toFixed(2)}
+                  </span>
+                </div>
+              )}
               <div className="border-t pt-2 mt-2 flex justify-between font-bold text-lg">
                 <span>Grand Total:</span>
                 <span>Rs. {calculateGrandTotal().toFixed(2)}</span>
               </div>
+              <p className="text-xs text-gray-500 mt-1">
+                Expenses from the costing popup are not added to grand total or due amount.
+              </p>
+              
             </div>
           </div>
 
@@ -2107,24 +2179,16 @@ export default function InvoiceUpdate() {
                 </span>
               </div>
               <div className="border-t pt-2 mt-2 flex justify-between">
-                <span>Doctor Discount Burden:</span>
+                <span className="text-gray-700">Doctor Share:</span>
                 <span className="font-medium text-red-600">
                   - Rs. {calculateTotalDoctorDiscountBurden().toFixed(2)}
                 </span>
               </div>
               <div className="flex justify-between">
-                <span>Hospital Discount Burden:</span>
+                <span className="text-gray-700">Hospital Share:</span>
                 <span className="font-medium text-red-600">
                   - Rs. {calculateTotalHospitalDiscountBurden().toFixed(2)}
                 </span>
-              </div>
-              <div className="flex justify-between">
-                <span>Doctor Share:</span>
-                <span className="font-medium">Rs. {calculateTotalDoctorDiscountBurden().toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Hospital Share:</span>
-                <span className="font-medium">Rs. {calculateTotalHospitalDiscountBurden().toFixed(2)}</span>
               </div>
             </div>
           </div>

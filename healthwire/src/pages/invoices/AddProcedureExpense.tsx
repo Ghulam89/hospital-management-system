@@ -6,6 +6,7 @@ import { toast } from 'react-toastify';
 import { Base_url } from '../../utils/Base_url';
 import { AsyncPaginate, LoadOptions } from 'react-select-async-paginate';
 import { FaTrashAlt } from 'react-icons/fa';
+import { normalizeProcedureExpenseRow } from './invoiceExpenseUtils';
 
 /** Populated refs from API (`{ _id, name }`) — normalize for selects and save */
 function refId(value: unknown): string {
@@ -165,17 +166,9 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
     if (isModalOpen) {
       if (selectedExpense) {
         const normalizedExpenses: ExpenseRow[] = Array.isArray(selectedExpense.expenses)
-          ? selectedExpense.expenses.map((e: any, i: number) => ({
-              id: typeof e.id === 'number' ? e.id : i + 1,
-              description: e.description || e.name || e.categoryName || '',
-              expenseCategoryId: e.expenseCategoryId || e.categoryId || e.category?._id || e.category || '',
-              amount: (() => {
-                const v = e.amount ?? e.value ?? e.price;
-                return typeof v === 'number' ? v : (v === '' || v == null ? NaN : Number(v));
-              })(),
-              deductBeforeDoctorShare: !!(e.deductBeforeDoctorShare ?? e.deductBeforeShare ?? e.beforeDoctorShare),
-              showInPrint: !!(e.showInPrint ?? e.print),
-            }))
+          ? selectedExpense.expenses.map((e: unknown, i: number) =>
+              normalizeProcedureExpenseRow(e, i) as ExpenseRow,
+            )
           : [];
         const normalizedDoctorShares: DoctorShareRow[] = Array.isArray(selectedExpense.doctorShares)
           ? selectedExpense.doctorShares.map((d: any, i: number) => ({
@@ -646,6 +639,8 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
     }
     const enrichedExpenses = expenses.map((e) => ({
       ...e,
+      deductBeforeDoctorShare: !!e.deductBeforeDoctorShare,
+      showInPrint: !!e.showInPrint,
       categoryName: categories.find((c) => c._id === e.expenseCategoryId)?.name || '',
     }));
     const enrichedDoctorShares = doctorShares.map((d) => {
@@ -707,15 +702,28 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
       </div>
       <hr className="border-gray dark:border-gray-700" />
       <div className="p-6 space-y-6">
-        <div className="grid grid-cols-1 gap-4">
+        <div className="rounded-lg border border-stroke dark:border-strokedark p-4 space-y-3">
+          <h2 className="text-sm font-semibold text-gray-800 dark:text-white">Procedure expenses</h2>
+          {expenses.length > 0 && (
+            <div className="hidden md:grid md:grid-cols-12 gap-3 text-xs font-semibold text-gray-600 dark:text-gray-400 pb-1 border-b border-stroke dark:border-strokedark">
+              <div className="md:col-span-2">Description</div>
+              <div className="md:col-span-3">Category</div>
+              <div className="md:col-span-2">Amount</div>
+              <div className="md:col-span-3 text-center leading-tight px-1">
+                Deduct from Price before Doctor Share
+              </div>
+              <div className="md:col-span-1 text-center leading-tight px-1">Show expense in print</div>
+              <div className="md:col-span-1" />
+            </div>
+          )}
           {expenses.length > 0 ? expenses.map((row) => (
-            <div key={row.id} className="grid grid-cols-1 md:grid-cols-6 gap-3 items-end">
-              <div className="md:col-span-1">
-                <label className="block mb-2 text-sm text-gray-700 dark:text-gray-300">Description</label>
+            <div key={row.id} className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+              <div className="md:col-span-2">
+                <label className="block mb-2 text-sm text-gray-700 dark:text-gray-300 md:hidden">Description</label>
                 <input className="w-full rounded border-[1.5px] border-stroke bg-transparent py-2 px-3 text-black outline-none transition focus:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white" value={row.description} onChange={(e) => updateExpenseRow(row.id, 'description', e.target.value)} />
               </div>
-              <div className="md:col-span-2">
-                <label className="block mb-2 text-sm text-gray-700 dark:text-gray-300">Category</label>
+              <div className="md:col-span-3">
+                <label className="block mb-2 text-sm text-gray-700 dark:text-gray-300 md:hidden">Category</label>
                 <AsyncPaginate
                   value={row.expenseCategoryId ? { value: row.expenseCategoryId, label: categories.find(c => c._id === row.expenseCategoryId)?.name || 'Select Category', categoryData: categories.find(c => c._id === row.expenseCategoryId) } : null}
                   loadOptions={async (searchQuery, loadedOptions, additional) => {
@@ -746,8 +754,8 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
                   }}
                 />
               </div>
-              <div>
-                <label className="block mb-2 text-sm text-gray-700 dark:text-gray-300">Amount</label>
+              <div className="md:col-span-2">
+                <label className="block mb-2 text-sm text-gray-700 dark:text-gray-300 md:hidden">Amount</label>
                 <input
                   type="number"
                   min="0"
@@ -760,17 +768,29 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
                   }}
                 />
               </div>
-              <div className="flex flex-col items-start gap-2">
-                 <span className="text-sm">Deduct from Price before Doctor Share</span>
-                <input type="checkbox" checked={row.deductBeforeDoctorShare} onChange={(e) => updateExpenseRow(row.id, 'deductBeforeDoctorShare', e.target.checked)} />
-               
+              <div className="md:col-span-3 flex flex-col items-center justify-end gap-1 pb-2">
+                <span className="text-xs text-gray-600 dark:text-gray-400 md:hidden text-center leading-tight">
+                  Deduct from Price before Doctor Share
+                </span>
+                <input
+                  type="checkbox"
+                  className="h-4 w-4"
+                  checked={row.deductBeforeDoctorShare}
+                  onChange={(e) => updateExpenseRow(row.id, 'deductBeforeDoctorShare', e.target.checked)}
+                />
               </div>
-              <div className="flex flex-col items-start gap-2">
-                <span className="text-sm">Show expense in print</span>
-                <input type="checkbox" checked={row.showInPrint} onChange={(e) => updateExpenseRow(row.id, 'showInPrint', e.target.checked)} />
-                
+              <div className="md:col-span-1 flex flex-col items-center justify-end gap-1 pb-2">
+                <span className="text-xs text-gray-600 dark:text-gray-400 md:hidden text-center leading-tight">
+                  Show expense in print
+                </span>
+                <input
+                  type="checkbox"
+                  className="h-4 w-4"
+                  checked={row.showInPrint}
+                  onChange={(e) => updateExpenseRow(row.id, 'showInPrint', e.target.checked)}
+                />
               </div>
-              <button type="button" onClick={() => removeExpenseRow(row.id)} className="text-red-500 hover:text-red-700">
+              <button type="button" onClick={() => removeExpenseRow(row.id)} className="md:col-span-1 text-red-500 hover:text-red-700 pb-2">
                 <FaTrashAlt size={16} />
               </button>
             </div>

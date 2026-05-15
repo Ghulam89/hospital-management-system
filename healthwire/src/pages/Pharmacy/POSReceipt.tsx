@@ -51,33 +51,45 @@ export default function POSReceipt() {
       ? data.payment[0]?.method || 'Cash'
       : 'Cash';
 
-  /** Net pack count for grouping: sale rows use quantity; partial return on same row uses Q−R when R<Q; full/credit return lines use −R. */
+  /** Net pack qty for receipt: sales +, returns − (uses returnQuantity or full return qty when isReturn). */
   const posLineNetPackContribution = (it: any): number => {
     const isReturn = Boolean(it?.isReturn);
     const Q = Number(it?.quantity) || 0;
-    const R = Math.max(0, Number(it?.returnQuantity) || 0);
-    if (!isReturn) return Q;
-    if (Q > 0 && R > 0 && R < Q) return Q - R;
-    if (R > 0) return -R;
+    const Rstored = Math.max(0, Number(it?.returnQuantity) || 0);
+    const effectiveReturn = Rstored > 0 ? Rstored : isReturn ? Q : 0;
+    const isReturnLine = isReturn || effectiveReturn > 0;
+
+    if (!isReturnLine) return Q;
+    if (Q > 0 && effectiveReturn > 0 && effectiveReturn < Q) return Q - effectiveReturn;
+    if (effectiveReturn > 0) return -effectiveReturn;
     return 0;
+  };
+
+  const formatReceiptQty = (qty: number): string => {
+    const n = Number(qty);
+    if (!Number.isFinite(n) || n === 0) return '0';
+    return n > 0 ? String(n) : String(n);
   };
 
   const groupedItems = (() => {
     const arr = Array.isArray(data?.allItem) ? data.allItem : [];
-    const map = new Map<string, { name: string; rate: number; qty: number; total: number }>();
+    const map = new Map<string, { name: string; rate: number; qty: number; total: number; isReturn: boolean }>();
     for (const it of arr) {
-      const key = `${it?.pharmItemId?._id || it?.pharmItemId || it?.itemName || ''}|${String(it?.unit || '')}|${String(it?.batchNumber || '')}`;
+      const isReturnLine =
+        Boolean(it?.isReturn) || Math.max(0, Number(it?.returnQuantity) || 0) > 0;
+      const key = `${it?.pharmItemId?._id || it?.pharmItemId || it?.itemName || ''}|${String(it?.unit || '')}|${String(it?.batchNumber || '')}|${isReturnLine ? 'R' : 'S'}`;
       const name = it?.pharmItemId?.name || it?.itemName || '-';
       const rate = Number(it?.rate || 0);
       const qty = posLineNetPackContribution(it);
       const total = Number(it?.totalAmount || 0);
       if (!map.has(key)) {
-        map.set(key, { name, rate, qty: 0, total: 0 });
+        map.set(key, { name, rate, qty: 0, total: 0, isReturn: isReturnLine });
       }
       const g = map.get(key)!;
       g.rate = rate || g.rate;
       g.qty += qty;
       g.total += total;
+      g.isReturn = g.isReturn || isReturnLine;
     }
     return Array.from(map.values()).filter((g) => Number(g.qty || 0) !== 0);
   })();
@@ -171,7 +183,11 @@ export default function POSReceipt() {
               <div className="w-6">{idx + 1}</div>
               <div className="flex-1  lowercase">{it.name}</div>
               <div className="w-14 text-right">{Number(it.rate || 0).toFixed(2)}</div>
-              <div className="w-10 text-right">{Number(it.qty || 0)}</div>
+              <div
+                className={`w-10 text-right ${Number(it.qty) < 0 ? 'text-red-700' : ''}`}
+              >
+                {formatReceiptQty(Number(it.qty || 0))}
+              </div>
               <div className="w-16 text-right">{Number(it.total || 0).toFixed(2)}</div>
             </div>
           ))}

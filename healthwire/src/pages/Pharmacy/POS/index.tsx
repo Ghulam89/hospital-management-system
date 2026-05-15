@@ -175,6 +175,28 @@ function posRecalcItemTotals(item: PosItem): PosItem {
   return { ...item, netAmount, totalAmount };
 }
 
+/** Remaining qty for Pack / Single Piece when return is checked (sold − returned). */
+function posGetNetQtyDisplay(item: PosItem): { packs: number; units: number } {
+  const conv = Math.max(1, Number(item.conversionUnit) || 1);
+  const soldPacks = Math.max(0, Number(item.quantity) || 0);
+  if (!item.isReturn) {
+    const units = Number(item.unitQuantity) || 0;
+    return {
+      packs: soldPacks,
+      units: units > 0 ? units : soldPacks * conv,
+    };
+  }
+  const returned =
+    soldPacks > 0
+      ? Math.min(Math.max(0, Number(item.returnQuantity) || 0), soldPacks)
+      : Math.max(0, Number(item.returnQuantity) || 0);
+  const netPacks = Math.max(0, soldPacks - returned);
+  const soldUnits = Number(item.unitQuantity) || soldPacks * conv;
+  const netUnits =
+    item.unit === 'pack' ? netPacks * conv : Math.max(0, soldUnits - returned);
+  return { packs: netPacks, units: netUnits };
+}
+
 export default function PharmacyPOS() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -1710,6 +1732,7 @@ export default function PharmacyPOS() {
                       const availableText = `Available: ${availablePacks} ${(selected?.unit || 'pack')}${availableRem ? ` + ${availableRem}` : ''} (${availableUnits} units)`;
                       const infoText = exceeds ? ' — Exceeds available stock' : (availableUnits === 0 ? ' — Out of stock' : '');
                       const packInputClass = `w-full h-11 rounded-lg border px-3 text-sm outline-none transition ${exceeds ? 'border-red-500 bg-red-50 text-red-700 focus:border-red-500 focus:ring-2 focus:ring-red-200' : 'border-gray-300 bg-white text-gray-700 focus:border-blue-500 focus:ring-2 focus:ring-blue-200'}`;
+                      const netQty = posGetNetQtyDisplay(item);
                       return (
                         <>
                     <div className="mb-1 text-xs font-semibold text-gray-600">
@@ -1718,7 +1741,7 @@ export default function PharmacyPOS() {
                     <input
                       type="number"
                           className={packInputClass}
-                      value={item.quantity}
+                      value={item.isReturn ? netQty.packs : item.quantity}
                       onChange={(e) =>
                         updatePosItem(
                           item.id,
@@ -1727,7 +1750,7 @@ export default function PharmacyPOS() {
                         )
                       }
                       onWheel={(e) => e.currentTarget.blur()}
-                      min="1"
+                      min={item.isReturn ? 0 : 1}
                       disabled={item.isReturn || lockQtyOnEdit}
                       required
                     />
@@ -1791,6 +1814,7 @@ export default function PharmacyPOS() {
                       const requestedUnits = Number(item.unitQuantity || (item.quantity * conv));
                       const exceeds = !item.isReturn && requestedUnits > availableUnits;
                       const unitInputClass = `w-full h-11 rounded-lg border px-3 text-sm outline-none transition ${exceeds ? 'border-red-500 bg-red-50 text-red-700 focus:border-red-500 focus:ring-2 focus:ring-red-200' : 'border-gray-300 bg-blue-50 text-gray-700 focus:border-blue-500 focus:ring-2 focus:ring-blue-200'}`;
+                      const netQtyPieces = posGetNetQtyDisplay(item);
                       return (
                         <>
                     <div className="mb-1 text-xs font-semibold text-gray-600">
@@ -1799,7 +1823,7 @@ export default function PharmacyPOS() {
                     <input
                       type="number"
                           className={unitInputClass}
-                      value={item.unitQuantity}
+                      value={item.isReturn ? netQtyPieces.units : item.unitQuantity}
                       onChange={(e) =>
                         updatePosItem(
                           item.id,
@@ -1808,7 +1832,7 @@ export default function PharmacyPOS() {
                         )
                       }
                       onWheel={(e) => e.currentTarget.blur()}
-                      min="1"
+                      min={item.isReturn ? 0 : 1}
                       disabled={item.isReturn || !item.pharmItemId || item.conversionUnit <= 1 || lockQtyOnEdit}
                       title={`Conversion: 1 ${item.unit} = ${item.conversionUnit} units`}
                     />

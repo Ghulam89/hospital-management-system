@@ -54,6 +54,22 @@ function sanitizeInvoiceWritePayload(body) {
     return Number.isFinite(n) ? n : v;
   };
 
+  const topLevelNumKeys = [
+    "subTotalBill",
+    "discountBill",
+    "invoiceDiscount",
+    "invoiceDiscountType",
+    "taxBill",
+    "totalBill",
+    "duePay",
+    "advancePay",
+    "totalPay",
+    "remainPay",
+  ];
+  for (const k of topLevelNumKeys) {
+    if (k in out) out[k] = coerceNum(out[k]);
+  }
+
   const cleanLine = (row) => {
     if (!row || typeof row !== "object") return row;
     const r = { ...row };
@@ -189,6 +205,7 @@ const getinvoices = async (req, res) => {
       maxDue,
       minAdvance,
       maxAdvance,
+      listMode,
     } = req.query;
 
     const requestedLimit = parseInt(req.query.limit, 10);
@@ -250,14 +267,30 @@ const getinvoices = async (req, res) => {
       }
     }
 
+    const itemElemMatches = [];
+
     // Procedure filter - corrected approach
     if (procedureId && procedureId.trim() !== '') {
       const procVal = Types.ObjectId.isValid(procedureId) ? new Types.ObjectId(procedureId) : procedureId;
-      query['item'] = {
-        $elemMatch: {
-          procedureId: procVal,
-        },
-      };
+      itemElemMatches.push({ procedureId: procVal });
+    }
+
+    if (listMode === 'procedureAdvance') {
+      itemElemMatches.push({
+        $or: [
+          { procedureDate: null },
+          { procedureDate: { $exists: false } },
+        ],
+      });
+    }
+
+    if (itemElemMatches.length === 1) {
+      query['item'] = { $elemMatch: itemElemMatches[0] };
+    } else if (itemElemMatches.length > 1) {
+      query.$and = query.$and || [];
+      itemElemMatches.forEach((cond) => {
+        query.$and.push({ item: { $elemMatch: cond } });
+      });
     }
 
     // Payment mode filter - corrected for array

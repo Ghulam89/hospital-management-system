@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef } from 'react';
-import { Table, message, Select, DatePicker, Card, Row, Col, Input, Button, Modal } from 'antd';
+import { Table, message, Select, DatePicker, Card, Row, Col, Input, Button, Modal, Tabs } from 'antd';
 import { Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import moment from 'moment';
@@ -121,6 +121,21 @@ function loadInvoiceFiltersFromSession() {
   } catch {
     return base;
   }
+}
+
+function hasProcedureDate(value: unknown): boolean {
+  return !!(value && String(value).trim());
+}
+
+function getProcedureAdvanceAmount(invoice: any): number {
+  const items = Array.isArray(invoice?.item) ? invoice.item : [];
+  return items.reduce((sum: number, item: any) => {
+    if (hasProcedureDate(item?.procedureDate)) return sum;
+    const amount = Number(item?.amount) || (Number(item?.rate) || 0) * Math.max(1, Number(item?.quantity) || 1);
+    const discount = Number(item?.discount) || 0;
+    const discountAmount = Number(item?.discountType) === 1 ? amount * (discount / 100) : discount;
+    return sum + Math.max(0, amount - discountAmount);
+  }, 0);
 }
 
 // PDF Styles
@@ -458,6 +473,7 @@ const Invoice = () => {
   const [selectedDepartment, setSelectedDepartment] = useState<DepartmentOption | null>(null);
   const [selectedProcedure, setSelectedProcedure] = useState<ProcedureOption | null>(null);
   const [selectedPatient, setSelectedPatient] = useState<PatientOption | null>(null);
+  const [activeListTab, setActiveListTab] = useState<'all' | 'procedureAdvance'>('all');
 
   const [filters, setFilters] = useState(() => loadInvoiceFiltersFromSession());
 
@@ -978,6 +994,7 @@ const Invoice = () => {
         }
       }
       if (filters.paymentMode) params.paymentMode = filters.paymentMode;
+      if (activeListTab === 'procedureAdvance') params.listMode = 'procedureAdvance';
 
       params.page = String(page);
       params.limit = String(pageSize);
@@ -1103,6 +1120,7 @@ const Invoice = () => {
       
       const transformedData = filteredData.map((invoice) => {
         const { doctorShare, hospitalShare } = sumInvoiceDoctorHospitalShare(invoice);
+        const procedureAdvanceAmount = getProcedureAdvanceAmount(invoice);
 
         // Get payment date (latest payment date from payment array)
         const paymentEntries = Array.isArray(invoice.payment) ? invoice.payment : [];
@@ -1203,6 +1221,8 @@ const Invoice = () => {
           paid: invoice.totalPay || 0,
           due,
           advance,
+          procedureAdvanceAmount,
+          hasProcedureAdvance: procedureAdvanceAmount > 0,
           doctorShare,
           hospitalShare,
           paymentMode: invoice.payment?.[0]?.method || 'N/A',
@@ -1217,6 +1237,10 @@ const Invoice = () => {
       // Extra safety: apply client-side filters for doctor, department, procedure and amount
       // so that filters always work even if backend casting/lookup behaves unexpectedly.
       let finalData = transformedData;
+
+      if (activeListTab === 'procedureAdvance') {
+        finalData = finalData.filter((inv) => Number(inv.procedureAdvanceAmount) > 0);
+      }
 
       if (filters.doctor) {
         finalData = finalData.filter((inv) => {
@@ -1400,7 +1424,7 @@ const Invoice = () => {
 
   useEffect(() => {
     fetchInvoices(1, pagination.pageSize);
-  }, [filters, branchEpoch]);
+  }, [filters, branchEpoch, activeListTab]);
 
   // Reset to first page when filters change
   useEffect(() => {
@@ -1551,6 +1575,15 @@ const Invoice = () => {
       sortDirections: ['ascend', 'descend'],
     },
     {
+      title: 'PROCEDURE ADVANCE',
+      dataIndex: 'procedureAdvanceAmount',
+      key: 'procedureAdvanceAmount',
+      width: 180,
+      render: (value) => (Number(value) > 0 ? Number(value).toLocaleString() : '-'),
+      sorter: (a, b) => Number(a.procedureAdvanceAmount || 0) - Number(b.procedureAdvanceAmount || 0),
+      sortDirections: ['ascend', 'descend'],
+    },
+    {
       title: 'PAYMENT MODE',
       dataIndex: 'paymentMode',
       key: 'paymentMode',
@@ -1665,6 +1698,29 @@ const Invoice = () => {
       width: 240,
     },
   ];
+
+  const visibleColumns = columns.filter((column) => {
+    const key = String(column?.key || '');
+    if (activeListTab === 'all') {
+      return key !== 'advance' && key !== 'procedureAdvanceAmount';
+    }
+    if (activeListTab === 'procedureAdvance') {
+      return [
+        'invoiceNo',
+        'invoiceEffectiveDate',
+        'patientMR',
+        'patientName',
+        'patientPhone',
+        'doctor',
+        'items',
+        'procedureAdvanceAmount',
+        'paymentMode',
+        'status',
+        'action',
+      ].includes(key);
+    }
+    return true;
+  });
 
   
    
@@ -2055,13 +2111,27 @@ const Invoice = () => {
                   </Col>
             
           </Row>
+
+          <div className="mb-4">
+            <Tabs
+              activeKey={activeListTab}
+              onChange={(key) => {
+                setActiveListTab(key as 'all' | 'procedureAdvance');
+                setPagination((prev) => ({ ...prev, current: 1 }));
+              }}
+              items={[
+                { key: 'all', label: 'All Invoices' },
+                { key: 'procedureAdvance', label: 'Procedure Advance' },
+              ]}
+            />
+          </div>
           
           <div className="overflow-x-auto">
             <Table
               ref={tableRef}
               rowKey="_id"
               rowSelection={rowSelection}
-              columns={columns}
+              columns={visibleColumns}
               dataSource={filteredInvoices}
               loading={loading}
               scroll={{ x: 1500 }}

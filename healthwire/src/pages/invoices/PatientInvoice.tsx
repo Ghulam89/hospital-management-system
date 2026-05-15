@@ -1322,7 +1322,7 @@ const PatientInvoice = () => {
             />
           </div>
 
-          <div className="mt-8">
+          {/* <div className="mt-8">
             <h2 className="text-lg font-semibold text-black mb-3">Pharmacy Invoices</h2>
             <div className="overflow-x-auto">
               <Table
@@ -1335,7 +1335,7 @@ const PatientInvoice = () => {
                 bordered
               />
             </div>
-          </div>
+          </div> */}
         </div>
       </div>
 

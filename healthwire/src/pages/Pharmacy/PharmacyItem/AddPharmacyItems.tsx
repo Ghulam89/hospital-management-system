@@ -513,7 +513,7 @@ const AddPharmacyItems = ({
                     className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                   />
                 </div>
-                <div>
+                {/* <div>
                   <label className="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
                     Quantity/Pack
                   </label>
@@ -525,10 +525,9 @@ const AddPharmacyItems = ({
                     placeholder="Quantity per pack"
                     className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                   />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
+                </div> */}
+
+<div>
                   <label className="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
                     Re-order Level
                   </label>
@@ -557,8 +556,6 @@ const AddPharmacyItems = ({
                     className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                   />
                 </div>
-              </div>
-              <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
                     Opening Stock
@@ -617,11 +614,6 @@ const AddPharmacyItems = ({
                     readOnly
                   />
                 </div>
-              </div>
-              
-            
-              
-              <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block mb-2 text-sm font-medium text-gray-700 dark:text-gray-300">
                     Expired Quantity
@@ -638,6 +630,10 @@ const AddPharmacyItems = ({
                   />
                 </div>
               </div>
+              
+             
+              
+              
             </div>
           </div>
 
