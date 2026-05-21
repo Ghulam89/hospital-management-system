@@ -10,6 +10,8 @@ import AddProcedureExpense from './AddProcedureExpense';
 import { expenseDeductBeforeDoctorShareTotal } from './invoiceExpenseUtils';
 import { AsyncPaginate, LoadOptions } from 'react-select-async-paginate';
 import AddPatients from '../Patients/AddPatients';
+import { fetchPatientsForInvoiceLookup } from '../../utils/patientInvoiceSearch';
+import InvoiceClientBalanceRow from '../../components/invoices/InvoiceClientBalanceRow';
 
 type Procedure = {
   _id: string;
@@ -253,7 +255,7 @@ export default function InvoiceCreation() {
     fetchData();
   }, []);
 
-  // Patient search functionality
+  // Patient search — branch-scoped + MR/phone exact (same rules as Patients list)
   useEffect(() => {
     const fetchPatients = async () => {
       if (searchTerm.trim() === '') {
@@ -263,20 +265,13 @@ export default function InvoiceCreation() {
       }
 
       try {
-        const response = await axios.get(`${Base_url}/apis/patient/get`, {
-          params: {
-            search: searchTerm,
-            page: 1,
-            limit: 20,
-          },
-        });
-
-        if (response.data.data && response.data.data.length > 0) {
-          setSearchResults(response.data.data);
+        const rows = await fetchPatientsForInvoiceLookup(searchTerm);
+        if (rows.length > 0) {
+          setSearchResults(rows);
           setSearchError('');
         } else {
           setSearchResults([]);
-          setSearchError('Patient not found');
+          setSearchError('Patient not found in this branch');
         }
       } catch (error) {
         console.error('Error searching patients:', error);
@@ -923,8 +918,10 @@ export default function InvoiceCreation() {
     }
 
     const billingTotal = calculateGrandTotal();
+    const undatedAdv = undatedProcedureAdvance();
+    const clientBill = billingTotal + undatedAdv;
     const paidSum = calculateTotalPaid();
-    const rawDue = billingTotal - paidSum;
+    const rawDue = clientBill - paidSum;
     
     // Require at least one payment installment
     // if (!paymentInstallments || paymentInstallments.length === 0) {
@@ -2030,23 +2027,11 @@ export default function InvoiceCreation() {
               Payment Summary
             </h3>
             <div className="space-y-2">
-              <div className="flex justify-between">
-                <span>Total Paid:</span>
-                <span className="font-medium text-green-500">
-                  Rs. {calculateTotalPaid().toFixed(2)}
-                </span>
-              </div>
-              <div className="flex justify-between">
-                <span>Due Amount:</span>
-                <span
-                  className={`font-medium ${
-                    calculateDue() > 0 ? 'text-red-500' : 'text-green-500'
-                  }`}
-                >
-                  Rs. {Math.abs(calculateDue()).toFixed(2)}{' '}
-                  {calculateDue() < 0 && '(Credit)'}
-                </span>
-              </div>
+              <InvoiceClientBalanceRow
+                grandTotal={calculateGrandTotal()}
+                paymentRows={paymentInstallments}
+                undatedAdvance={undatedProcedureAdvance()}
+              />
               <div className="border-t pt-2 mt-2 flex justify-between">
                 <span className="text-gray-700">Doctor Share:</span>
                 <span className="font-medium text-red-600">

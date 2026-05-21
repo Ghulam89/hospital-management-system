@@ -9,6 +9,8 @@ import { FaEye } from 'react-icons/fa';
 import { Link } from 'react-router-dom';
 import { AsyncPaginate } from 'react-select-async-paginate';
 import { RiRefund2Line } from 'react-icons/ri';
+import { getClientPaymentBalance } from '../../utils/invoicePaymentSummary';
+import InvoiceClientBalanceRow from '../../components/invoices/InvoiceClientBalanceRow';
 
 type Procedure = {
   _id: string;
@@ -214,17 +216,9 @@ const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Calculate payment status whenever payments or total changes
   useEffect(() => {
-    const due = calculateDue();
-    if (due < 0) {
-      setIsPaymentComplete(true);
-      setPaymentStatus(`Credit: Rs. ${Math.abs(due).toFixed(2)}`);
-    } else if (due === 0) {
-      setIsPaymentComplete(true);
-      setPaymentStatus('Payment Complete');
-    } else {
-      setIsPaymentComplete(false);
-      setPaymentStatus(`Due: Rs. ${due.toFixed(2)}`);
-    }
+    const b = getClientPaymentBalance(calculateGrandTotal(), paymentInstallments);
+    setIsPaymentComplete(b.statusTone !== 'due');
+    setPaymentStatus(b.headerText);
   }, [paymentInstallments, procedures, invoiceDiscount, invoiceDiscountType]);
 
   // Fetch invoice data, procedures and users
@@ -1391,16 +1385,10 @@ const [isSubmitting, setIsSubmitting] = useState(false);
           <div className="bg-white p-4 rounded-lg shadow">
             <h3 className="text-lg font-semibold mb-4 text-gray-700">Payment Summary</h3>
             <div className="space-y-2">
-              <div className="flex justify-between">
-                <span>Total Paid:</span>
-                <span className="font-medium text-green-500">Rs. {calculateTotalPaid().toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Due Amount:</span>
-                <span className={`font-medium ${calculateDue() > 0 ? 'text-red-500' : 'text-green-500'}`}>
-                  Rs. {Math.abs(calculateDue()).toFixed(2)} {calculateDue() < 0 && '(Credit)'}
-                </span>
-              </div>
+              <InvoiceClientBalanceRow
+                grandTotal={calculateGrandTotal()}
+                paymentRows={paymentInstallments}
+              />
               <div className="border-t pt-2 mt-2 flex justify-between">
                 <span className="text-gray-700">Doctor Share:</span>
                 <span className="font-medium text-red-600">

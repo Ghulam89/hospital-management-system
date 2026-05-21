@@ -13,6 +13,15 @@ import {
   normalizeProcedureExpenseRow,
 } from './invoiceExpenseUtils';
 import { getStoredUserForPermissions, hasAnyPermission } from '../../utils/permissions';
+import {
+  formatProcedureRefundMoney,
+  hasProcedureRefundOnLine,
+  procedureMaxRefundable,
+  roundMoney,
+} from '../../utils/procedureRefund';
+import { getClientPaymentBalance } from '../../utils/invoicePaymentSummary';
+import InvoiceClientBalanceRow from '../../components/invoices/InvoiceClientBalanceRow';
+import InvoicePatientPaymentHeader from '../../components/invoices/InvoicePatientPaymentHeader';
 
 type Procedure = {
   _id: string;
@@ -45,6 +54,8 @@ type PaymentInstallment = {
   method: string;
   amount: number;
   reference: string;
+  notes?: string;
+  isProcedureRefund?: boolean;
 };
 
 type User = {
@@ -265,6 +276,7 @@ export default function InvoiceUpdate() {
     reference: '',
     notes: ''
   });
+  const [isSubmittingRefund, setIsSubmittingRefund] = useState(false);
 
   const [procedures, setProcedures] = useState<ProcedureItem[]>([
     {
@@ -462,13 +474,19 @@ export default function InvoiceUpdate() {
     }
 
     if (data.payment && Array.isArray(data.payment) && data.payment.length > 0) {
-      const mappedPayments = data.payment.map((payment: any, index: number) => ({
-        id: index + 1,
-        date: formatInvoicePaymentDate(payment.payDate),
-        method: payment.method ?? 'Cash',
-        amount: Number(payment.paid) || 0,
-        reference: payment.reference || '',
-      }));
+      const mappedPayments = data.payment.map((payment: any, index: number) => {
+        const notes = payment.notes != null ? String(payment.notes) : '';
+        return {
+          id: index + 1,
+          date: formatInvoicePaymentDate(payment.payDate),
+          method: payment.method ?? 'Cash',
+          amount: Number(payment.paid) || 0,
+          reference: payment.reference || '',
+          notes,
+          isProcedureRefund:
+            notes.includes('ProcedureRefund:') || Number(payment.paid) < 0,
+        };
+      });
       setPaymentInstallments(mappedPayments);
     }
 
@@ -502,17 +520,11 @@ export default function InvoiceUpdate() {
   // Calculate payment status whenever payments or total changes
   useEffect(() => {
     try {
-      const due = calculateDue();
-      if (due < 0) {
-        setIsPaymentComplete(true);
-        setPaymentStatus(`Credit: Rs. ${Math.abs(due).toFixed(2)}`);
-      } else if (due === 0) {
-        setIsPaymentComplete(true);
-        setPaymentStatus('Payment Complete');
-      } else {
-        setIsPaymentComplete(false);
-        setPaymentStatus(`Due: Rs. ${due.toFixed(2)}`);
-      }
+      const b = getClientPaymentBalance(calculateGrandTotal(), paymentInstallments, {
+        undatedAdvance: undatedProcedureAdvance(),
+      });
+      setIsPaymentComplete(b.statusTone !== 'due');
+      setPaymentStatus(b.headerText);
     } catch (e) {
       console.error('Invoice totals:', e);
     }
@@ -877,7 +889,7 @@ export default function InvoiceUpdate() {
       procedureId: '',
       procedure: '',
       description: '',
-      procedureDate: '',
+      procedureDate: String(invoiceEditDate || '').trim(),
       rate: 0,
       quantity: 1,
       amount: 0,
@@ -992,14 +1004,72 @@ export default function InvoiceUpdate() {
     setLocalExpenses((prev) => prev.filter((b) => b?.procedureRowId !== id));
   };
 
+  const paymentsForRefundCheck = (): { paid?: number; notes?: string }[] => {
+    const fromRows = paymentInstallments.map((row) => ({
+      paid: row.amount,
+      notes: row.notes,
+    }));
+    if (fromRows.length > 0) return fromRows;
+    return asArray(invoiceData?.payment);
+  };
+
+  const procedureLineItemIndex = (p: ProcedureItem): number => {
+    const idx = procedures.findIndex((row) => row.id === p.id);
+    return idx >= 0 ? idx : Math.max(0, p.id - 1);
+  };
+
+  const procedureRefundAlreadyRecorded = (p: ProcedureItem): boolean =>
+    hasProcedureRefundOnLine(
+      paymentsForRefundCheck(),
+      p.procedureId,
+      procedureLineItemIndex(p),
+    );
+
+  const procedureRefundableAmount = (p: ProcedureItem): number => {
+    if (procedureRefundAlreadyRecorded(p)) return 0;
+    const lineIdx = procedureLineItemIndex(p);
+    const src = asArray<InvoiceData['item'][number]>(invoiceData?.item)[lineIdx];
+    const line = src
+      ? {
+          rate: Number(src.rate) || Number(p.rate) || 0,
+          quantity: Number(src.quantity) || Number(p.quantity) || 0,
+          amount: Number(src.amount) ?? Number(p.amount) ?? 0,
+          discount: Number(src.discount) ?? Number(p.discount) ?? 0,
+          discountType: Number(src.discountType) ?? Number(p.discountType) ?? 0,
+          total: Number(src.total),
+        }
+      : {
+          rate: p.rate,
+          quantity: p.quantity,
+          amount: p.amount,
+          discount: p.discount,
+          discountType: p.discountType,
+        };
+    return procedureMaxRefundable(
+      line,
+      paymentsForRefundCheck(),
+      p.procedureId,
+      procedureLineItemIndex(p),
+    );
+  };
+
   const openProcedureRefundModal = (procedure: ProcedureItem) => {
+    if (procedureRefundAlreadyRecorded(procedure)) {
+      toast.error('Refund already recorded for this procedure line (see payments below)');
+      return;
+    }
+    const refundable = procedureRefundableAmount(procedure);
+    if (refundable <= 0) {
+      toast.error('Nothing left to refund for this procedure line');
+      return;
+    }
     setRefundProcedure(procedure);
     setRefundForm({
       method: 'Cash',
-      paid: String(procedure.amount || 0),
+      paid: formatProcedureRefundMoney(refundable),
       payDate: new Date().toISOString().split('T')[0],
       reference: '',
-      notes: ''
+      notes: '',
     });
     setRefundModalOpen(true);
   };
@@ -1009,37 +1079,79 @@ export default function InvoiceUpdate() {
       toast.error('Procedure or invoice data not available');
       return;
     }
+    if (isSubmittingRefund) return;
 
-    const amount = Number(refundForm.paid) || 0;
+    const amount = roundMoney(Number(refundForm.paid) || 0);
     if (amount <= 0) {
       toast.error('Refund amount must be greater than 0');
       return;
     }
+    if (procedureRefundAlreadyRecorded(refundProcedure)) {
+      toast.error('Refund already recorded for this procedure line');
+      return;
+    }
+    const maxRefund = procedureRefundableAmount(refundProcedure);
+    if (maxRefund <= 0) {
+      toast.error('Nothing left to refund for this procedure line');
+      return;
+    }
+    if (amount > maxRefund + 0.009) {
+      toast.error(`Refund cannot exceed Rs. ${formatProcedureRefundMoney(maxRefund)}`);
+      return;
+    }
 
+    const procedureId = refId(refundProcedure.procedureId);
+    if (!isMongoHex24(procedureId)) {
+      toast.error('Select a valid procedure before recording a refund');
+      return;
+    }
+
+    setIsSubmittingRefund(true);
     try {
+      const payDateVal = refundForm.payDate;
+      const payDate =
+        typeof payDateVal === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(payDateVal)
+          ? (() => {
+              const [y, m, d] = payDateVal.split('-').map((x) => Number(x));
+              const now = new Date();
+              return new Date(
+                y,
+                m - 1,
+                d,
+                now.getHours(),
+                now.getMinutes(),
+                now.getSeconds(),
+                now.getMilliseconds(),
+              ).toISOString();
+            })()
+          : payDateVal;
+
       const response = await axios.post(
         `${Base_url}/apis/invoice/procedure-refund/${invoiceData._id}`,
         {
-          procedureId: refundProcedure.procedureId,
+          procedureId,
+          itemIndex: procedureLineItemIndex(refundProcedure),
           method: refundForm.method,
-          paid: -Math.abs(amount), // Negative for refund
-          payDate: refundForm.payDate,
+          paid: amount,
+          payDate,
           reference: refundForm.reference,
-          notes: refundForm.notes
-        }
+          notes: refundForm.notes,
+        },
       );
 
-      if (response.data.status === 'success') {
+      if (response.data?.status === 'ok') {
         toast.success('Procedure refund recorded successfully');
         setRefundModalOpen(false);
         setRefundProcedure(null);
         await reloadInvoiceFromApi();
       } else {
-        toast.error(response.data.message || 'Failed to record refund');
+        toast.error(response.data?.message || 'Failed to record refund');
       }
     } catch (error: any) {
       console.error('Procedure refund error:', error);
       toast.error(error.response?.data?.message || 'Failed to record refund');
+    } finally {
+      setIsSubmittingRefund(false);
     }
   };
 
@@ -1233,6 +1345,10 @@ export default function InvoiceUpdate() {
 
   const calculateGrandTotal = () =>
     Math.max(0, calculateBillBeforeInvoiceDiscount() - calculateInvoiceLevelDiscount());
+
+  /** Dated bill + undated procedure advance (full amount patient owes on this invoice). */
+  const calculateClientBillTotal = () =>
+    calculateGrandTotal() + undatedProcedureAdvance();
 
   const calculateTotalPaid = () => {
     return paymentInstallments.reduce((sum, item) => sum + item.amount, 0);
@@ -1435,8 +1551,10 @@ export default function InvoiceUpdate() {
     }
 
     const billingTotal = calculateGrandTotal();
+    const undatedAdv = undatedProcedureAdvance();
+    const clientBill = billingTotal + undatedAdv;
     const paidSum = calculateTotalPaid();
-    const rawDue = billingTotal - paidSum;
+    const rawDue = clientBill - paidSum;
 
     const invoiceEditDateIso = (() => {
       const t = String(invoiceEditDate || '').trim();
@@ -1621,11 +1739,13 @@ export default function InvoiceUpdate() {
 
         {/* Procedures Section */}
         <div className="mb-8 bg-white p-4 rounded-lg shadow">
-          <div className="flex justify-between items-center mb-4">
+          <div className="flex flex-col gap-3 sm:flex-row sm:justify-between sm:items-start mb-4">
             <h2 className="text-xl font-semibold text-gray-700">Invoice# {invoiceData?.invoiceNo}</h2>
-            <div className={`px-4 py-2 rounded-md ${isPaymentComplete ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
-              {paymentStatus}
-            </div>
+            <InvoicePatientPaymentHeader
+              grandTotal={calculateGrandTotal()}
+              paymentRows={paymentInstallments}
+              undatedAdvance={undatedProcedureAdvance()}
+            />
           </div>
 
           <div className="mb-4">
@@ -1898,8 +2018,18 @@ export default function InvoiceUpdate() {
                                       </button>
                                       <button
                                         onClick={() => openProcedureRefundModal(item)}
-                                        className="text-orange-500 hover:text-orange-700"
-                                        title="Refund Procedure"
+                                        disabled={
+                                          procedureRefundAlreadyRecorded(item) ||
+                                          procedureRefundableAmount(item) <= 0
+                                        }
+                                        className="text-orange-500 hover:text-orange-700 disabled:opacity-40 disabled:cursor-not-allowed"
+                                        title={
+                                          procedureRefundAlreadyRecorded(item)
+                                            ? 'Refund already recorded for this line'
+                                            : procedureRefundableAmount(item) <= 0
+                                              ? 'Nothing left to refund'
+                                              : 'Refund Procedure'
+                                        }
                                       >
                                         <RiRefund2Line size={20} />
                                       </button>
@@ -1987,12 +2117,18 @@ export default function InvoiceUpdate() {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {paymentInstallments.map((item) => (
-                  <tr key={item.id} className="hover:bg-gray-50">
+                {paymentInstallments.map((item) => {
+                  const rowLocked = item.isProcedureRefund || Number(item.amount) < 0;
+                  return (
+                  <tr
+                    key={item.id}
+                    className={rowLocked ? 'bg-orange-50 hover:bg-orange-100' : 'hover:bg-gray-50'}
+                  >
                     <td className="px-4 py-3 whitespace-nowrap">
                       <input
                         type="date"
-                        className="w-full rounded border-[1.5px] border-stroke bg-transparent py-2 px-3 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                        disabled={rowLocked}
+                        className="w-full rounded border-[1.5px] border-stroke bg-transparent py-2 px-3 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary disabled:opacity-70"
                         value={item.date}
                         min={invoiceDateMin}
                         onChange={(e) => updatePaymentInstallment(item.id, 'date', e.target.value)}
@@ -2000,7 +2136,8 @@ export default function InvoiceUpdate() {
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <select
-                        className="w-full rounded border-[1.5px] border-stroke bg-transparent py-2 px-3 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                        disabled={rowLocked}
+                        className="w-full rounded border-[1.5px] border-stroke bg-transparent py-2 px-3 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary disabled:opacity-70"
                         value={item.method}
                         onChange={(e) => updatePaymentInstallment(item.id, 'method', e.target.value)}
                       >
@@ -2015,7 +2152,8 @@ export default function InvoiceUpdate() {
                     <td className="px-4 py-3 whitespace-nowrap">
                       <input
                         type="number"
-                        className="w-full rounded border-[1.5px] border-stroke bg-transparent py-2 px-3 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                        disabled={rowLocked}
+                        className="w-full rounded border-[1.5px] border-stroke bg-transparent py-2 px-3 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary disabled:opacity-70"
                         value={item.amount}
                         onChange={(e) => updatePaymentInstallment(item.id, 'amount', parseFloat(e.target.value))}
                         onWheel={handleNumberInputWheel}
@@ -2024,7 +2162,8 @@ export default function InvoiceUpdate() {
                     <td className="px-4 py-3 whitespace-nowrap">
                       <input
                         type="text"
-                        className="w-full rounded border-[1.5px] border-stroke bg-transparent py-2 px-3 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                        disabled={rowLocked}
+                        className="w-full rounded border-[1.5px] border-stroke bg-transparent py-2 px-3 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary disabled:opacity-70"
                         value={item.reference}
                         onChange={(e) => updatePaymentInstallment(item.id, 'reference', e.target.value)}
                         placeholder="Reference No."
@@ -2033,7 +2172,8 @@ export default function InvoiceUpdate() {
                     <td className="px-4 py-3 whitespace-nowrap">
                       <button
                         onClick={() => removePaymentInstallment(item.id)}
-                        className="text-red-500 hover:text-red-700"
+                        disabled={rowLocked}
+                        className="text-red-500 hover:text-red-700 disabled:opacity-40 disabled:cursor-not-allowed"
                         title="Remove"
                       >
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
@@ -2042,7 +2182,8 @@ export default function InvoiceUpdate() {
                       </button>
                     </td>
                   </tr>
-                ))}
+                );
+                })}
               </tbody>
             </table>
           </div>
@@ -2154,13 +2295,21 @@ export default function InvoiceUpdate() {
                   </span>
                 </div>
               )}
+              {undatedProcedureAdvance() > 0 && (
+                <div className="flex justify-between border-t pt-2 font-semibold">
+                  <span>Total client bill:</span>
+                  <span>Rs. {calculateClientBillTotal().toFixed(2)}</span>
+                </div>
+              )}
               <div className="border-t pt-2 mt-2 flex justify-between font-bold text-lg">
-                <span>Grand Total:</span>
+                <span>Grand Total (dated procedures):</span>
                 <span>Rs. {calculateGrandTotal().toFixed(2)}</span>
               </div>
-              <p className="text-xs text-gray-500 mt-1">
-                Expenses from the costing popup are not added to grand total or due amount.
-              </p>
+              {/* <p className="text-xs text-gray-500 mt-1">
+                {undatedProcedureAdvance() > 0
+                  ? 'Lines without a procedure date count as advance only (not in grand total). Set a procedure date to include them in the bill.'
+                  : 'Expenses from the costing popup are not added to grand total or due amount.'}
+              </p> */}
               
             </div>
           </div>
@@ -2168,16 +2317,11 @@ export default function InvoiceUpdate() {
           <div className="bg-white p-4 rounded-lg shadow">
             <h3 className="text-lg font-semibold mb-4 text-gray-700">Payment Summary</h3>
             <div className="space-y-2">
-              <div className="flex justify-between">
-                <span>Total Paid:</span>
-                <span className="font-medium text-green-500">Rs. {calculateTotalPaid().toFixed(2)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span>Due Amount:</span>
-                <span className={`font-medium ${calculateDue() > 0 ? 'text-red-500' : 'text-green-500'}`}>
-                  Rs. {Math.abs(calculateDue()).toFixed(2)} {calculateDue() < 0 && '(Credit)'}
-                </span>
-              </div>
+              <InvoiceClientBalanceRow
+                grandTotal={calculateGrandTotal()}
+                paymentRows={paymentInstallments}
+                undatedAdvance={undatedProcedureAdvance()}
+              />
               <div className="border-t pt-2 mt-2 flex justify-between">
                 <span className="text-gray-700">Doctor Share:</span>
                 <span className="font-medium text-red-600">
@@ -2253,10 +2397,23 @@ export default function InvoiceUpdate() {
                     </select>
                   </div>
                   <div>
-                    <div className="mb-1 text-xs font-medium text-bodydark">Refund Amount</div>
+                    <div className="mb-1 text-xs font-medium text-bodydark">
+                      Refund Amount
+                      {refundProcedure ? (
+                        <span className="text-gray-500 font-normal">
+                          {' '}
+                          (max Rs. {formatProcedureRefundMoney(procedureRefundableAmount(refundProcedure))})
+                        </span>
+                      ) : null}
+                    </div>
                     <input
                       type="number"
                       min={0}
+                      max={
+                        refundProcedure
+                          ? procedureRefundableAmount(refundProcedure)
+                          : undefined
+                      }
                       className="w-full rounded border border-stroke bg-transparent px-3 py-2 text-black outline-none transition focus:border-primary dark:border-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                       value={refundForm.paid}
                       onChange={(e) => setRefundForm({ ...refundForm, paid: e.target.value })}
@@ -2300,7 +2457,8 @@ export default function InvoiceUpdate() {
                   Cancel
                 </button>
                 <button
-                  className="bg-primary text-white px-4 py-2 rounded-md"
+                  className="bg-primary text-white px-4 py-2 rounded-md disabled:opacity-60"
+                  disabled={isSubmittingRefund}
                   onClick={submitProcedureRefund}
                 >
                   Record Refund

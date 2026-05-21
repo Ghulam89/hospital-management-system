@@ -430,7 +430,14 @@ const getpatients = async (req, res) => {
     const scopedArr =
       query._id && query._id.$in && Array.isArray(query._id.$in) ? query._id.$in : [];
     const maxSortIds = 5000;
+    const hasListSearch =
+      (search && String(search).trim() !== "") ||
+      (mr && String(mr).trim() !== "") ||
+      (name && String(name).trim() !== "") ||
+      (phone && String(phone).trim() !== "") ||
+      (cnic && String(cnic).trim() !== "");
     const useBranchActivitySort =
+      !hasListSearch &&
       branchF &&
       branchF.branchId &&
       scopedArr.length > 0 &&

@@ -15,6 +15,13 @@ import { canMenuAction, getStoredUserForPermissions, hasAnyPermission } from '..
 import { useBranchScopeEpoch } from '../../context/BranchScopeEpochContext';
 import { sumInvoiceDoctorHospitalShare } from '../../utils/invoiceShare';
 import { buildAxiosBranchScopedParams } from '../../utils/branchScope';
+import { buildPatientLookupParams } from '../../utils/patientInvoiceSearch';
+import {
+  formatProcedureRefundMoney,
+  hasProcedureRefundOnLine,
+  procedureMaxRefundableFromInvoiceRow,
+  refId,
+} from '../../utils/procedureRefund';
 
 import {
   PDFDownloadLink,
@@ -505,6 +512,8 @@ const Invoice = () => {
     notes: '',
     procedureId: '',
   });
+  const [refundProcedureItemIndex, setRefundProcedureItemIndex] = useState(-1);
+  const [loadingRefundInvoice, setLoadingRefundInvoice] = useState(false);
 
   console.log(filters, 'filters');
 
@@ -579,6 +588,7 @@ const Invoice = () => {
   const openRefundModal = (record: any) => {
     setRefundInvoice(record);
     setRefundType('invoice');
+    setRefundProcedureItemIndex(-1);
     setRefundForm({
       method: 'Cash',
       paid: '',
@@ -588,6 +598,37 @@ const Invoice = () => {
       procedureId: '',
     });
     setRefundModalOpen(true);
+    if (!record?._id) return;
+    setLoadingRefundInvoice(true);
+    axios
+      .get(`${Base_url}/apis/invoice/get/${record._id}`)
+      .then((res) => {
+        const data = res.data?.data ?? res.data;
+        if (data && typeof data === 'object') {
+          setRefundInvoice(data);
+        }
+      })
+      .catch((err) => {
+        console.error('Could not load invoice for refund:', err);
+        message.warning('Could not refresh invoice details; refund limits may be inaccurate');
+      })
+      .finally(() => setLoadingRefundInvoice(false));
+  };
+
+  const selectedProcedureRefundMax = (): number => {
+    const items = Array.isArray(refundInvoice?.item) ? refundInvoice.item : [];
+    const idx =
+      refundProcedureItemIndex >= 0 && refundProcedureItemIndex < items.length
+        ? refundProcedureItemIndex
+        : items.findIndex(
+            (it: any) =>
+              refId(it?.procedureId?._id || it?.procedureId) === refundForm.procedureId,
+          );
+    if (idx < 0) return 0;
+    if (hasProcedureRefundOnLine(refundInvoice?.payment, refundForm.procedureId, idx)) {
+      return 0;
+    }
+    return procedureMaxRefundableFromInvoiceRow(items[idx], refundInvoice?.payment, idx);
   };
 
   const submitInvoiceRefund = async () => {
@@ -600,12 +641,49 @@ const Invoice = () => {
       message.error('Enter refund amount');
       return;
     }
+    if (refundType === 'procedure') {
+      if (!refundForm.procedureId) {
+        message.error('Select a procedure');
+        return;
+      }
+      const itemIdx =
+        refundProcedureItemIndex >= 0
+          ? refundProcedureItemIndex
+          : (Array.isArray(refundInvoice?.item) ? refundInvoice.item : []).findIndex(
+              (it: any) =>
+                refId(it?.procedureId?._id || it?.procedureId) === refundForm.procedureId,
+            );
+      if (
+        itemIdx >= 0 &&
+        hasProcedureRefundOnLine(refundInvoice?.payment, refundForm.procedureId, itemIdx)
+      ) {
+        message.error('Refund already recorded for this procedure line');
+        return;
+      }
+      const maxProc = selectedProcedureRefundMax();
+      if (maxProc <= 0) {
+        message.error('Nothing left to refund for this procedure');
+        return;
+      }
+      if (amount > maxProc + 0.001) {
+        message.error(`Refund cannot exceed Rs. ${formatProcedureRefundMoney(maxProc)}`);
+        return;
+      }
+    }
     setSavingRefund(true);
     try {
       let res;
       if (refundType === 'procedure' && refundForm.procedureId) {
+        const itemIdx =
+          refundProcedureItemIndex >= 0
+            ? refundProcedureItemIndex
+            : (Array.isArray(refundInvoice?.item) ? refundInvoice.item : []).findIndex(
+                (it: any) =>
+                  refId(it?.procedureId?._id || it?.procedureId) === refundForm.procedureId,
+              );
         const payload = {
           procedureId: refundForm.procedureId,
+          itemIndex: itemIdx >= 0 ? itemIdx : 0,
           method: refundForm.method,
           paid: amount,
           payDate: (() => {
@@ -815,12 +893,7 @@ const Invoice = () => {
     const limit = 20;
 
     const res = await axios.get(`${Base_url}/apis/patient/get`, {
-      params: {
-        page,
-        limit,
-        ...(searchQuery ? { search: searchQuery } : {}),
-        ...buildAxiosBranchScopedParams(),
-      },
+      params: buildPatientLookupParams(searchQuery || '', page, limit),
     });
 
     const responseData = res?.data;
@@ -1110,14 +1183,6 @@ const Invoice = () => {
         }
       }
 
-      const mrQuery = String(filters.patientMR || '').trim();
-      if (mrQuery) {
-        filteredData = filteredData.filter((invoice) => {
-          const mr = String(invoice?.patientId?.mr || invoice?.patientData?.mr || '').trim();
-          return mr === mrQuery;
-        });
-      }
-      
       const transformedData = filteredData.map((invoice) => {
         const { doctorShare, hospitalShare } = sumInvoiceDoctorHospitalShare(invoice);
         const procedureAdvanceAmount = getProcedureAdvanceAmount(invoice);
@@ -1963,10 +2028,12 @@ const Invoice = () => {
                 onChange={(opt) => {
                   const option = (opt as PatientOption | null) || null;
                   setSelectedPatient(option);
-                  const mr = option?.patientData?.mr || '';
+                  const p = option?.patientData;
                   setFilters((prev) => ({
                     ...prev,
-                    patientMR: mr,
+                    patientMR: p?.mr || '',
+                    patientName: p?.name || '',
+                    patientPhone: p?.phone || '',
                   }));
                 }}
                 additional={{ page: 1 }}
@@ -2098,6 +2165,7 @@ const Invoice = () => {
                         setSelectedDoctor(null);
                         setSelectedDepartment(null);
                         setSelectedProcedure(null);
+                        setSelectedPatient(null);
                         setPagination({
                           current: 1,
                           pageSize: 20,
@@ -2337,17 +2405,18 @@ const Invoice = () => {
                   
                   // Clear procedure-specific fields when switching types
                   if (newType === 'invoice') {
-                    setRefundForm((prev) => ({ 
-                      ...prev, 
+                    setRefundProcedureItemIndex(-1);
+                    setRefundForm((prev) => ({
+                      ...prev,
                       procedureId: '',
-                      paid: ''
+                      paid: '',
                     }));
                   } else {
-                    // Clear amount when switching to procedure refund until a procedure is selected
-                    setRefundForm((prev) => ({ 
-                      ...prev, 
+                    setRefundProcedureItemIndex(-1);
+                    setRefundForm((prev) => ({
+                      ...prev,
                       procedureId: '',
-                      paid: ''
+                      paid: '',
                     }));
                   }
                 }}
@@ -2374,38 +2443,70 @@ const Invoice = () => {
 
           {refundType === 'procedure' && (
             <div>
-              <div className="mb-1 text-xs font-medium text-bodydark">Procedure</div>
+              <div className="mb-1 text-xs font-medium text-bodydark">
+                Procedure {loadingRefundInvoice ? '(loading…)' : ''}
+              </div>
               <select
-                value={refundForm.procedureId}
+                value={
+                  refundProcedureItemIndex >= 0 && refundForm.procedureId
+                    ? `${refundProcedureItemIndex}:${refundForm.procedureId}`
+                    : ''
+                }
                 onChange={(e) => {
-                  const selectedProcedureId = e.target.value;
-                  setRefundForm((prev) => ({ ...prev, procedureId: selectedProcedureId }));
-                  
-                  // Auto-fill amount when procedure is selected
-                  if (selectedProcedureId) {
-                    const selectedItem = (refundInvoice?.item || []).find((it: any) => 
-                      String(it?.procedureId?._id || it?.procedureId) === selectedProcedureId
-                    );
-                    if (selectedItem) {
-                      setRefundForm((prev) => ({ 
-                        ...prev, 
-                        procedureId: selectedProcedureId,
-                        paid: String(selectedItem.amount || 0)
-                      }));
-                    }
-                  } else {
-                    // Clear amount if no procedure selected
-                    setRefundForm((prev) => ({ ...prev, paid: '' }));
+                  const raw = e.target.value;
+                  if (!raw) {
+                    setRefundProcedureItemIndex(-1);
+                    setRefundForm((prev) => ({ ...prev, procedureId: '', paid: '' }));
+                    return;
                   }
+                  const [idxStr, selectedProcedureId] = raw.split(':');
+                  const itemIdx = parseInt(idxStr, 10);
+                  const items = Array.isArray(refundInvoice?.item) ? refundInvoice.item : [];
+                  const selectedItem =
+                    Number.isFinite(itemIdx) && itemIdx >= 0 ? items[itemIdx] : null;
+                  const maxRef =
+                    selectedItem != null &&
+                    Number.isFinite(itemIdx) &&
+                    itemIdx >= 0 &&
+                    !hasProcedureRefundOnLine(
+                      refundInvoice?.payment,
+                      selectedProcedureId,
+                      itemIdx,
+                    )
+                      ? procedureMaxRefundableFromInvoiceRow(
+                          selectedItem,
+                          refundInvoice?.payment,
+                          itemIdx,
+                        )
+                      : 0;
+                  setRefundProcedureItemIndex(Number.isFinite(itemIdx) ? itemIdx : -1);
+                  setRefundForm((prev) => ({
+                    ...prev,
+                    procedureId: selectedProcedureId || '',
+                    paid: maxRef > 0 ? formatProcedureRefundMoney(maxRef) : '',
+                  }));
                 }}
                 className="w-full rounded-lg border border-stroke bg-transparent py-2 px-3 text-sm outline-none focus:border-primary"
               >
                 <option value="">Select</option>
-                {(refundInvoice?.item || []).map((it: any, idx: number) => (
-                  <option key={idx} value={String(it?.procedureId?._id || it?.procedureId || idx)}>
-                    {it?.description || it?.procedureId?.name || `Item ${idx + 1}`}
-                  </option>
-                ))}
+                {(refundInvoice?.item || []).map((it: any, idx: number) => {
+                  const pid = refId(it?.procedureId?._id || it?.procedureId);
+                  const maxRef = hasProcedureRefundOnLine(refundInvoice?.payment, pid, idx)
+                    ? 0
+                    : procedureMaxRefundableFromInvoiceRow(it, refundInvoice?.payment, idx);
+                  const label =
+                    it?.description || it?.procedureId?.name || `Item ${idx + 1}`;
+                  return (
+                    <option
+                      key={`${idx}-${pid}`}
+                      value={`${idx}:${pid}`}
+                      disabled={maxRef <= 0}
+                    >
+                      {label}
+                      {maxRef > 0 ? ` (max Rs. ${formatProcedureRefundMoney(maxRef)})` : ' (fully refunded)'}
+                    </option>
+                  );
+                })}
               </select>
             </div>
           )}

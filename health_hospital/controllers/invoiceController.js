@@ -8,7 +8,20 @@ const {
   mergeBranchScopedQuery,
   branchDocumentVisible,
   applyStrictBranchListFilter,
+  getScopedPatientIds,
 } = require("../utils/branchScope");
+const {
+  resolveInvoiceFilterPatientIds,
+  intersectObjectIdLists,
+} = require("../utils/invoicePatientFilter");
+const {
+  roundMoneyAmount,
+  procedureCurrentLineBalance,
+  procedureRefundLineMarker,
+  hasProcedureRefundOnLine,
+  procedureMaxRefundable,
+} = require("../utils/invoiceProcedureRefund");
+const { computeClientBillFromItems } = require("../utils/invoiceBillTotals");
 
 function assertInvoiceBackdatesAllowed(req, res, dates) {
   if (!req.user) return true;
@@ -251,7 +264,41 @@ const getinvoices = async (req, res) => {
       // because department info comes through doctorId
       console.log('Department filter requested:', departmentId);
     }
-    // Note: patientMR filter will be handled separately due to nested lookup
+    const filterPatientIds = await resolveInvoiceFilterPatientIds(req, {
+      patientMR,
+      patientName,
+      patientPhone,
+    });
+    const hasPatientFieldFilters = filterPatientIds !== null;
+    if (hasPatientFieldFilters) {
+      if (filterPatientIds.length === 0) {
+        const emptySummary = {
+          totalSubTotal: 0,
+          totalDiscount: 0,
+          totalTax: 0,
+          grandTotal: 0,
+          totalDue: 0,
+          totalAdvance: 0,
+          totalPaid: 0,
+          totalRemaining: 0,
+          totalDoctorShare: 0,
+          totalHospitalShare: 0,
+        };
+        return res.status(200).json({
+          status: "ok",
+          data: [],
+          search,
+          page,
+          summary: emptySummary,
+          count: 0,
+          totalPages: 0,
+          currentPage: parseInt(page, 10) || 1,
+          limit,
+        });
+      }
+      query.patientId = { $in: filterPatientIds };
+    }
+
     // Handle invoiceNo or invoiceNumber (both map to invoiceNo)
     const invoiceNoValue = invoiceNo || invoiceNumber;
     if (invoiceNoValue && invoiceNoValue.trim() !== '') query['invoiceNo'] = new RegExp(invoiceNoValue, 'i');
@@ -389,20 +436,11 @@ const getinvoices = async (req, res) => {
       query['$expr'] = exprParts.length === 1 ? exprParts[0] : { $and: exprParts };
     }
 
-    // Text search
-    // Remove $or from query if aggregation is being used
+    // Text search — aggregation only when department or free-text search needs joined fields
     let useAggregation = false;
-    // Use aggregation if patient search filters, department, invoice number, or general search are present
-    // OR if date filters are present (to ensure patient filters work correctly with dates)
     if (
-      (patientMR && patientMR.trim() !== '') ||
-      (patientName && patientName.trim() !== '') ||
-      (patientPhone && patientPhone.trim() !== '') ||
-      (invoiceNoValue && invoiceNoValue.trim() !== '') ||
       (departmentId && departmentId.trim() !== '') ||
-      (search && search.trim() !== '') ||
-      (startDate && startDate.trim() !== '') ||
-      (endDate && endDate.trim() !== '')
+      (search && search.trim() !== '')
     ) {
       useAggregation = true;
     }
@@ -486,28 +524,7 @@ const getinvoices = async (req, res) => {
         { $unwind: { path: '$updatedByData', preserveNullAndEmptyArrays: true } }
       ];
 
-      // Add conditional filters
-      if (patientMR && patientMR.trim() !== '') {
-        pipeline.push({
-          $match: {
-            'patientData.mr': { $regex: patientMR, $options: 'i' }
-          }
-        });
-      }
-      if (patientName && patientName.trim() !== '') {
-        pipeline.push({
-          $match: {
-            'patientData.name': { $regex: patientName, $options: 'i' }
-          }
-        });
-      }
-      if (patientPhone && patientPhone.trim() !== '') {
-        pipeline.push({
-          $match: {
-            'patientData.phone': { $regex: patientPhone, $options: 'i' }
-          }
-        });
-      }
+      // Add conditional filters (patient MR/name/phone resolved via query.patientId)
       if (invoiceNoValue && invoiceNoValue.trim() !== '') {
         pipeline.push({
           $match: {
@@ -577,27 +594,6 @@ const getinvoices = async (req, res) => {
       ];
 
       // Add conditional filters to count pipeline
-      if (patientMR && patientMR.trim() !== '') {
-        countPipeline.push({
-          $match: {
-            'patientData.mr': { $regex: patientMR, $options: 'i' }
-          }
-        });
-      }
-      if (patientName && patientName.trim() !== '') {
-        countPipeline.push({
-          $match: {
-            'patientData.name': { $regex: patientName, $options: 'i' }
-          }
-        });
-      }
-      if (patientPhone && patientPhone.trim() !== '') {
-        countPipeline.push({
-          $match: {
-            'patientData.phone': { $regex: patientPhone, $options: 'i' }
-          }
-        });
-      }
       if (invoiceNoValue && invoiceNoValue.trim() !== '') {
         countPipeline.push({
           $match: {
@@ -921,7 +917,8 @@ const addInvoiceRefund = async (req, res) => {
 const addProcedureRefund = async (req, res) => {
   try {
     const id = req.params.id;
-    const { procedureId, method, paid, payDate, reference, notes } = req.body || {};
+    const { procedureId, itemIndex: itemIndexRaw, method, paid, payDate, reference, notes } =
+      req.body || {};
     const refundAmount = Math.abs(Number(paid) || 0);
     if (!procedureId) {
       return res.status(400).json({ status: "error", message: "procedureId is required" });
@@ -951,11 +948,24 @@ const addProcedureRefund = async (req, res) => {
     };
     const targetId = normalizeId(procedureId);
     let itemIndex = -1;
-    for (let i = 0; i < items.length; i++) {
-      const pid = normalizeId(items[i]?.procedureId?._id || items[i]?.procedureId);
-      if (pid && pid === targetId) {
-        itemIndex = i;
-        break;
+    const idxParsed = parseInt(itemIndexRaw, 10);
+    if (
+      Number.isFinite(idxParsed) &&
+      idxParsed >= 0 &&
+      idxParsed < items.length
+    ) {
+      const pid = normalizeId(
+        items[idxParsed]?.procedureId?._id || items[idxParsed]?.procedureId,
+      );
+      if (pid && pid === targetId) itemIndex = idxParsed;
+    }
+    if (itemIndex < 0) {
+      for (let i = 0; i < items.length; i++) {
+        const pid = normalizeId(items[i]?.procedureId?._id || items[i]?.procedureId);
+        if (pid && pid === targetId) {
+          itemIndex = i;
+          break;
+        }
       }
     }
     if (itemIndex < 0) {
@@ -963,61 +973,77 @@ const addProcedureRefund = async (req, res) => {
     }
 
     const item = items[itemIndex];
-    const currentItemAmount = Number(item?.amount) || 0;
+    const itemTotalBefore = procedureCurrentLineBalance(item);
 
-    // Already refunded for this procedure (based on prior payment notes)
-    const alreadyRefundedForProcedure = (invoice.payment || [])
-      .filter((p) => typeof p?.notes === "string" && p.notes.includes(`ProcedureRefund:${targetId}`))
-      .reduce((sum, p) => sum + Math.abs(Number(p?.paid) || 0), 0);
+    if (hasProcedureRefundOnLine(invoice.payment, targetId, itemIndex)) {
+      return res.status(400).json({
+        status: "error",
+        message:
+          "Refund already recorded for this procedure line. It cannot be refunded again.",
+      });
+    }
 
-    const maxRefundable = Math.max(0, currentItemAmount - alreadyRefundedForProcedure);
+    const maxRefundable = procedureMaxRefundable(
+      item,
+      invoice.payment,
+      targetId,
+      itemIndex,
+    );
     if (maxRefundable <= 0) {
-      return res.status(400).json({ status: "error", message: "Nothing left to refund for this procedure" });
+      return res.status(400).json({
+        status: "error",
+        message: "This procedure line has no refundable balance",
+        maxRefundable: 0,
+      });
+    }
+    if (refundAmount > maxRefundable + 0.009) {
+      return res.status(400).json({
+        status: "error",
+        message: `Refund cannot exceed Rs. ${maxRefundable.toFixed(2)} for this procedure line`,
+        maxRefundable,
+      });
     }
     const applyAmount = Math.min(refundAmount, maxRefundable);
 
-    // Reduce item-level amounts proportionally
-    const rate = Number(item?.rate) || 0;
-    const quantity = Number(item?.quantity) || 0;
-    const itemTotalBefore = Number(item?.total ?? currentItemAmount) || currentItemAmount;
-    const proportion = itemTotalBefore > 0 ? applyAmount / itemTotalBefore : 0;
+    const currentItemAmount = Number(item?.amount) || 0;
+    const proportion =
+      itemTotalBefore > 0 ? applyAmount / itemTotalBefore : 0;
+    const newLineBalance = roundMoneyAmount(
+      Math.max(0, itemTotalBefore - applyAmount),
+    );
 
-    item.amount = Math.max(0, currentItemAmount - applyAmount);
+    item.total = newLineBalance;
+    if (currentItemAmount > 0 && itemTotalBefore > 0) {
+      item.amount = roundMoneyAmount(
+        Math.max(0, currentItemAmount * (newLineBalance / itemTotalBefore)),
+      );
+    } else {
+      item.amount = newLineBalance;
+    }
     if (Number.isFinite(item.doctorAmount)) {
-      item.doctorAmount = Math.max(0, Number(item.doctorAmount) - Number(item.doctorAmount) * proportion);
+      item.doctorAmount = Math.max(
+        0,
+        Number(item.doctorAmount) - Number(item.doctorAmount) * proportion,
+      );
     }
     if (Number.isFinite(item.hospitalAmount)) {
-      item.hospitalAmount = Math.max(0, Number(item.hospitalAmount) - Number(item.hospitalAmount) * proportion);
+      item.hospitalAmount = Math.max(
+        0,
+        Number(item.hospitalAmount) - Number(item.hospitalAmount) * proportion,
+      );
     }
-    if (Number.isFinite(item.discount)) {
-      item.discount = Math.max(0, Number(item.discount) - Number(item.discount) * proportion);
-    }
-    if (Number.isFinite(item.tax)) {
-      item.tax = Math.max(0, Number(item.tax) - Number(item.tax) * proportion);
-    }
-    if (Number.isFinite(item.total)) {
-      item.total = Math.max(0, Number(item.total) - applyAmount);
-    }
-    if (rate > 0 && quantity > 0) {
-      const qtyReduce = Math.min(quantity, Math.floor(applyAmount / rate));
-      if (qtyReduce > 0) {
-        item.quantity = quantity - qtyReduce;
-      }
-    }
-
-    // Recompute invoice totals from items
-    const newSubTotal = items.reduce((sum, it) => sum + (Number(it.amount) || 0), 0);
-    const newDiscount = items.reduce((sum, it) => sum + (Number(it.discount) || 0), 0);
-    const newTax = items.reduce((sum, it) => sum + (Number(it.tax) || 0), 0);
-    const newTotal = newSubTotal - newDiscount + newTax;
 
     invoice.item[itemIndex] = item;
-    invoice.subTotalBill = newSubTotal;
-    invoice.discountBill = newDiscount;
-    invoice.taxBill = newTax;
-    invoice.totalBill = newTotal;
+    const billTotals = computeClientBillFromItems(
+      items,
+      invoice.invoiceDiscount,
+      invoice.invoiceDiscountType,
+    );
+    invoice.subTotalBill = billTotals.subTotalBill;
+    invoice.discountBill = billTotals.discountBill;
+    invoice.taxBill = Number(invoice.taxBill) || 0;
+    invoice.totalBill = billTotals.totalBill;
 
-    // Record refund as negative payment with a clear note
     const paymentEntry = {
       method: method || "Refund",
       payDate: refundPayDate,
@@ -1026,16 +1052,17 @@ const addProcedureRefund = async (req, res) => {
       chequeNo: "",
       bankName: "",
       chequeDate: undefined,
-      notes: `ProcedureRefund:${targetId}${notes ? ` | ${notes}` : ""}`,
+      notes: `${procedureRefundLineMarker(targetId, itemIndex)}${notes ? ` | ${notes}` : ""}`,
     };
 
     invoice.payment = Array.isArray(invoice.payment) ? invoice.payment : [];
     invoice.payment.push(paymentEntry);
 
-    // Recompute paid/due
     const totalPaid = (invoice.payment || []).reduce((sum, p) => sum + (Number(p?.paid) || 0), 0);
     invoice.totalPay = totalPaid;
-    invoice.duePay = (Number(invoice.totalBill) || 0) - totalPaid;
+    const rawDue = billTotals.clientBill - totalPaid;
+    invoice.duePay = rawDue > 0 ? roundMoneyAmount(rawDue) : 0;
+    invoice.advancePay = rawDue < 0 ? roundMoneyAmount(Math.abs(rawDue)) : 0;
 
     const updated = await invoice.save();
     return res.status(200).json({
@@ -1092,6 +1119,26 @@ const getInvoiceSummary = async (req, res) => {
     } else {
       const branchInv = await mergeBranchScopedQuery(req);
       if (branchInv) Object.assign(matchQuery, branchInv);
+    }
+
+    const summaryFilterPatientIds = await resolveInvoiceFilterPatientIds(req, {
+      patientMR,
+      patientName: req.query.patientName,
+      patientPhone: req.query.patientPhone,
+    });
+    if (summaryFilterPatientIds !== null) {
+      if (summaryFilterPatientIds.length === 0) {
+        matchQuery.patientId = { $in: [] };
+      } else if (matchQuery.patientId && matchQuery.patientId.$in) {
+        matchQuery.patientId = {
+          $in: intersectObjectIdLists(
+            matchQuery.patientId.$in,
+            summaryFilterPatientIds,
+          ),
+        };
+      } else {
+        matchQuery.patientId = { $in: summaryFilterPatientIds };
+      }
     }
 
     // Apply same filters as getinvoices
@@ -1168,58 +1215,6 @@ const getInvoiceSummary = async (req, res) => {
         {
           $match: {
             'doctorData.departmentId': new Types.ObjectId(departmentId)
-          }
-        }
-      );
-    }
-
-    if (patientMR && patientMR.trim() !== '') {
-      pipeline.push(
-        {
-          $lookup: {
-            from: 'patients',
-            localField: 'patientId',
-            foreignField: '_id',
-            as: 'patientData'
-          }
-        },
-        {
-          $match: {
-            'patientData.mr': new RegExp(patientMR, 'i')
-          }
-        }
-      );
-    }
-    if (req.query.patientName && req.query.patientName.trim() !== '') {
-      pipeline.push(
-        {
-          $lookup: {
-            from: 'patients',
-            localField: 'patientId',
-            foreignField: '_id',
-            as: 'patientData'
-          }
-        },
-        {
-          $match: {
-            'patientData.name': new RegExp(req.query.patientName, 'i')
-          }
-        }
-      );
-    }
-    if (req.query.patientPhone && req.query.patientPhone.trim() !== '') {
-      pipeline.push(
-        {
-          $lookup: {
-            from: 'patients',
-            localField: 'patientId',
-            foreignField: '_id',
-            as: 'patientData'
-          }
-        },
-        {
-          $match: {
-            'patientData.phone': new RegExp(req.query.patientPhone, 'i')
           }
         }
       );
