@@ -36,6 +36,7 @@ const bedDetailRouter = require("./routes/bedDetailRoutes.js");
 const birthCertificateRouter = require("./routes/birthCertificateRoutes.js");
 const deathCertificateRouter = require("./routes/deathCertificateRoutes.js");
 const admitPatientRouter = require("./routes/admitPatientRoutes.js");
+const bedRoomTransferHistoryRouter = require("./routes/bedRoomTransferHistoryRoutes.js");
 const dischargePatientRouter = require("./routes/dischargePatientRoutes.js");
 const roomDetailRouter = require("./routes/roomDetailRoutes.js");
 const loginRouter = require("./routes/loginRoutes.js");
@@ -92,12 +93,14 @@ app.use("/apis/bedDetail", bedDetailRouter);
 app.use("/apis/birthCertificate", birthCertificateRouter);
 app.use("/apis/deathCertificate", deathCertificateRouter);
 app.use("/apis/admitPatient", admitPatientRouter);
+app.use("/apis/bedRoomTransferHistory", bedRoomTransferHistoryRouter);
 app.use("/apis/dischargePatient", dischargePatientRouter);
 app.use("/apis/roomDetail", roomDetailRouter);
 app.use("/apis/login", loginRouter);
 app.use("/apis/storeClosing", storeClosingRouter);
 app.use("/apis/branch", branchRouter);
 app.use("/apis/role", roleRouter);
+app.use("/apis/time", require("./routes/timeRoutes.js"));
 
 
 

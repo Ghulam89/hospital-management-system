@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Modal from '../../components/modal';
 import { MdClose } from 'react-icons/md';
 import axios from 'axios';
@@ -129,6 +129,43 @@ function isProcCostingRequiredFromDate(procedureDate: string | undefined): boole
   return procStart.getTime() <= todayStart.getTime();
 }
 
+function isMongoObjectId(id: unknown): boolean {
+  return /^[0-9a-fA-F]{24}$/i.test(String(id || '').trim());
+}
+
+type ProcedureRowPricingState = {
+  rate: number;
+  quantity: number;
+  amount: number;
+  discount: number;
+  discountType: number;
+  deductDiscount: string;
+};
+
+function procedureRowGross(row?: ProcedureRowPricingState | null): number {
+  if (!row) return 0;
+  const fromAmount = Number(row.amount);
+  if (Number.isFinite(fromAmount) && fromAmount > 0) return fromAmount;
+  const rate = Number(row.rate) || 0;
+  const qty = Math.max(1, Number(row.quantity) || 1);
+  return rate * qty;
+}
+
+function isFreeProcedurePricing(row: ProcedureRowPricingState): boolean {
+  const gross = procedureRowGross(row);
+  if (gross <= 0) return false;
+  const discount = Number(row.discount) || 0;
+  if (Number(row.discountType) === 1) return discount >= 100;
+  return discount >= gross;
+}
+
+function formatMasterDiscountRef(discount: number, discountType: number): string {
+  const val = Number(discount) || 0;
+  if (val <= 0) return '';
+  if (Number(discountType) === 1) return `${val}%`;
+  return `Rs. ${val}`;
+}
+
 type AddProcedureExpenseProps = {
   isModalOpen: boolean;
   setIsModalOpen: (open: boolean) => void;
@@ -139,6 +176,10 @@ type AddProcedureExpenseProps = {
   procedureDate?: string;
   /** Row-level Performed By — counts as doctor for validation when costing is required */
   performedBy?: string;
+  /** Current invoice procedure row pricing — discount / deduct rules */
+  procedureRowState?: ProcedureRowPricingState;
+  /** Mongo procedure id — loads master discount reference */
+  mongoProcedureId?: string;
   onLocalExpenseAdd: (procedureRowId: number | null, expenseBundle: any) => void;
 };
 
@@ -150,6 +191,8 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
   selectedProcedureId,
   procedureDate,
   performedBy,
+  procedureRowState,
+  mongoProcedureId,
   onLocalExpenseAdd,
 }) => {
   const [isSaving, setIsSaving] = useState(false);
@@ -161,6 +204,115 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
   const [assistedByRows, setAssistedByRows] = useState<StaffRefRow[]>([]);
   const [receptionRows, setReceptionRows] = useState<StaffRefRow[]>([]);
   const [consumptions, setConsumptions] = useState<ConsumptionRow[]>([]);
+  const [isFreeProcedure, setIsFreeProcedure] = useState(false);
+  const [rowDiscount, setRowDiscount] = useState(0);
+  const [rowDiscountType, setRowDiscountType] = useState(0);
+  const [deductDiscount, setDeductDiscount] = useState('Hospital & Doctor');
+  const [masterDiscountRef, setMasterDiscountRef] = useState('');
+
+  const discountBeforeFreeRef = useRef<{ discount: number; discountType: number } | null>(null);
+
+  const syncPricingFromRow = (row?: ProcedureRowPricingState | null, savedPricing?: any) => {
+    const base: ProcedureRowPricingState = {
+      rate: Number(row?.rate) || 0,
+      quantity: Math.max(1, Number(row?.quantity) || 1),
+      amount: Number(row?.amount) || 0,
+      discount: Number(row?.discount) || 0,
+      discountType: Number(row?.discountType) === 1 ? 1 : 0,
+      deductDiscount:
+        row?.deductDiscount === 'Hospital' || row?.deductDiscount === 'Doctor'
+          ? row.deductDiscount
+          : 'Hospital & Doctor',
+    };
+    if (savedPricing && typeof savedPricing === 'object') {
+      base.discount = Number(savedPricing.discount) || 0;
+      base.discountType = Number(savedPricing.discountType) === 1 ? 1 : 0;
+      base.deductDiscount =
+        savedPricing.deductDiscount === 'Hospital' || savedPricing.deductDiscount === 'Doctor'
+          ? savedPricing.deductDiscount
+          : 'Hospital & Doctor';
+      if (savedPricing.isFreeProcedure) {
+        const gross = procedureRowGross(base);
+        base.discount = gross;
+        base.discountType = 0;
+      }
+    }
+    setRowDiscount(base.discount);
+    setRowDiscountType(base.discountType);
+    setDeductDiscount(base.deductDiscount);
+
+    const savedIsFree =
+      savedPricing && typeof savedPricing.isFreeProcedure === 'boolean'
+        ? savedPricing.isFreeProcedure
+        : isFreeProcedurePricing(base);
+
+    setIsFreeProcedure(savedIsFree);
+    discountBeforeFreeRef.current = null;
+    if (savedIsFree) {
+      setRowDiscount(0);
+      setRowDiscountType(0);
+    }
+  };
+
+  const pricingInitKey = useRef('');
+  useEffect(() => {
+    if (!isModalOpen) {
+      pricingInitKey.current = '';
+      return;
+    }
+    const key = `${selectedExpense?._id || 'new'}:${mongoProcedureId || ''}`;
+    if (pricingInitKey.current === key) return;
+    pricingInitKey.current = key;
+    syncPricingFromRow(procedureRowState, selectedExpense?.procedurePricing);
+  }, [isModalOpen, selectedExpense?._id, selectedExpense?.procedurePricing, mongoProcedureId, procedureRowState]);
+
+  useEffect(() => {
+    if (!isModalOpen || !mongoProcedureId) {
+      setMasterDiscountRef('');
+      return;
+    }
+    let cancelled = false;
+    axios
+      .get(`${Base_url}/apis/procedure/get/${mongoProcedureId}`)
+      .then((res) => {
+        if (cancelled) return;
+        const proc = res?.data?.data;
+        const label = formatMasterDiscountRef(
+          Number(proc?.discount) || 0,
+          Number(proc?.discountType) || 0,
+        );
+        setMasterDiscountRef(label);
+      })
+      .catch(() => {
+        if (!cancelled) setMasterDiscountRef('');
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isModalOpen, mongoProcedureId]);
+
+  const grossLineAmount = procedureRowGross(procedureRowState);
+
+  const handleFreeProcedureToggle = (checked: boolean) => {
+    if (checked) {
+      if (!isFreeProcedure) {
+        discountBeforeFreeRef.current = {
+          discount: rowDiscount,
+          discountType: rowDiscountType,
+        };
+      }
+      setIsFreeProcedure(true);
+      setRowDiscount(0);
+      setRowDiscountType(0);
+      return;
+    }
+
+    const saved = discountBeforeFreeRef.current;
+    setIsFreeProcedure(false);
+    setRowDiscount(saved?.discount ?? 0);
+    setRowDiscountType(saved?.discountType ?? 0);
+    discountBeforeFreeRef.current = null;
+  };
 
   useEffect(() => {
     if (isModalOpen) {
@@ -184,6 +336,47 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
                   : 'value',
             }))
           : [];
+        // Seed doctor labels from procedure-master / invoice bundle so branch users
+        // still see the selected doctor before AsyncPaginate / get-by-id resolves.
+        const seededFromShares: Doctor[] = [];
+        for (const d of Array.isArray(selectedExpense.doctorShares)
+          ? selectedExpense.doctorShares
+          : []) {
+          const id = refId((d as any)?.doctorId ?? (d as any)?.userId ?? (d as any)?.doctor);
+          if (!id) continue;
+          const rawDoc = (d as any)?.doctorId;
+          const nameFromPop =
+            typeof rawDoc === 'object' && rawDoc != null && 'name' in rawDoc
+              ? String((rawDoc as { name?: string }).name || '')
+              : '';
+          const name =
+            nameFromPop ||
+            String((d as any)?.doctorName || (d as any)?.name || '').trim();
+          if (!name) continue;
+          const seed: Doctor = { _id: id, name };
+          const sp =
+            typeof rawDoc === 'object' && rawDoc != null
+              ? (rawDoc as { sharePrice?: unknown }).sharePrice
+              : undefined;
+          const st =
+            typeof rawDoc === 'object' && rawDoc != null
+              ? (rawDoc as { shareType?: unknown }).shareType
+              : undefined;
+          if (sp != null && String(sp).trim() !== '') seed.sharePrice = String(sp);
+          if (st != null && String(st).trim() !== '') seed.shareType = String(st);
+          seededFromShares.push(seed);
+        }
+        if (seededFromShares.length > 0) {
+          setDoctors((prev) => {
+            const out = [...prev];
+            for (const nd of seededFromShares) {
+              const i = out.findIndex((x) => x._id === nd._id);
+              if (i >= 0) out[i] = { ...out[i], ...nd };
+              else out.push(nd);
+            }
+            return out;
+          });
+        }
         const normalizedConsumptions: ConsumptionRow[] = Array.isArray(selectedExpense.consumptions)
           ? selectedExpense.consumptions.map((c: any, i: number) => ({
               id: typeof c.id === 'number' ? c.id : i + 1,
@@ -220,19 +413,29 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
             }))
           : [];
         setExpenses(normalizedExpenses);
-        setDoctorShares(normalizedDoctorShares);
+        setDoctorShares(
+          normalizedDoctorShares.length
+            ? normalizedDoctorShares
+            : isMongoObjectId(performedBy)
+              ? [{ id: 1, doctorId: String(performedBy).trim(), share: NaN, shareType: 'value' as const }]
+              : [{ id: 1, doctorId: '', share: NaN, shareType: 'value' as const }],
+        );
         setAssistedByRows(normalizedAssisted);
         setReceptionRows(normalizedReception);
         setConsumptions(normalizedConsumptions);
       } else {
         setExpenses([]);
-        setDoctorShares([]);
+        setDoctorShares(
+          isMongoObjectId(performedBy)
+            ? [{ id: 1, doctorId: String(performedBy).trim(), share: NaN, shareType: 'value' }]
+            : [{ id: 1, doctorId: '', share: NaN, shareType: 'value' }],
+        );
         setAssistedByRows([]);
         setReceptionRows([]);
         setConsumptions([]);
       }
     }
-  }, [isModalOpen, selectedExpense]);
+  }, [isModalOpen, selectedExpense, performedBy]);
 
   const loadDoctorOptions: LoadOptions<DoctorOption, never, { page: number }> = async (
     searchQuery,
@@ -626,16 +829,18 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
       return;
     }
     if (costingRequired) {
-      const hasAssisted = assistedByRows.some((r) => hexId(String(r.userId || '').trim()));
-      if (!hasAssisted) {
-        toast.error('Add at least one staff under Assisted By (required when procedure date is today or earlier)');
-        return;
-      }
-      const hasReception = receptionRows.some((r) => hexId(String(r.userId || '').trim()));
-      if (!hasReception) {
-        toast.error('Add at least one staff under Reception (required when procedure date is today or earlier)');
-        return;
-      }
+      // TEMP: Assisted By optional — uncomment when required again
+      // const hasAssisted = assistedByRows.some((r) => hexId(String(r.userId || '').trim()));
+      // if (!hasAssisted) {
+      //   toast.error('Add at least one staff under Assisted By (required when procedure date is today or earlier)');
+      //   return;
+      // }
+      // TEMP: Reception staff optional — uncomment when required again
+      // const hasReception = receptionRows.some((r) => hexId(String(r.userId || '').trim()));
+      // if (!hasReception) {
+      //   toast.error('Add at least one staff under Reception (required when procedure date is today or earlier)');
+      //   return;
+      // }
     }
     const enrichedExpenses = expenses.map((e) => ({
       ...e,
@@ -669,6 +874,11 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
         .map((d) => doctors.find((doc) => doc._id === d.doctorId) || null)
         .find((doc) => !!doc) || null;
 
+    const pricingDiscount = isFreeProcedure
+      ? grossLineAmount
+      : Math.max(0, Number(rowDiscount) || 0);
+    const pricingDiscountType = isFreeProcedure ? 0 : (Number(rowDiscountType) === 1 ? 1 : 0);
+
     const bundle = {
       expenses: enrichedExpenses,
       doctorShares: enrichedDoctorShares,
@@ -683,7 +893,19 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
       assistedBy: assistedByClean,
       receptionStaff: receptionClean,
       consumptions,
+      procedurePricing: {
+        discount: pricingDiscount,
+        discountType: pricingDiscountType,
+        deductDiscount,
+        isFreeProcedure,
+      },
       _id: selectedExpense?._id || Date.now().toString(),
+      ...(selectedExpense?.fromProcedureMaster
+        ? {
+            fromProcedureMaster: true,
+            sourceProcedureId: selectedExpense.sourceProcedureId,
+          }
+        : {}),
     };
     setIsSaving(true);
     try {
@@ -702,6 +924,74 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
       </div>
       <hr className="border-gray dark:border-gray-700" />
       <div className="p-6 space-y-6">
+        <div className="rounded-lg border border-stroke dark:border-strokedark p-4 space-y-4">
+          <h2 className="text-sm font-semibold text-gray-800 dark:text-white">Procedure pricing</h2>
+          <label className="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
+            <input
+              type="checkbox"
+              className="h-4 w-4"
+              checked={isFreeProcedure}
+              onChange={(e) => handleFreeProcedureToggle(e.target.checked)}
+            />
+            Free procedure
+          </label>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="md:col-span-2">
+              <label className="block mb-2 text-sm text-gray-700 dark:text-gray-300">Discount (invoice)</label>
+              <div className="flex gap-2">
+                <input
+                  type="number"
+                  min="0"
+                  max={rowDiscountType === 1 ? 100 : grossLineAmount || undefined}
+                  step="0.01"
+                  className="w-full rounded border-[1.5px] border-stroke bg-transparent py-2 px-3 text-black outline-none transition focus:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white"
+                  value={isFreeProcedure ? grossLineAmount : rowDiscount}
+                  onFocus={() => {
+                    if (isFreeProcedure) {
+                      setIsFreeProcedure(false);
+                      setRowDiscount(grossLineAmount);
+                    }
+                  }}
+                  onChange={(e) => {
+                    if (isFreeProcedure) setIsFreeProcedure(false);
+                    setRowDiscount(parseFloat(e.target.value) || 0);
+                  }}
+                />
+                <select
+                  className="w-28 rounded border-[1.5px] border-stroke bg-transparent py-2 px-2 text-black outline-none transition focus:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white"
+                  value={rowDiscountType}
+                  onChange={(e) => {
+                    if (isFreeProcedure) setIsFreeProcedure(false);
+                    setRowDiscountType(parseInt(e.target.value, 10) || 0);
+                  }}
+                >
+                  <option value={0}>Amount</option>
+                  <option value={1}>%</option>
+                </select>
+              </div>
+              {masterDiscountRef ? (
+                <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  Master discount (reference): {masterDiscountRef}
+                </p>
+              ) : null}
+            </div>
+            <div>
+              <label className="block mb-2 text-sm text-gray-700 dark:text-gray-300">
+                Deduct discount before doctor share
+              </label>
+              <select
+                className="w-full rounded border-[1.5px] border-stroke bg-transparent py-2 px-3 text-black outline-none transition focus:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white"
+                value={deductDiscount}
+                onChange={(e) => setDeductDiscount(e.target.value)}
+              >
+                <option value="Hospital & Doctor">Hospital &amp; Doctor</option>
+                <option value="Hospital">Hospital</option>
+                <option value="Doctor">Doctor</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
         <div className="rounded-lg border border-stroke dark:border-strokedark p-4 space-y-3">
           <h2 className="text-sm font-semibold text-gray-800 dark:text-white">Procedure expenses</h2>
           {expenses.length > 0 && (
@@ -848,10 +1138,16 @@ const AddProcedureExpense: React.FC<AddProcedureExpenseProps> = ({
               </button>
             </div>
           )) : null}
-          <button type="button" onClick={addDoctorShareRow} className="px-3 py-2 bg-primary text-white rounded-md w-fit">
+          <button
+            type="button"
+            onClick={addDoctorShareRow}
+            className="px-3 py-2 bg-primary text-white rounded-md w-fit"
+          >
             Add doctor
           </button>
-          <span className="text-xs text-gray-500 mt-1">One or more doctors with share splits. Shown as &quot;Doctor&quot; on the invoice.</span>
+          <span className="text-xs text-gray-500 mt-1">
+            One or more doctors with share splits. Shown as &quot;Doctor&quot; on the invoice.
+          </span>
         </div>
 
         <div className="grid grid-cols-1 gap-4 rounded-lg border border-stroke dark:border-strokedark p-4">

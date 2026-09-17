@@ -26,24 +26,37 @@ function departmentVisibilityOrFilter(branchObjectId) {
  * - User with branchId: global departments + departments for their branch.
  */
 async function getScopedDepartmentIds(req) {
-  if (!req.user) return null;
-
-  const role = normalizeRole(req.user.role);
-  if (role === 'superadmin' || role === 'super admin') {
-    const bidStr = pickValidBranchOidString(req.query.branchId);
-    if (bidStr) {
-      const oid = new mongoose.Types.ObjectId(bidStr);
-      const rows = await Department.find(departmentVisibilityOrFilter(oid)).select('_id').lean();
-      return rows.map((r) => r._id);
-    }
-    return null;
+  if (req && req._scopedDepartmentIds !== undefined) {
+    return req._scopedDepartmentIds;
   }
 
-  const ub = await resolveBranchIdForNonSuperAdmin(req);
-  if (!ub) return null;
+  let result = null;
+  if (!req.user) {
+    result = null;
+  } else {
+    const role = normalizeRole(req.user.role);
+    if (role === 'superadmin' || role === 'super admin') {
+      const bidStr = pickValidBranchOidString(req.query.branchId);
+      if (bidStr) {
+        const oid = new mongoose.Types.ObjectId(bidStr);
+        const rows = await Department.find(departmentVisibilityOrFilter(oid)).select('_id').lean();
+        result = rows.map((r) => r._id);
+      } else {
+        result = null;
+      }
+    } else {
+      const ub = await resolveBranchIdForNonSuperAdmin(req);
+      if (!ub) {
+        result = null;
+      } else {
+        const rows = await Department.find(departmentVisibilityOrFilter(ub)).select('_id').lean();
+        result = rows.map((r) => r._id);
+      }
+    }
+  }
 
-  const rows = await Department.find(departmentVisibilityOrFilter(ub)).select('_id').lean();
-  return rows.map((r) => r._id);
+  if (req) req._scopedDepartmentIds = result;
+  return result;
 }
 
 async function getScopedRoomIds(req) {
@@ -266,6 +279,29 @@ async function branchDocumentVisible(req, branchIdOnDoc) {
 }
 
 /**
+ * Strict gate for DELETE: entry may only be deleted on the branch it belongs to.
+ * - Unauthenticated → false
+ * - Superadmin with no branch filter → true (any branch)
+ * - Superadmin with navbar branch selected OR branch staff → doc.branchId must match that branch
+ * - Missing/null doc.branchId → false for branch-scoped actors (no cross-branch / orphan deletes)
+ */
+async function branchDocumentDeletable(req, branchIdOnDoc) {
+  if (!req?.user) return false;
+  const role = normalizeRole(req.user.role);
+  const isSuper = role === 'superadmin' || role === 'super admin';
+  const q = await mergeBranchScopedQuery(req);
+
+  if (isSuper && q === null) return true;
+  if (q === null) return false;
+  if (branchIdOnDoc == null || branchIdOnDoc === '') return false;
+
+  return (
+    normalizeBranchComparableId(branchIdOnDoc) ===
+    normalizeBranchComparableId(q.branchId)
+  );
+}
+
+/**
  * Hospital-wide pharmacy/expense catalog rows may use branchId null.
  * Any authenticated staff may use them in-context (e.g. supplier ledger); scoped rows match the user's branch.
  */
@@ -284,10 +320,20 @@ async function catalogEntityVisibleForStaff(req, branchIdOnDoc) {
  * Uses Visits + Invoices + legacy Patient.branchId so global patients appear once they interact with a branch.
  */
 async function getScopedPatientIds(req) {
+  if (req && req._scopedPatientIds !== undefined) {
+    return req._scopedPatientIds;
+  }
+
   const f = await mergePatientListBranchFilter(req);
-  if (f === null) return null;
+  if (f === null) {
+    if (req) req._scopedPatientIds = null;
+    return null;
+  }
   const branchId = f.branchId;
-  if (!branchId) return [];
+  if (!branchId) {
+    if (req) req._scopedPatientIds = [];
+    return [];
+  }
 
   const [fromVisits, fromInvoices, fromLegacyPatients, fromAppointments] =
     await Promise.all([
@@ -306,9 +352,12 @@ async function getScopedPatientIds(req) {
   for (const id of fromLegacyPatients) if (id) set.add(String(id));
   for (const id of fromAppointments) if (id) set.add(String(id));
 
-  return [...set]
+  const result = [...set]
     .filter((id) => mongoose.Types.ObjectId.isValid(id))
     .map((id) => new mongoose.Types.ObjectId(id));
+
+  if (req) req._scopedPatientIds = result;
+  return result;
 }
 
 /**
@@ -343,8 +392,15 @@ async function applyPatientIdScopeToQuery(req, query) {
  * May this request access this patient's record?
  * Superadmin: yes. Branch user: only if patient has activity (visit/invoice) at that branch or legacy Patient.branchId.
  */
+function normalizePatientIdRef(patientId) {
+  if (!patientId) return null;
+  if (typeof patientId === 'object' && patientId._id != null) return patientId._id;
+  return patientId;
+}
+
 async function patientVisibleForRequest(req, patientId) {
-  if (!patientId || !mongoose.Types.ObjectId.isValid(String(patientId))) return false;
+  const pidRef = normalizePatientIdRef(patientId);
+  if (!pidRef || !mongoose.Types.ObjectId.isValid(String(pidRef))) return false;
   if (!req.user) return false;
 
   const role = normalizeRole(req.user.role);
@@ -354,7 +410,7 @@ async function patientVisibleForRequest(req, patientId) {
   if (f === null || !f.branchId) return false;
 
   const bid = f.branchId;
-  const pid = new mongoose.Types.ObjectId(String(patientId));
+  const pid = new mongoose.Types.ObjectId(String(pidRef));
 
   const [v, inv, legacy, apt] = await Promise.all([
     Visit.findOne({ patientId: pid, branchId: bid }).select('_id').lean(),
@@ -390,6 +446,7 @@ module.exports = {
   loadBranchIdFromUserDoc,
   assignBranchIdForCreate,
   branchDocumentVisible,
+  branchDocumentDeletable,
   catalogEntityVisibleForStaff,
   getScopedPatientIds,
   applyPatientIdScopeToQuery,

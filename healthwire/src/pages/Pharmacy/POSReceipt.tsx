@@ -51,37 +51,88 @@ export default function POSReceipt() {
       ? data.payment[0]?.method || 'Cash'
       : 'Cash';
 
-  /** Net pack qty for receipt: sales +, returns − (uses returnQuantity or full return qty when isReturn). */
-  const posLineNetPackContribution = (it: any): number => {
-    const isReturn = Boolean(it?.isReturn);
-    const Q = Number(it?.quantity) || 0;
-    const Rstored = Math.max(0, Number(it?.returnQuantity) || 0);
-    const effectiveReturn = Rstored > 0 ? Rstored : isReturn ? Q : 0;
-    const isReturnLine = isReturn || effectiveReturn > 0;
+  /** Qty on receipt: minus only for returned units (returnQuantity); kept/sale qty stays positive. */
+  const getReceiptLineQty = (it: Record<string, unknown>): number => {
+    const Q = Math.max(0, Number(it?.quantity) || 0);
+    const R = Math.max(0, Number(it?.returnQuantity) || 0);
 
-    if (!isReturnLine) return Q;
-    if (Q > 0 && effectiveReturn > 0 && effectiveReturn < Q) return Q - effectiveReturn;
-    if (effectiveReturn > 0) return -effectiveReturn;
+    if (R > 0) return -R;
+    if (Q > 0) return Q;
     return 0;
+  };
+
+  const isReceiptReturnLine = (it: Record<string, unknown>): boolean =>
+    Math.max(0, Number(it?.returnQuantity) || 0) > 0;
+
+  const getReceiptLineTotal = (it: Record<string, unknown>, qty: number): number => {
+    const stored = Number(it?.totalAmount ?? it?.netAmount ?? 0);
+    const rate = Number(it?.rate) || 0;
+    const R = Math.max(0, Number(it?.returnQuantity) || 0);
+    const Q = Math.max(0, Number(it?.quantity) || 0);
+
+    if (qty < 0 || R > 0) {
+      if (stored < -0.0001) return stored;
+      if (rate > 0 && R > 0) {
+        const gross = rate * R;
+        const discount = Number(it?.discount) || 0;
+        const discSlice = Q > 0 && discount > 0 ? (discount * R) / Q : 0;
+        return -Math.max(0, Math.round((gross - discSlice) * 100) / 100);
+      }
+      if (qty < 0 && rate > 0) {
+        return Math.round(qty * rate * 100) / 100;
+      }
+    }
+
+    return stored;
+  };
+
+  const inferReceiptQtyFromAmounts = (it: Record<string, unknown>): number => {
+    const R = Math.max(0, Number(it?.returnQuantity) || 0);
+    if (R > 0) return -R;
+
+    const rate = Number(it?.rate) || 0;
+    if (rate <= 0) return 0;
+    const total = Number(it?.totalAmount) || 0;
+    const net = Number(it?.netAmount) || 0;
+    const amount = Math.abs(total) > 0.0001 ? Math.abs(total) : Math.abs(net);
+    if (amount <= 0.0001) return 0;
+    const packs = Math.round((amount / rate) * 1000) / 1000;
+    return packs > 0 ? packs : 0;
+  };
+
+  const lineProductName = (it: Record<string, unknown>): string => {
+    const ref = it?.pharmItemId;
+    if (ref && typeof ref === 'object' && ref !== null && 'name' in ref) {
+      const n = String((ref as { name?: string }).name || '').trim();
+      if (n) return n;
+    }
+    return String(it?.itemName || '').trim() || '-';
   };
 
   const formatReceiptQty = (qty: number): string => {
     const n = Number(qty);
     if (!Number.isFinite(n) || n === 0) return '0';
-    return n > 0 ? String(n) : String(n);
+    return String(n);
   };
 
   const groupedItems = (() => {
     const arr = Array.isArray(data?.allItem) ? data.allItem : [];
-    const map = new Map<string, { name: string; rate: number; qty: number; total: number; isReturn: boolean }>();
-    for (const it of arr) {
-      const isReturnLine =
-        Boolean(it?.isReturn) || Math.max(0, Number(it?.returnQuantity) || 0) > 0;
-      const key = `${it?.pharmItemId?._id || it?.pharmItemId || it?.itemName || ''}|${String(it?.unit || '')}|${String(it?.batchNumber || '')}|${isReturnLine ? 'R' : 'S'}`;
-      const name = it?.pharmItemId?.name || it?.itemName || '-';
+    const map = new Map<
+      string,
+      { name: string; rate: number; qty: number; total: number; isReturn: boolean }
+    >();
+    for (const raw of arr) {
+      const it = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+      const isReturnLine = isReceiptReturnLine(it);
+      const key = `${String(it?.pharmItemId && typeof it.pharmItemId === 'object' ? (it.pharmItemId as { _id?: string })._id : it?.pharmItemId || '')}|${String(it?.unit || '')}|${String(it?.batchNumber || '')}|${isReturnLine ? 'R' : 'S'}`;
+      const name = lineProductName(it);
       const rate = Number(it?.rate || 0);
-      const qty = posLineNetPackContribution(it);
-      const total = Number(it?.totalAmount || 0);
+      let qty = getReceiptLineQty(it);
+      if (qty === 0) {
+        qty = inferReceiptQtyFromAmounts(it);
+      }
+      const total = getReceiptLineTotal(it, qty);
+      if (Math.abs(qty) < 0.0001 && Math.abs(total) < 0.0001) continue;
       if (!map.has(key)) {
         map.set(key, { name, rate, qty: 0, total: 0, isReturn: isReturnLine });
       }
@@ -91,7 +142,9 @@ export default function POSReceipt() {
       g.total += total;
       g.isReturn = g.isReturn || isReturnLine;
     }
-    return Array.from(map.values()).filter((g) => Number(g.qty || 0) !== 0);
+    return Array.from(map.values()).filter(
+      (g) => Math.abs(Number(g.qty || 0)) > 0.0001 || Math.abs(Number(g.total || 0)) > 0.0001,
+    );
   })();
 
   if (loading) {
@@ -188,7 +241,11 @@ export default function POSReceipt() {
               >
                 {formatReceiptQty(Number(it.qty || 0))}
               </div>
-              <div className="w-16 text-right">{Number(it.total || 0).toFixed(2)}</div>
+              <div
+                className={`w-16 text-right ${Number(it.total) < 0 ? 'text-red-700' : ''}`}
+              >
+                {Number(it.total || 0).toFixed(2)}
+              </div>
             </div>
           ))}
         </div>

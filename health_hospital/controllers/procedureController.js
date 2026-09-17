@@ -1,6 +1,39 @@
 const Procedure = require("../models/procedureModel");
 const Department = require("../models/departmentModel");
-const { getScopedDepartmentIds, idInList } = require("../utils/branchScope");
+const { getScopedDepartmentIds, idInList, resolveBranchIdForNonSuperAdmin} = require("../utils/branchScope");
+const { normalizeRole } = require("../middleware/auth");
+const { sanitizeProcedureBody } = require("../utils/sanitizeProcedureBody");
+
+/** Branch users may edit only procedures this branch created (procedure.branchId). */
+async function branchUserOwnsProcedureRecord(req, procedureRow) {
+  if (!req.user) return false;
+  const role = normalizeRole(req.user.role);
+  if (role === "superadmin" || role === "super admin") return true;
+  if (!procedureRow?.branchId) return false;
+  const userBranch = await resolveBranchIdForNonSuperAdmin(req);
+  if (!userBranch) return false;
+  return String(procedureRow.branchId) === String(userBranch);
+}
+
+async function buildProcedureCreatePayload(req, body) {
+  const payload = sanitizeProcedureBody(body);
+  const role = normalizeRole(req.user?.role);
+  // Super admin rows stay hospital-wide (no branchId) — visible to all, editable by super admin only.
+  if (role === "superadmin" || role === "super admin") {
+    return payload;
+  }
+  const userBranch = await resolveBranchIdForNonSuperAdmin(req);
+  if (userBranch) payload.branchId = userBranch;
+  if (req.user?._id) payload.createdBy = req.user._id;
+  return payload;
+}
+
+const procedurePopulate = [
+  { path: "departmentId", select: "name _id subDepartment branchId" },
+  { path: "doctorShares.doctorId", select: "name sharePrice shareType" },
+  { path: "defaultExpenses.expenseCategoryId", select: "name" },
+  { path: "consumptions.pharmItemId", select: "name" },
+];
 
 // 1. Create procedure
 const addprocedure = async (req, res) => {
@@ -24,8 +57,9 @@ const addprocedure = async (req, res) => {
         return res.status(403).json({ status: "fail", message: "Department not allowed for this branch" });
       }
 
-      const data = await Procedure.create({ ...req.body, });
-      return res.status(200).json({ status: "ok", data: data });
+      const data = await Procedure.create(await buildProcedureCreatePayload(req, req.body));
+      const populated = await Procedure.findById(data._id).populate(procedurePopulate);
+      return res.status(200).json({ status: "ok", data: populated || data });
     }
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -60,7 +94,11 @@ const addExcelprocedure = async (req, res) => {
         return res.status(403).json({ status: "fail", message: "Department not allowed for this branch" });
       }
 
-      const data = await Procedure.create({ ...req.body,departmentId:departmentId?._id });
+      const data = await Procedure.create(
+        await buildProcedureCreatePayload(req, {
+          ...req.body,
+          departmentId: departmentId?._id }),
+      );
       return res.status(200).json({ status: "ok", data: data });
     }
   } catch (err) {
@@ -96,11 +134,21 @@ const getprocedures = async (req, res) => {
         { name: { $regex: ".*" + search + ".*", $options: "i" } },
         { phone: { $regex: ".*" + search + ".*", $options: "i" } },
         { cnic: { $regex: ".*" + search + ".*", $options: "i" } },
-      ],
-    };
+      ] };
+
+    const andParts = [searchOr];
+    const activeRaw = String(req.query.isActive ?? "true").trim().toLowerCase();
+    if (activeRaw !== "all") {
+      if (activeRaw === "false" || activeRaw === "0") {
+        andParts.push({ isActive: false });
+      } else {
+        andParts.push({
+          $or: [{ isActive: true }, { isActive: { $exists: false } }, { isActive: null }] });
+      }
+    }
 
     const deptIds = await getScopedDepartmentIds(req);
-    let findQuery = searchOr;
+    let findQuery = andParts.length === 1 ? andParts[0] : { $and: andParts };
     if (deptIds !== null) {
       if (deptIds.length === 0) {
         return res.status(200).json({
@@ -114,14 +162,12 @@ const getprocedures = async (req, res) => {
           limit
         });
       }
-      findQuery = { $and: [searchOr, { departmentId: { $in: deptIds } }] };
+      findQuery = { $and: [...andParts, { departmentId: { $in: deptIds } }] };
     }
 
     const procedures = await Procedure.find(findQuery).sort({createdAt:-1}).populate({
         path: 'departmentId',
-        select: 'name _id subDepartment',
-       
-      })
+        select: 'name _id subDepartment branchId' })
       .limit(limit * 1)
       .skip((page - 1) * limit)
       .exec();
@@ -153,11 +199,7 @@ const getprocedures = async (req, res) => {
 const getprocedureById = async (req, res) => {
   try {
     const id = req.params.id;
-    const data = await Procedure.findById(id).populate({
-        path: 'departmentId',
-        select: 'name _id subDepartment',
-       
-      });
+    const data = await Procedure.findById(id).populate(procedurePopulate);
     if (!data) {
       return res.status(404).json({ status: "fail", message: "Procedure not found" });
     }
@@ -188,12 +230,33 @@ const updateprocedure = async (req, res) => {
     if (deptIds !== null && req.body.departmentId && !idInList(req.body.departmentId, deptIds)) {
       return res.status(403).json({ status: "fail", message: "Department not allowed for this branch" });
     }
+    const canMutate = await branchUserOwnsProcedureRecord(req, getImage);
+    if (!canMutate) {
+      return res.status(403).json({
+        status: "fail",
+        message: "You can only edit procedures your branch added" });
+    }
+
+    // Status-only toggle must not wipe other fields via sanitize defaults.
+    const bodyKeys = Object.keys(req.body || {}).filter((k) => req.body[k] !== undefined);
+    let updatePayload;
+    if (bodyKeys.length === 1 && bodyKeys[0] === "isActive") {
+      updatePayload = {
+        isActive: !(
+          req.body.isActive === false ||
+          req.body.isActive === "false" ||
+          req.body.isActive === 0 ||
+          req.body.isActive === "0"
+        ) };
+    } else {
+      updatePayload = sanitizeProcedureBody(req.body);
+    }
 
     const data = await Procedure.findByIdAndUpdate(
       id,
-      { ...req.body },
+      updatePayload,
       { new: true }
-    );
+    ).populate(procedurePopulate);
     return res.status(200).json({ status: "ok", data: data });
   } catch (err) {
     res.status(500).json({ error: err.message });

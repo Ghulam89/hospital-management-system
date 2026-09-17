@@ -6,19 +6,26 @@ import React, { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 import { Base_url } from '../../../utils/Base_url';
-import BranchSelectField from '../../../components/BranchSelectField';
+import BranchMultiSelectField from '../../../components/BranchMultiSelectField';
+import UserRoleSelectField from '../../../components/UserRoleSelectField';
+import { refreshStoredUserIfSelf } from '../../../utils/refreshStoredUser';
+import {
+  getUserDataFromStorage,
+  isSuperAdminRole,
+} from '../../../utils/branchScope';
 
 const UpdateDoctor = () => {
   const { id } = useParams();
   const [activeTab, setActiveTab] = useState('Biography Data');
   const [gender, setGender] = useState('');
   const [departmentId, setDepartmentId] = useState('');
-  const [branchId, setBranchId] = useState('');
+  const [branchIds, setBranchIds] = useState<string[]>([]);
   const [allDepartment, setAllDepartment] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [loading, setLoading] = useState(true);
-  /** Preserved from API so role/tabs are not edited on this form but stay in sync on save */
   const [serverUser, setServerUser] = useState(null);
+  const [roleKey, setRoleKey] = useState('doctor');
+  const isSuperAdmin = isSuperAdminRole(getUserDataFromStorage()?.role);
 
   // Main form state
   const [state, setState] = useState({
@@ -103,6 +110,7 @@ const UpdateDoctor = () => {
       const doctorData = response.data.data;
 
       setServerUser(doctorData);
+      setRoleKey(String(doctorData?.role || 'doctor').trim().toLowerCase());
 
       console.log(doctorData);
 
@@ -135,10 +143,23 @@ const UpdateDoctor = () => {
       // Set department
       setDepartmentId(doctorData.departmentId || '');
 
-      // Set branch
       const existingBranch =
         doctorData?.branchId?._id || doctorData?.branchId || '';
-      if (existingBranch) setBranchId(String(existingBranch));
+      try {
+        const branchRes = await axios.get(`${Base_url}/apis/user/doctor-branches/${id}`);
+        const loaded = Array.isArray(branchRes.data?.branchIds)
+          ? branchRes.data.branchIds.map(String).filter(Boolean)
+          : [];
+        if (isSuperAdminRole(getUserDataFromStorage()?.role) && loaded.length) {
+          setBranchIds(loaded);
+        } else if (existingBranch) {
+          setBranchIds([String(existingBranch)]);
+        } else if (loaded.length) {
+          setBranchIds([String(loaded[0])]);
+        }
+      } catch {
+        if (existingBranch) setBranchIds([String(existingBranch)]);
+      }
 
       // Set qualifications
       if (doctorData.qualification && doctorData.qualification.length > 0) {
@@ -369,6 +390,9 @@ const UpdateDoctor = () => {
     } else if (!state.shift) {
       toast.error('Must select shift!');
       return;
+    } else if (!branchIds.length) {
+      toast.error('Please select at least one branch');
+      return;
     }
 
     // Validate availability times
@@ -408,8 +432,7 @@ const UpdateDoctor = () => {
       followUpCharges: state.followUpCharges,
       sharePrice: state.sharePrice,
       shareType: state.shareType,
-      role: serverUser?.role || 'doctor',
-      tabs: Array.isArray(serverUser?.tabs) ? serverUser.tabs : [],
+      role: roleKey.trim().toLowerCase() || 'doctor',
       OPD: state.OPD,
       IPD: state.IPD,
       awards: state.awards,
@@ -454,25 +477,43 @@ const UpdateDoctor = () => {
       sundayDuration: availability.sundayDuration,
     };
 
-    if (branchId) (params as any).branchId = branchId;
-
     try {
       setIsSubmitting(true);
+
+      if (isSuperAdmin) {
+        const branchRes = await axios.put(`${Base_url}/apis/user/doctor-branches/${id}`, {
+          branchIds,
+          branchIdsCsv: branchIds.join(','),
+          profile: params,
+        });
+        if (branchRes.data.status === 'ok') {
+          await refreshStoredUserIfSelf(id);
+          toast.success(
+            branchRes.data.message ||
+              `Doctor updated in ${branchRes.data.branchCount || branchIds.length} branch(es)`,
+          );
+          navigate('/admin/users');
+        } else {
+          toast.error(branchRes.data.message || 'Failed to update doctor branches');
+        }
+        return;
+      }
+
       const res = await axios.put(`${Base_url}/apis/user/update/${id}`, params);
       if (res.data.status === 'ok') {
-        setIsSubmitting(false);
-        toast.success('Doctor updated successfully!');
+        await refreshStoredUserIfSelf(id);
+        toast.success(res.data.message || 'Doctor updated successfully');
         navigate('/admin/users');
       } else {
-        setIsSubmitting(false);
         toast.error(res.data.message || 'Failed to update doctor');
       }
     } catch (error) {
-      setIsSubmitting(false);
       console.error('Update error:', error);
       toast.error(
         error.response?.data?.message || 'An error occurred during update',
       );
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -665,7 +706,12 @@ const UpdateDoctor = () => {
                       </select>
                     </div>
 
-                    <BranchSelectField value={branchId} onChange={setBranchId} />
+                    <BranchMultiSelectField value={branchIds} onChange={setBranchIds} />
+                    <UserRoleSelectField
+                      screen="doctor"
+                      value={roleKey}
+                      onChange={setRoleKey}
+                    />
 
                     {/* Professional Information */}
                     <div>

@@ -179,7 +179,11 @@ const PharmacySales: React.FC = () => {
       key: 'totalAmount',
       width: 120,
       render: (paid: number, record: POSSale) => {
-        const total = paid + record.due;
+        const items = Array.isArray(record.allItem) ? record.allItem : [];
+        const total =
+          items.length > 0
+            ? items.reduce((s: number, it: any) => s + (Number(it?.totalAmount) || 0), 0)
+            : Number(paid || 0) + Number(record.due || 0) - Number(record.advance || 0);
         return (
           <div>
             <div className="font-semibold text-green-600">
@@ -191,7 +195,16 @@ const PharmacySales: React.FC = () => {
           </div>
         );
       },
-      sorter: (a: POSSale, b: POSSale) => (a.paid + a.due) - (b.paid + b.due),
+      sorter: (a: POSSale, b: POSSale) => {
+        const tot = (r: POSSale) => {
+          const items = Array.isArray(r.allItem) ? r.allItem : [];
+          if (items.length > 0) {
+            return items.reduce((s: number, it: any) => s + (Number(it?.totalAmount) || 0), 0);
+          }
+          return Number(r.paid || 0) + Number(r.due || 0) - Number(r.advance || 0);
+        };
+        return tot(a) - tot(b);
+      },
     },
     {
       title: 'Tax',

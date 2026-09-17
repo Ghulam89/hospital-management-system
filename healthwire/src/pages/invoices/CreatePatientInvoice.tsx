@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 import axios from 'axios';
 import { Base_url } from '../../utils/Base_url';
@@ -11,7 +11,12 @@ import { AsyncPaginate } from 'react-select-async-paginate';
 import { RiRefund2Line } from 'react-icons/ri';
 import { getClientPaymentBalance } from '../../utils/invoicePaymentSummary';
 import InvoiceClientBalanceRow from '../../components/invoices/InvoiceClientBalanceRow';
-
+import {
+  installmentAmountDisplay,
+  installmentAmountNumber,
+  InstallmentAmount,
+  parseInstallmentAmountInput,
+} from './paymentInstallmentUtils';
 type Procedure = {
   _id: string;
   name: string;
@@ -52,7 +57,7 @@ type PaymentInstallment = {
   id: number;
   date: string;
   method: string;
-  amount: number;
+  amount: InstallmentAmount;
   reference: string;
 };
 
@@ -163,6 +168,8 @@ const [isSubmitting, setIsSubmitting] = useState(false);
       reference: ''
     }
   ]);
+  /** Monotonic ids — never reuse after delete (avoids date-input DOM reuse). */
+  const paymentRowIdRef = useRef(2);
 
   const [invoiceNotes] = useState([
     'Procedures & Medicines once purchased are non-refundable.',
@@ -195,21 +202,17 @@ const [isSubmitting, setIsSubmitting] = useState(false);
     e.currentTarget.blur();
   };
 
-  const normalizeInstallmentAmount = (value: string) => {
-    if (value === '') return 0;
-    return Math.max(0, Number(value) || 0);
-  };
-
   const validateFirstInstallment = () => {
     if (!paymentInstallments.length) {
       toast.error('First payment installment is required');
       return false;
     }
 
-    if ((Number(paymentInstallments[0]?.amount) || 0) <= 0) {
-      toast.error('Please enter the first payment installment amount');
-      return false;
-    }
+    // TEMP: allow zero first payment — uncomment when required again
+    // if ((Number(paymentInstallments[0]?.amount) || 0) <= 0) {
+    //   toast.error('Please enter the first payment installment amount');
+    //   return false;
+    // }
 
     return true;
   };
@@ -383,27 +386,34 @@ const [isSubmitting, setIsSubmitting] = useState(false);
   };
 
   const addProcedure = () => {
-    setProcedures([...procedures, {
-      id: procedures.length + 1,
-      procedureId: '',
-      procedure: '',
-      description: '',
-      procedureDate: invoiceDate,
-      rate: 0,
-      quantity: 1,
-      amount: 0,
-      discount: 0,
-      discountType: 0,
-      tax: 'value',
-      deductDiscount: 'Hospital & Doctor',
-      performedBy: '',
-      doctorAmount: 0,
-      hospitalAmount: 0
-    }]);
+    setProcedures((prev) => {
+      const nextId = prev.reduce((max, p) => (p.id > max ? p.id : max), 0) + 1;
+      return [
+        ...prev,
+        {
+          id: nextId,
+          procedureId: '',
+          procedure: '',
+          description: '',
+          procedureDate: invoiceDate,
+          rate: 0,
+          quantity: 1,
+          amount: 0,
+          discount: 0,
+          discountType: 0,
+          tax: 'value',
+          deductDiscount: 'Hospital & Doctor',
+          performedBy: '',
+          doctorAmount: 0,
+          hospitalAmount: 0,
+        },
+      ];
+    });
   };
 
+  /** Remove only that row — never reindex or rewrite other rows' procedureDate. */
   const removeProcedure = (id: number) => {
-    setProcedures(procedures.filter(item => item.id !== id));
+    setProcedures((prev) => prev.filter((item) => item.id !== id));
   };
 
   const updateProcedure = (id: number, field: keyof ProcedureItem, value: any) => {
@@ -470,27 +480,28 @@ const [isSubmitting, setIsSubmitting] = useState(false);
 };
 
   const addPaymentInstallment = () => {
-    setPaymentInstallments([...paymentInstallments, {
-      id: paymentInstallments.length + 1,
-      date: localCalendarYmd(),
-      method: 'Cash',
-      amount: 0,
-      reference: ''
-    }]);
+    const nextId = paymentRowIdRef.current++;
+    setPaymentInstallments((prev) => [
+      ...prev,
+      {
+        id: nextId,
+        date: localCalendarYmd(),
+        method: 'Cash',
+        amount: 0,
+        reference: '',
+      },
+    ]);
   };
 
+  /** Remove only that payment — never reindex or rewrite other rows' dates. */
   const removePaymentInstallment = (id: number) => {
-    setPaymentInstallments(paymentInstallments.filter(item => item.id !== id));
+    setPaymentInstallments((prev) => prev.filter((item) => item.id !== id));
   };
 
   const updatePaymentInstallment = (id: number, field: keyof PaymentInstallment, value: any) => {
-    const updatedPayments = paymentInstallments.map(item => {
-      if (item.id === id) {
-        return { ...item, [field]: value };
-      }
-      return item;
-    });
-    setPaymentInstallments(updatedPayments);
+    setPaymentInstallments((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, [field]: value } : item)),
+    );
   };
 
   const isProcDated = (item: ProcedureItem) =>
@@ -554,7 +565,10 @@ const [isSubmitting, setIsSubmitting] = useState(false);
     Math.max(0, calculateBillBeforeInvoiceDiscount() - calculateInvoiceLevelDiscount());
 
   const calculateTotalPaid = () => {
-    return paymentInstallments.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+    return paymentInstallments.reduce(
+      (sum, item) => sum + installmentAmountNumber(item.amount),
+      0,
+    );
   };
 
   const calculateDue = () => {
@@ -792,7 +806,7 @@ const [isSubmitting, setIsSubmitting] = useState(false);
           const parsed = new Date(payment.date);
           return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : payment.date;
         })(),
-        paid: payment.amount,
+        paid: installmentAmountNumber(payment.amount),
         reference: payment.reference
       })),
       note: remarks,
@@ -866,13 +880,14 @@ const [isSubmitting, setIsSubmitting] = useState(false);
                 const v = e.target.value;
                 const prevTop = invoiceDate;
                 setInvoiceDate(v);
-                setProcedures((prev) => {
-                  const allEmptyOrSameAsTop = prev.every(
-                    (p) => !String(p.procedureDate || '').trim() || p.procedureDate === prevTop,
-                  );
-                  if (!allEmptyOrSameAsTop) return prev;
-                  return prev.map((p) => ({ ...p, procedureDate: v }));
-                });
+                // Only rows still following the old top date (or empty) — never overwrite custom dates.
+                setProcedures((prev) =>
+                  prev.map((p) =>
+                    !String(p.procedureDate || '').trim() || p.procedureDate === prevTop
+                      ? { ...p, procedureDate: v }
+                      : p,
+                  ),
+                );
               }}
             />
           </div>
@@ -989,6 +1004,7 @@ const [isSubmitting, setIsSubmitting] = useState(false);
                     </td>
                     <td className="px-1 py-3 whitespace-nowrap">
                       <input
+                        key={`proc-date-${item.id}`}
                         type="date"
                         title="Procedure date bills this row; empty counts as advance-only"
                         className="rounded border-[1.5px] border-stroke bg-transparent py-2 px-1 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
@@ -1139,6 +1155,7 @@ const [isSubmitting, setIsSubmitting] = useState(false);
                     <td className="px-1 py-3 whitespace-nowrap">
                       <div className="flex items-center gap-3">
                         <button
+                          type="button"
                           onClick={() => removeProcedure(item.id)}
                           className="text-red-500 hover:text-red-700"
                           title="Remove"
@@ -1211,9 +1228,12 @@ const [isSubmitting, setIsSubmitting] = useState(false);
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {paymentInstallments.map((item) => (
-                  <tr key={item.id} className="hover:bg-gray-50">
+                  <tr key={`payment-${item.id}`} className="hover:bg-gray-50">
                     <td className="px-4 py-3 whitespace-nowrap">
                       <input
+                        key={`pay-date-${item.id}`}
+                        name={`payment-date-${item.id}`}
+                        autoComplete="off"
                         type="date"
                         className="w-full rounded border-[1.5px] border-stroke bg-transparent py-2 px-3 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                         value={item.date}
@@ -1240,15 +1260,20 @@ const [isSubmitting, setIsSubmitting] = useState(false);
                         type="number"
                         min={0}
                         className="w-full rounded border-[1.5px] border-stroke bg-transparent py-2 px-3 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
-                        value={(Number(item.amount) || 0) === 0 ? '' : item.amount}
+                        value={installmentAmountDisplay(item.amount)}
                         placeholder="Enter amount"
                         onChange={(e) =>
                           updatePaymentInstallment(
                             item.id,
                             'amount',
-                            normalizeInstallmentAmount(e.target.value),
+                            parseInstallmentAmountInput(e.target.value),
                           )
                         }
+                        onBlur={() => {
+                          if (item.amount === '') {
+                            updatePaymentInstallment(item.id, 'amount', 0);
+                          }
+                        }}
                         onWheel={handleNumberInputWheel}
                       />
                     </td>
@@ -1263,6 +1288,7 @@ const [isSubmitting, setIsSubmitting] = useState(false);
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       <button
+                        type="button"
                         onClick={() => removePaymentInstallment(item.id)}
                         disabled={paymentInstallments.length === 1}
                         className={`text-red-500 hover:text-red-700 ${

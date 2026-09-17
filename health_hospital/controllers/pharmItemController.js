@@ -3,7 +3,7 @@ const PharmItem = require("../models/pharmItemModel");
 const PharmPos = require("../models/pharmPosModel");
 const PharmInboundStock = require("../models/pharmInboundStockModel");
 const mongoose = require("mongoose");
-const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible, resolveBranchIdForNonSuperAdmin, pickValidBranchOidString } = require("../utils/branchScope");
+const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible, branchDocumentDeletable, resolveBranchIdForNonSuperAdmin, pickValidBranchOidString } = require("../utils/branchScope");
 const { normalizeRole } = require("../middleware/auth");
 
 const escapeRegex = (s) => String(s || "").replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -721,7 +721,7 @@ const deletepharmItem = async (req, res) => {
   try {
     const id = req.params.id;
     const doc = await PharmItem.findById(id);
-    if (!doc || !(await branchDocumentVisible(req, doc.branchId))) {
+    if (!doc || !(await branchDocumentDeletable(req, doc.branchId))) {
       return res.status(404).json({ status: "fail", message: "Item not found" });
     }
     const role = normalizeRole(req.user.role);

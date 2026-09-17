@@ -1,14 +1,31 @@
-import { Link, useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 
 import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
+import { AsyncPaginate } from 'react-select-async-paginate';
+import { Base_url } from '../../../utils/Base_url';
+
+function computeNextAdmissionNo(rows) {
+  let max = 0;
+  for (const row of rows || []) {
+    const raw = String(row?.admissionNo || '').trim();
+    const match = raw.match(/(\d+)$/);
+    if (match) {
+      const n = parseInt(match[1], 10);
+      if (Number.isFinite(n)) max = Math.max(max, n);
+    }
+  }
+  return `ADM${String(max + 1).padStart(6, '0')}`;
+}
 
 const CreateAddmittedPatients = () => {
   const [gender, setGender] = useState('ward');
-
-  console.log(gender);
+  const [selectedPatient, setSelectedPatient] = useState(null);
+  const [selectedDoctor, setSelectedDoctor] = useState(null);
+  const [admissionNo, setAdmissionNo] = useState('');
+  const [admissionNoLoading, setAdmissionNoLoading] = useState(true);
 
   const handleGenderChange = (gender) => {
     setGender(gender);
@@ -34,20 +51,57 @@ const CreateAddmittedPatients = () => {
     procedureName: '',
   });
 
-  console.log(state);
-  
-
   const handleInputs = (e) => {
-    setState({ ...state, [e.target.name]: e.target.value });
+    setState((prev) => ({ ...prev, [e.target.name]: e.target.value }));
   };
-  console.log(state);
 
   const navigate = useNavigate();
 
+  const loadPatientOptions = async (searchQuery, _loadedOptions, { page }) => {
+    try {
+      const response = await axios.get(`${Base_url}/apis/patient/get`, {
+        params: { page, limit: 20, search: searchQuery || '', sort: 'name' },
+      });
+      const { data, totalPages } = response.data;
+      return {
+        options: (data || []).map((item) => ({
+          label: `${item.name}${item.mr ? ` (MR: ${item.mr})` : ''}`,
+          value: item._id,
+          patientData: item,
+        })),
+        hasMore: page < totalPages,
+        additional: { page: page + 1 },
+      };
+    } catch (error) {
+      console.error('Error fetching patients:', error);
+      return { options: [], hasMore: false, additional: { page: 1 } };
+    }
+  };
+
+  const loadDoctorOptions = async (searchQuery, _loadedOptions, { page }) => {
+    try {
+      const response = await axios.get(`${Base_url}/apis/user/get`, {
+        params: { page, limit: 20, search: searchQuery || '', role: 'doctor' },
+      });
+      const { data, totalPages } = response.data;
+      return {
+        options: (data || []).map((item) => ({
+          label: item.name,
+          value: item._id,
+          doctorData: item,
+        })),
+        hasMore: page < totalPages,
+        additional: { page: page + 1 },
+      };
+    } catch (error) {
+      console.error('Error fetching doctors:', error);
+      return { options: [], hasMore: false, additional: { page: 1 } };
+    }
+  };
+
   const SubmitFun = (e) => {
     e.preventDefault();
-    console.log(state);
-    
+
     if (!state.patientId) {
       toast('Must select  patient!');
     } else if (!gender) {
@@ -63,7 +117,7 @@ const CreateAddmittedPatients = () => {
         admissionTime: state.admissionTime,
         admissionReason: state.admissionReason,
         emergencyContact: state.emergencyContact,
-        admissionNo: state.admissionNo,
+        admissionNo: admissionNo || state.admissionNo,
         diagnosis: state.diagnosis,
         consultant: state.consultant,
         anesthetist: state.anesthetist,
@@ -75,7 +129,6 @@ const CreateAddmittedPatients = () => {
       if (gender === 'ward') {
         if (!state.wardId || !state.bedDetailId) {
           toast.error('Ward and Bed details are required');
-          setLoading(false);
           return;
         }
         data.wardId = state.wardId;
@@ -83,16 +136,13 @@ const CreateAddmittedPatients = () => {
       } else {
         if (!state.roomId || !state.roomDetailId) {
           toast.error('Room and Room details are required');
-          setLoading(false);
           return;
         }
         data.roomId = state.roomId;
         data.roomDetailId = state.roomDetailId;
       }
-      console.log(data);
-      
       axios
-        .post('https://api.holisticare.pk/apis/admitPatient/create', data)
+        .post(`${Base_url}/apis/admitPatient/create`, data)
         .then((res) => {
           console.log(res.data);
 
@@ -110,69 +160,77 @@ const CreateAddmittedPatients = () => {
     }
   };
 
-  const [allpatients, setAllPatients] = useState([]);
-  const [alldoctor, setAllDoctor] = useState([]);
   const [allWard, setAllWard] = useState([]);
   const [allBeds, setAllBeds] = useState([]);
   const [allRoom, setAllRoom] = useState([]);
   const [allRoomsDetail, setAllRoomsDetail] = useState([]);
+
+  useEffect(() => {
+    const fetchNextAdmissionNo = async () => {
+      setAdmissionNoLoading(true);
+      try {
+        try {
+          const res = await axios.get(`${Base_url}/apis/admitPatient/next-admission-no`);
+          if (res.data?.status === 'ok' && res.data?.nextAdmissionNo) {
+            setAdmissionNo(res.data.nextAdmissionNo);
+            setState((prev) => ({ ...prev, admissionNo: res.data.nextAdmissionNo }));
+            return;
+          }
+        } catch {
+          // API not deployed yet — compute from existing admissions
+        }
+
+        const res = await axios.get(`${Base_url}/apis/admitPatient/get`, {
+          params: { page: 1, limit: 1000 },
+        });
+        const next = computeNextAdmissionNo(res.data?.data);
+        setAdmissionNo(next);
+        setState((prev) => ({ ...prev, admissionNo: next }));
+      } catch {
+        const fallback = 'ADM000001';
+        setAdmissionNo(fallback);
+        setState((prev) => ({ ...prev, admissionNo: fallback }));
+      } finally {
+        setAdmissionNoLoading(false);
+      }
+    };
+
+    fetchNextAdmissionNo();
+  }, []);
+
   useEffect(() => {
     axios
-      .get(`https://api.holisticare.pk/apis/patient/get`)
+      .get(`${Base_url}/apis/ward/get`)
       .then((res) => {
-        console.log(res);
-        setAllPatients(res.data.data);
-      })
-      .catch((error) => {});
-
-
-
-      axios
-      .get(`https://api.holisticare.pk/apis/user/get`)
-      .then((res) => {
-        console.log(res);
-        
-        const doctors = res.data.data.filter(user => user.role === 'doctor');
-        setAllDoctor(doctors);
-      })
-      .catch((error) => {});
-
-
-      axios
-      .get(`https://api.holisticare.pk/apis/ward/get`)
-      .then((res) => {
-        console.log(res);
         setAllWard(res.data.data);
       })
-      .catch((error) => {});
+      .catch(() => {});
 
-      axios
-      .get(`https://api.holisticare.pk/apis/bedDetail/get?status=available&wardId=${state?.wardId}`)
+    axios
+      .get(`${Base_url}/apis/bedDetail/get`, {
+        params: { status: 'available', wardId: state?.wardId || undefined },
+      })
       .then((res) => {
-        console.log(res);
         setAllBeds(res.data.data);
       })
-      .catch((error) => {});
+      .catch(() => {});
 
-      axios
-      .get(`https://api.holisticare.pk/apis/room/get`)
+    axios
+      .get(`${Base_url}/apis/room/get`)
       .then((res) => {
-        console.log(res);
         setAllRoom(res.data.data);
       })
-      .catch((error) => {});
+      .catch(() => {});
 
-
-
-      axios
-      .get(`https://api.holisticare.pk/apis/roomDetail/get?status=available&roomId=${state?.roomId}`)
+    axios
+      .get(`${Base_url}/apis/roomDetail/get`, {
+        params: { status: 'available', roomId: state?.roomId || undefined },
+      })
       .then((res) => {
-        console.log(res.data,'adfdflkaja');
         setAllRoomsDetail(res.data.data);
       })
-      .catch((error) => {});
-
-  },[state?.wardId,state?.roomId]);
+      .catch(() => {});
+  }, [state?.wardId, state?.roomId]);
 
  
 
@@ -198,41 +256,48 @@ const CreateAddmittedPatients = () => {
                       Patient
                     </label>
 
-                    <select
-                    name="patientId"
-                    
-                      onChange={handleInputs}
-                      className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
-                    >
-                      <option>Select patient</option>
-                      {allpatients?.map((item, index) => {
-                        return (
-                          <option value={item?._id} >
-                            {item?.name}
-                          </option>
-                        );
-                      })}
-                    </select>
+                    <AsyncPaginate
+                      value={selectedPatient}
+                      loadOptions={loadPatientOptions}
+                      onChange={(option) => {
+                        setSelectedPatient(option);
+                        setState((prev) => ({
+                          ...prev,
+                          patientId: option?.value || '',
+                        }));
+                      }}
+                      getOptionLabel={(option) => option.label}
+                      getOptionValue={(option) => option.value}
+                      placeholder="Search patient by name or MR..."
+                      additional={{ page: 1 }}
+                      debounceTimeout={300}
+                      classNamePrefix="react-select"
+                      className="w-full"
+                    />
                   </div>
                   <div className="w-full">
                     <label className="mb-2.5 block text-black dark:text-white">
                       Doctor
                     </label>
 
-                    <select
-                      onChange={handleInputs}
-                      name="doctorId"
-                      className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
-                    >
-                      <option>Select doctor</option>
-                      {alldoctor?.map((item, index) => {
-                        return (
-                          <option value={item?._id} key={index}>
-                            {item?.name}
-                          </option>
-                        );
-                      })}
-                    </select>
+                    <AsyncPaginate
+                      value={selectedDoctor}
+                      loadOptions={loadDoctorOptions}
+                      onChange={(option) => {
+                        setSelectedDoctor(option);
+                        setState((prev) => ({
+                          ...prev,
+                          doctorId: option?.value || '',
+                        }));
+                      }}
+                      getOptionLabel={(option) => option.label}
+                      getOptionValue={(option) => option.value}
+                      placeholder="Search doctor by name..."
+                      additional={{ page: 1 }}
+                      debounceTimeout={300}
+                      classNamePrefix="react-select"
+                      className="w-full"
+                    />
                   </div>
                   <div className="w-full">
                     <label className="mb-2.5 block text-black dark:text-white">
@@ -413,14 +478,14 @@ const CreateAddmittedPatients = () => {
                   </div>
                   <div className="w-full">
                     <label className="mb-2.5 block text-black dark:text-white">
-                      Admission no
+                      Admission no <span className="text-xs text-gray-500">(Auto-generated)</span>
                     </label>
                     <input
-                      onChange={handleInputs}
                       name="admissionNo"
-                      type="number"
-                      placeholder=""
-                      className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                      type="text"
+                      value={admissionNoLoading ? 'Generating...' : admissionNo}
+                      disabled
+                      className="w-full rounded border-[1.5px] border-stroke bg-gray-100 py-3 px-5 font-medium text-black opacity-100 disabled:cursor-not-allowed disabled:text-black dark:border-form-strokedark dark:bg-form-input dark:text-white dark:disabled:text-white"
                     />
                   </div>
                   <div className="w-full">

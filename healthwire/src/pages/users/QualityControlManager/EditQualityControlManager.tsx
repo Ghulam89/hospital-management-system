@@ -6,12 +6,15 @@ import axios from 'axios';
 import { toast } from 'react-toastify';
 import { Base_url } from '../../../utils/Base_url';
 import BranchSelectField from '../../../components/BranchSelectField';
+import UserRoleSelectField from '../../../components/UserRoleSelectField';
+import { refreshStoredUserIfSelf } from '../../../utils/refreshStoredUser';
 
 const EditQualityControlManager = () => {
   const { id } = useParams();
   const [gender, setGender] = useState('');
   const [user, setUser] = useState<any>(null);
   const [branchId, setBranchId] = useState('');
+  const [roleKey, setRoleKey] = useState('quality_control_manager');
   const [state, setState] = useState({
     name: '',
     phone: '',
@@ -24,9 +27,10 @@ const EditQualityControlManager = () => {
     if (!id) return;
     axios
       .get(`${Base_url}/apis/user/get/${id}`)
-      .then((res) => {
+      .then(async (res) => {
         const u = res.data.data;
         setUser(u);
+        setRoleKey(String(u?.role || 'quality_control_manager').trim().toLowerCase());
         if (u && ['Male', 'Female', 'Other'].includes(u.gender)) {
           setGender(u.gender);
         }
@@ -66,9 +70,9 @@ const EditQualityControlManager = () => {
       phone: safeText(state.phone, user?.phone),
       email: safeText(state.email, user?.email),
       shift: safeText(state.shift, user?.shift),
-      role: String(user?.role || 'quality_control_manager').trim(),
-      tabs: Array.isArray(user?.tabs) ? user.tabs : [],
+      role: roleKey.trim().toLowerCase(),
     };
+    if (branchId) params.branchId = branchId;
 
     const password = String(state.password || '').trim();
     if (password) params.password = password;
@@ -77,8 +81,9 @@ const EditQualityControlManager = () => {
 
     axios
       .put(`${Base_url}/apis/user/update/${id}`, params)
-      .then((res) => {
+      .then(async (res) => {
         if (res.data.status === 'ok') {
+          await refreshStoredUserIfSelf(id);
           toast.success('User updated successfully!');
           navigate('/admin/users');
         }
@@ -196,6 +201,11 @@ const EditQualityControlManager = () => {
                   </div>
 
                   <BranchSelectField value={branchId} onChange={setBranchId} />
+                  <UserRoleSelectField
+                    screen="quality_control_manager"
+                    value={roleKey}
+                    onChange={setRoleKey}
+                  />
                 </div>
                 <div className="mt-4.5">
                   <button type="submit" className="flex justify-center rounded bg-primary p-3 font-medium text-gray">

@@ -7,6 +7,8 @@ import { Table, Card, Row, Col, Input, DatePicker, Select, Button, Space, Tag, S
 import { DollarOutlined, RiseOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import { canMenuAction, getStoredUserForPermissions } from '../../../utils/permissions';
+import TableColumnCustomize from '../../../components/TableColumnCustomize';
+import { useTableColumnPrefs } from '../../../hooks/useTableColumnPrefs';
 
 type PosInvoice = {
   _id: string;
@@ -363,7 +365,16 @@ export default function BillsList() {
     {
       title: 'Total',
       key: 'total',
-      render: (_: any, inv: PosInvoice) => Number(inv.paid || 0) + Number(inv.due || 0),
+      render: (_: any, inv: PosInvoice) => {
+        const items = Array.isArray(inv.allItem) ? inv.allItem : [];
+        if (items.length > 0) {
+          return items.reduce((s, it) => s + (Number(it?.totalAmount) || 0), 0);
+        }
+        // Legacy rows without line totals: bill = paid + due − advance
+        return (
+          Number(inv.paid || 0) + Number(inv.due || 0) - Number(inv.advance || 0)
+        );
+      },
     },
     {
       title: 'Actions',
@@ -385,13 +396,29 @@ export default function BillsList() {
     },
   ];
 
+  const {
+    visibleColumns,
+    columnOptions,
+    setColumnVisible,
+    setAllVisible,
+    resetColumns,
+  } = useTableColumnPrefs('pharmacy.pos.bills', columns, {
+    lockedKeys: ['actions'],
+  });
+
   return (
     <div className="rounded-sm border border-stroke bg-white px-5 pt-6 pb-2.5 shadow-default dark:border-strokedark dark:bg-boxdark sm:px-7.5 xl:pb-1">
-      <div className="flex items-center justify-between mb-4">
+      <div className="flex items-center justify-between mb-4 flex-wrap gap-2">
         <h4 className="text-xl font-semibold text-black dark:text-white">
           Pharmacy POS Bills & History
         </h4>
-        <div />
+        <TableColumnCustomize
+          options={columnOptions}
+          onToggle={setColumnVisible}
+          onShowAll={() => setAllVisible(true)}
+          onHideAll={() => setAllVisible(false)}
+          onReset={resetColumns}
+        />
       </div>
       <Card className="mb-4">
         <Row gutter={[12, 12]}>
@@ -535,7 +562,7 @@ export default function BillsList() {
 
       <Card className="mb-4">
         <Table
-          columns={columns as any}
+          columns={visibleColumns as any}
           dataSource={list}
           rowKey="_id"
           loading={loading}

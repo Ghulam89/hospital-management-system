@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 const Visit = require("../models/visitModel");
 const Patient = require("../models/patientModel");
 const { normalizeRole } = require("../middleware/auth");
-const { resolveBranchIdForNonSuperAdmin } = require("../utils/branchScope");
+const { resolveBranchIdForNonSuperAdmin} = require("../utils/branchScope");
 
 /**
  * POST /visits — open a branch-scoped encounter for a global patient.
@@ -17,8 +17,7 @@ const createVisit = async (req, res) => {
       appointmentId,
       admitPatientId,
       chiefComplaint,
-      branchId: bodyBranch,
-    } = req.body;
+      branchId: bodyBranch } = req.body;
 
     if (!patientId || !mongoose.Types.ObjectId.isValid(String(patientId))) {
       return res.status(400).json({ status: "fail", message: "Valid patientId required" });
@@ -37,8 +36,7 @@ const createVisit = async (req, res) => {
       if (raw == null || raw === "" || !mongoose.Types.ObjectId.isValid(String(raw))) {
         return res.status(400).json({
           status: "fail",
-          message: "branchId is required for superadmin when creating a visit",
-        });
+          message: "branchId is required for superadmin when creating a visit" });
       }
       branchId = new mongoose.Types.ObjectId(String(raw));
     } else {
@@ -56,8 +54,7 @@ const createVisit = async (req, res) => {
       appointmentId: appointmentId || undefined,
       admitPatientId: admitPatientId || undefined,
       chiefComplaint: chiefComplaint || undefined,
-      createdById: req.user?._id,
-    });
+      createdById: req.user?._id });
 
     return res.status(201).json({ status: "ok", data: visit });
   } catch (err) {

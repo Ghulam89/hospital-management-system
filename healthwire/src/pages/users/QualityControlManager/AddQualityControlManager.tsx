@@ -6,11 +6,13 @@ import axios from 'axios';
 import { toast } from 'react-toastify';
 import { Base_url } from '../../../utils/Base_url';
 import BranchSelectField from '../../../components/BranchSelectField';
+import UserRoleSelectField from '../../../components/UserRoleSelectField';
 
 const AddQualityControlManager = () => {
   const [gender, setGender] = useState('');
   const [loading, setLoading] = useState(false);
   const [branchId, setBranchId] = useState('');
+  const [roleKey, setRoleKey] = useState('quality_control_manager');
 
   const handleGenderChange = (g: string) => {
     setGender(g);
@@ -47,6 +49,8 @@ const AddQualityControlManager = () => {
       toast('Must enter shift!');
     } else if (!branchId) {
       toast('Please select branch');
+    } else if (!roleKey) {
+      toast('Please select role');
     } else {
       setLoading(true);
       const params = {
@@ -56,9 +60,8 @@ const AddQualityControlManager = () => {
         email: state.email,
         password: state.password,
         shift: state.shift,
-        role: 'quality_control_manager',
-        branchId,
-        tabs: [],
+        role: roleKey.trim().toLowerCase(),
+          branchId,
       };
       axios
         .post(`${Base_url}/apis/user/create`, params)
@@ -187,6 +190,12 @@ const AddQualityControlManager = () => {
                   </div>
 
                   <BranchSelectField value={branchId} onChange={setBranchId} />
+                  <UserRoleSelectField
+                    screen="quality_control_manager"
+                    value={roleKey}
+                    onChange={setRoleKey}
+                    preferCustomDefault
+                  />
                 </div>
 
                 <div className="mt-4.5">

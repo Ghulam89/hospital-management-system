@@ -76,9 +76,18 @@ const patientSchema = new mongoose.Schema(
       type: String,
       allowNull: false,
     },
+    /** Soft lifecycle: prefer `active` | `inactive` (legacy/missing treated as active in list filters). */
     status: {
       type: String,
-      allowNull: false,
+      default: 'active',
+      index: true,
+    },
+    /** Legacy only — new patients are global; kept for old branch-tagged docs + dashboard counts */
+    branchId: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Branch',
+      index: true,
+      sparse: true,
     },
   },
   { timestamps: true },

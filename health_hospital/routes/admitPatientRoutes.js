@@ -6,6 +6,7 @@ const { optionalAuth } = require("../middleware/auth");
 const router = require("express").Router();
 
 router.get("/get", optionalAuth, admitPatientController.getadmitPatients);
+router.get("/next-admission-no", optionalAuth, admitPatientController.getNextAdmissionNo);
 router.post(
   "/create",
   optionalAuth,

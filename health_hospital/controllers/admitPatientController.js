@@ -1,10 +1,40 @@
 const AdmitPatient = require("../models/admitPatientModel");
 const BedDetail = require("../models/bedDetailModel");
 const RoomDetail = require("../models/roomDetailModel");
+const { getScopedPatientIds, patientVisibleForRequest } = require("../utils/branchScope");
 const {
-  getScopedPatientIds,
-  patientVisibleForRequest,
-} = require("../utils/branchScope");
+  snapshotLocation,
+  createBedRoomTransferRecord,
+} = require("../utils/bedRoomTransferHistory");
+
+async function resolveNextAdmissionNo() {
+  const rows = await AdmitPatient.find({
+    admissionNo: { $exists: true, $nin: [null, ""] },
+  })
+    .select("admissionNo")
+    .lean();
+
+  let max = 0;
+  for (const row of rows) {
+    const raw = String(row.admissionNo || "").trim();
+    const match = raw.match(/(\d+)$/);
+    if (match) {
+      const n = parseInt(match[1], 10);
+      if (Number.isFinite(n)) max = Math.max(max, n);
+    }
+  }
+
+  return `ADM${String(max + 1).padStart(6, "0")}`;
+}
+
+const getNextAdmissionNo = async (req, res) => {
+  try {
+    const nextAdmissionNo = await resolveNextAdmissionNo();
+    return res.status(200).json({ status: "ok", nextAdmissionNo });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
 
 // 1. Create admitPatient
 const addadmitPatient = async (req, res) => {
@@ -14,7 +44,19 @@ const addadmitPatient = async (req, res) => {
       return res.status(403).json({ status: "fail", message: "Patient not allowed for this branch" });
     }
 
-    const admitPatient = await AdmitPatient.create({ ...req.body });
+    const payload = { ...req.body };
+    payload.admissionNo = await resolveNextAdmissionNo();
+
+    const admitPatient = await AdmitPatient.create(payload);
+
+    await createBedRoomTransferRecord({
+      admitPatientId: admitPatient._id,
+      patientId: admitPatient.patientId,
+      from: null,
+      to: snapshotLocation(admitPatient),
+      transferType: "admission",
+      transferredById: req.user?._id,
+    });
 
     if (req.body.allocationType === 'ward') {
       await BedDetail.findByIdAndUpdate(req.body.bedDetailId, {
@@ -156,7 +198,9 @@ const getadmitPatients = async (req, res) => {
 const getadmitPatientById = async (req, res) => {
   try {
     const id = req.params.id;
-    const admitPatient = await AdmitPatient.findById(id).lean();
+    const admitPatient = await AdmitPatient.findById(id)
+      .populate(["patientId", "wardId", "bedDetailId", "roomId", "roomDetailId", "doctorId"])
+      .lean();
     if (!admitPatient) {
       return res.status(404).json({ status: "fail", message: "Admit patient not found" });
     }
@@ -184,7 +228,11 @@ const updateadmitPatient = async (req, res) => {
       return res.status(403).json({ status: "fail", message: "Patient not allowed for this branch" });
     }
 
-
+    const fromLocation = snapshotLocation(getImage);
+    const mergedLocation = snapshotLocation({
+      ...getImage.toObject(),
+      ...req.body,
+    });
 
     const updatedadmitPatient = await AdmitPatient.findByIdAndUpdate(
       id,
@@ -237,9 +285,15 @@ const updateadmitPatient = async (req, res) => {
       }
     }
 
-
-
-
+    await createBedRoomTransferRecord({
+      admitPatientId: id,
+      patientId: updatedadmitPatient.patientId || getImage.patientId,
+      from: fromLocation,
+      to: mergedLocation,
+      transferType: "transfer",
+      transferredById: req.user?._id,
+      notes: req.body.transferNotes || "",
+    });
 
     return res.status(200).json({ status: "ok", data: updatedadmitPatient });
   } catch (err) {
@@ -289,5 +343,5 @@ module.exports = {
   getadmitPatientById,
   updateadmitPatient,
   deleteadmitPatient,
-
+  getNextAdmissionNo,
 };

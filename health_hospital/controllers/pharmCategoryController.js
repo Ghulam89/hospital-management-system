@@ -1,5 +1,5 @@
 const PharmCategory = require("../models/pharmCategoryModel");
-const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible, mergeCatalogPreferenceFilter } = require("../utils/branchScope");
+const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible, branchDocumentDeletable, mergeCatalogPreferenceFilter } = require("../utils/branchScope");
 
 // 1. Create pharmCategory
 const addpharmCategory = async (req, res) => {
@@ -86,7 +86,7 @@ const deletepharmCategory = async (req, res) => {
   try {
     const id = req.params.id;
     const row = await PharmCategory.findById(id);
-    if (!row || !(await branchDocumentVisible(req, row.branchId))) {
+    if (!row || !(await branchDocumentDeletable(req, row.branchId))) {
       return res.status(404).json({ status: "fail", message: "Pharmacy category not found" });
     }
     await PharmCategory.findByIdAndDelete(id);

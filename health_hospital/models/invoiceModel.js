@@ -69,6 +69,10 @@ const invoiceSchema = new mongoose.Schema({
         type: String,
         allowNull: true,
     },
+    hcloudInvoiceNo: {
+        type: String,
+        allowNull: true,
+    },
     invoiceExpenses: [
         {
             expenseCategoryId: { type: mongoose.Schema.Types.ObjectId, ref: 'ExpenseCategory' },
@@ -137,8 +141,11 @@ const invoiceSchema = new mongoose.Schema({
     branchId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Branch',
+        index: true,
     },
 }, { timestamps: true });
+
+invoiceSchema.index({ branchId: 1, patientId: 1 });
 
 
 // ✅ Correct place for the hook — before model creation

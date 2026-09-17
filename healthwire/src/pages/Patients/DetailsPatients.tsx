@@ -268,7 +268,7 @@ const DetailsPatients = () => {
                   url={
                     invoice?._id
                       ? `/invoice/patient/${id}`
-                      : `/patient/invoice/new/${patientData?._id}`
+                      : `/invoice/new?patientId=${patientData?._id}`
                   }
                   icon={<FaFile size={18} />}
                   text="Add Invoice"

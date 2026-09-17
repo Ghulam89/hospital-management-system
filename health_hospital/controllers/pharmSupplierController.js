@@ -1,6 +1,6 @@
 const PharmSupplier = require("../models/pharmSupplierModel");
 const PharmInboundStock = require("../models/pharmInboundStockModel");
-const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible, catalogEntityVisibleForStaff, mergeCatalogPreferenceFilter } = require("../utils/branchScope");
+const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible, branchDocumentDeletable, catalogEntityVisibleForStaff, mergeCatalogPreferenceFilter } = require("../utils/branchScope");
 
 async function inboundFilterForReq(req, extra = {}) {
   const q = { ...extra };
@@ -110,7 +110,7 @@ const deletepharmSupplier = async (req, res) => {
   try {
     const id = req.params.id;
     const row = await PharmSupplier.findById(id);
-    if (!row || !(await branchDocumentVisible(req, row.branchId))) {
+    if (!row || !(await branchDocumentDeletable(req, row.branchId))) {
       return res.status(404).json({ status: "fail", message: "Supplier not found" });
     }
     await PharmSupplier.findByIdAndDelete(id);

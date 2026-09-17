@@ -5,6 +5,8 @@ import { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 import { Base_url } from '../../../utils/Base_url';
+import UserRoleSelectField from '../../../components/UserRoleSelectField';
+import { refreshStoredUserIfSelf } from '../../../utils/refreshStoredUser';
 
 const authHeaders = () => {
   const token = localStorage.getItem('userToken') || '';
@@ -17,6 +19,7 @@ const Edit_admin = () => {
   const [user, setUser] = useState(null);
   const [branches, setBranches] = useState<{ _id: string; name?: string }[]>([]);
   const [branchId, setBranchId] = useState('');
+  const [roleKey, setRoleKey] = useState('administrator');
   const [state, setState] = useState({
     name: '',
     phone: '',
@@ -52,6 +55,7 @@ const Edit_admin = () => {
       .then((res) => {
         const u = res.data.data;
         setUser(u);
+        setRoleKey(String(u?.role || 'administrator').trim().toLowerCase());
         if (u && ['Male', 'Female', 'Other'].includes(u.gender)) {
           setGender(u.gender);
         }
@@ -81,8 +85,14 @@ const Edit_admin = () => {
   const SubmitFun = (e) => {
     e.preventDefault();
 
-    const roleNorm = String(user?.role || 'administrator').trim().toLowerCase();
-    if (currentRole === 'superadmin' && (roleNorm === 'administrator' || roleNorm === 'admin')) {
+    const roleNorm = roleKey.trim().toLowerCase();
+    if (
+      currentRole === 'superadmin' &&
+      (roleNorm === 'administrator' ||
+        roleNorm === 'admin' ||
+        roleNorm.startsWith('administrator_') ||
+        roleNorm.startsWith('admin_'))
+    ) {
       if (!branchId) {
         toast.error('Please select branch');
         return;
@@ -95,8 +105,7 @@ const Edit_admin = () => {
       phone: String(state.phone || '').trim() || String(user?.phone || '').trim(),
       email: String(state.email || '').trim() || String(user?.email || '').trim(),
       shift: String(state.shift || '').trim() || String(user?.shift || '').trim(),
-      role: String(user?.role || 'administrator').trim(),
-      tabs: Array.isArray(user?.tabs) ? user.tabs : [],
+      role: roleNorm,
     };
     if (currentRole === 'superadmin' && branchId) {
       params.branchId = branchId;
@@ -104,13 +113,14 @@ const Edit_admin = () => {
     const password = String(state.password || '').trim();
     if (password) params.password = password;
 
-        axios.put(`${Base_url}/apis/user/update/${id}`, params, { headers: authHeaders() }).then((res)=>{
+        axios.put(`${Base_url}/apis/user/update/${id}`, params, { headers: authHeaders() }).then(async (res)=>{
 
 
           console.log(res.data);
 
 
           if(res.data.status==='ok'){
+            await refreshStoredUserIfSelf(id);
             toast.success("user update successfully!");
             navigate('/admin/users')
           }else{
@@ -287,6 +297,12 @@ const Edit_admin = () => {
                       </p>
                     ) : null}
                   </div>
+
+                  <UserRoleSelectField
+                    screen="administrator"
+                    value={roleKey}
+                    onChange={setRoleKey}
+                  />
                 </div>
                 <div className="mt-4.5">
                   <button

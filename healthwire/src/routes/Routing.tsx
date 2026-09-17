@@ -54,6 +54,8 @@ import Private from './Private';
 import DeathCertificates from '../pages/IndoorManagement/deathCertificates';
 import AddDeathCertificate from '../pages/IndoorManagement/deathCertificates/AddDeathCertificates';
 import IndoorDutyRoster from '../pages/IndoorManagement/IndoorDutey';
+import BedRoomTransferHistory from '../pages/IndoorManagement/BedRoomTransferHistory';
+import TransferBedRoom from '../pages/IndoorManagement/BedRoomTransferHistory/TransferBedRoom';
 import FamilyHistory from '../pages/Patients/FamilyHistory';
 import MedicalCertificates from '../pages/Patients/MedicalCertificates';
 import MedicalHistory from '../pages/Patients/MedicalHistory';
@@ -742,6 +744,26 @@ function Routing() {
             <>
               <PageTitle title="Signin | Hospital Management" />
               <DischargedPatient />
+            </>
+          }
+        />
+
+        <Route
+          path="/bed-room-transfer-history"
+          element={
+            <>
+              <PageTitle title="Bed/Room Transfer History | Hospital Management" />
+              <BedRoomTransferHistory />
+            </>
+          }
+        />
+
+        <Route
+          path="/bed-room-transfer-history/transfer/:admitPatientId"
+          element={
+            <>
+              <PageTitle title="Transfer Bed/Room | Hospital Management" />
+              <TransferBedRoom />
             </>
           }
         />

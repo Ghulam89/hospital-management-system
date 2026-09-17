@@ -48,6 +48,7 @@
     "sort-by": "^0.0.2",
     "sweetalert2": "^11.12.2",
     "xlsx": "^0.18.5",
+    "xlsx-js-style": "^1.2.0",
     "yup": "^1.6.1"
   },
   "devDependencies": {

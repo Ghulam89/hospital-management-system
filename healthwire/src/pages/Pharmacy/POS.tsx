@@ -6,7 +6,7 @@ const POSWrapper = () => {
   const [tab, setTab] = useState<'pos' | 'bills'>('pos');
   return (
     <div className="space-y-4">
-      <div className="bg-white p-3 rounded shadow flex gap-2">
+      <div className="bg-white p-3 rounded shadow flex flex-wrap gap-2">
         <button
           className={`px-4 py-2 rounded ${tab === 'pos' ? 'bg-primary text-white' : 'border'}`}
           onClick={() => setTab('pos')}

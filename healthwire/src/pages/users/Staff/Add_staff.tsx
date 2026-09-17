@@ -8,11 +8,13 @@ import axios from 'axios';
 import { toast } from 'react-toastify';
 import { Base_url } from '../../../utils/Base_url';
 import BranchSelectField from '../../../components/BranchSelectField';
+import UserRoleSelectField from '../../../components/UserRoleSelectField';
 
 const AddAccountant = () => {
   const [gender, setGender] = useState('');
 const [loading, setLoading] = useState(false);
 const [branchId, setBranchId] = useState('');
+  const [roleKey, setRoleKey] = useState('staff');
   console.log(gender);
   
 
@@ -63,7 +65,10 @@ const [branchId, setBranchId] = useState('');
         toast("Must enter shift!") 
       }
       else if(!branchId){
-        toast("Please select branch") 
+        toast("Please select branch")
+      }
+      else if(!roleKey){
+        toast("Please select role") 
       }
       
       else {
@@ -76,9 +81,8 @@ const [branchId, setBranchId] = useState('');
           email:state.email,
           password:state.password,
           shift:state.shift,
-          role: 'staff',
+          role: roleKey.trim().toLowerCase(),
           branchId,
-          tabs: [],
     
     
         }
@@ -236,6 +240,12 @@ const [branchId, setBranchId] = useState('');
                   </div>
 
                   <BranchSelectField value={branchId} onChange={setBranchId} />
+                  <UserRoleSelectField
+                    screen="staff"
+                    value={roleKey}
+                    onChange={setRoleKey}
+                    preferCustomDefault
+                  />
                 </div>
                 <div className="mt-4.5">
                   <button

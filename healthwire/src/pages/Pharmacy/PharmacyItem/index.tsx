@@ -15,6 +15,8 @@ import UploadPharmacyItem from './UploadPharmacyItem';
 import dayjs from 'dayjs';
 import { getUserDataFromStorage, isSuperAdminRole, buildAxiosBranchScopedParams, getSuperadminBranchScopeForApi, BRANCH_CHANGED_EVENT } from '../../../utils/branchScope';
 import { canMenuAction } from '../../../utils/permissions';
+import TableColumnCustomize from '../../../components/TableColumnCustomize';
+import { useTableColumnPrefs } from '../../../hooks/useTableColumnPrefs';
 
 const { Search } = Input;
 const { RangePicker } = DatePicker;
@@ -296,10 +298,20 @@ const PharmacyItems: React.FC = () => {
     },
   ];
 
-  const columns = allColumns.filter((col) => {
+  const permissionColumns = allColumns.filter((col) => {
     if (col.dataIndex === 'toggle' && !showSuperAdminPharmControls) return false;
     if (col.dataIndex === 'action' && !showSuperAdminPharmControls && !canUpdatePharmItem) return false;
     return true;
+  });
+
+  const {
+    visibleColumns: columns,
+    columnOptions,
+    setColumnVisible,
+    setAllVisible,
+    resetColumns,
+  } = useTableColumnPrefs('pharmacy.items', permissionColumns, {
+    lockedKeys: ['action', 'toggle', 'name'],
   });
 
   // Fetch items
@@ -874,6 +886,14 @@ const PharmacyItems: React.FC = () => {
                 Upload Excel
               </button>
             ) : null}
+            <TableColumnCustomize
+              options={columnOptions}
+              onToggle={setColumnVisible}
+              onShowAll={() => setAllVisible(true)}
+              onHideAll={() => setAllVisible(false)}
+              onReset={resetColumns}
+              size="middle"
+            />
           </div>
         </div>
         

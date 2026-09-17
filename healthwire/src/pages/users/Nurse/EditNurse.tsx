@@ -8,12 +8,15 @@ import axios from 'axios';
 import { toast } from 'react-toastify';
 import { Base_url } from '../../../utils/Base_url';
 import BranchSelectField from '../../../components/BranchSelectField';
+import UserRoleSelectField from '../../../components/UserRoleSelectField';
+import { refreshStoredUserIfSelf } from '../../../utils/refreshStoredUser';
 
 const EditNurse = () => {
   const { id } = useParams();
   const [gender, setGender] = useState('');
   const [user, setUser] = useState(null);
   const [branchId, setBranchId] = useState('');
+  const [roleKey, setRoleKey] = useState('nurse');
   const [state, setState] = useState({
     name: '',
     phone: '',
@@ -25,9 +28,10 @@ const EditNurse = () => {
   useEffect(() => {
     axios
       .get(`${Base_url}/apis/user/get/${id}`)
-      .then((res) => {
+      .then(async (res) => {
         const u = res.data.data;
         setUser(u);
+        setRoleKey(String(u?.role || 'nurse').trim().toLowerCase());
         if (u && ['Male', 'Female', 'Other'].includes(u.gender)) {
           setGender(u.gender);
         }
@@ -68,20 +72,20 @@ const EditNurse = () => {
       phone: safeText(state.phone, user?.phone),
       email: safeText(state.email, user?.email),
       shift: safeText(state.shift, user?.shift),
-      role: String(user?.role || 'nurse').trim(),
-      tabs: Array.isArray(user?.tabs) ? user.tabs : [],
+      role: roleKey.trim().toLowerCase(),
     };
     if (branchId) params.branchId = branchId;
 
     const password = String(state.password || '').trim();
     if (password) params.password = password;
 
-        axios.put(`${Base_url}/apis/user/update/${id}`,params).then((res)=>{
+        axios.put(`${Base_url}/apis/user/update/${id}`,params).then(async (res)=>{
 
           console.log(res.data);
 
 
           if(res.data.status==='ok'){
+            await refreshStoredUserIfSelf(id);
             toast.success("user update successfully!");
             navigate('/admin/users')
           }else{
@@ -232,6 +236,11 @@ const EditNurse = () => {
                   </div>
 
                   <BranchSelectField value={branchId} onChange={setBranchId} />
+                  <UserRoleSelectField
+                    screen="nurse"
+                    value={roleKey}
+                    onChange={setRoleKey}
+                  />
                 </div>
                 <div className="mt-4.5">
                   <button

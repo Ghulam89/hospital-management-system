@@ -22,6 +22,18 @@ import {
   procedureMaxRefundableFromInvoiceRow,
   refId,
 } from '../../utils/procedureRefund';
+import {
+  getInvoiceItemProcedureName,
+  getInvoiceDoctorEntries,
+  formatInvoiceDoctorsLabel,
+  getProcedureAdvanceAmount,
+  getInvoiceListGrandTotal,
+  invoiceListDueAndAdvance,
+  invoiceListStatus,
+  invoicePdfPaymentSummary,
+} from './invoiceListUtils';
+import TableColumnCustomize from '../../components/TableColumnCustomize';
+import { useTableColumnPrefs } from '../../hooks/useTableColumnPrefs';
 
 import {
   PDFDownloadLink,
@@ -128,21 +140,6 @@ function loadInvoiceFiltersFromSession() {
   } catch {
     return base;
   }
-}
-
-function hasProcedureDate(value: unknown): boolean {
-  return !!(value && String(value).trim());
-}
-
-function getProcedureAdvanceAmount(invoice: any): number {
-  const items = Array.isArray(invoice?.item) ? invoice.item : [];
-  return items.reduce((sum: number, item: any) => {
-    if (hasProcedureDate(item?.procedureDate)) return sum;
-    const amount = Number(item?.amount) || (Number(item?.rate) || 0) * Math.max(1, Number(item?.quantity) || 1);
-    const discount = Number(item?.discount) || 0;
-    const discountAmount = Number(item?.discountType) === 1 ? amount * (discount / 100) : discount;
-    return sum + Math.max(0, amount - discountAmount);
-  }, 0);
 }
 
 // PDF Styles
@@ -385,15 +382,16 @@ const InvoicePdf = ({ invoice, patient }) => {
             .filter((e: any) => e?.showInPrint)
             .reduce((sum: number, e: any) => sum + (Number(e?.amount) || 0), 0);
           const expensesTotal = itemExpenses + invoiceLevelExpenses;
+          const summary = invoicePdfPaymentSummary(invoice, expensesTotal);
           return (
             <>
               <View style={styles.totalRow}>
                 <Text style={{fontSize:12}}>Sub Total:</Text>
-                <Text style={{fontSize:12}}>Rs. {invoice.subTotal?.toFixed?.(2)}</Text>
+                <Text style={{fontSize:12}}>Rs. {summary.subTotal.toFixed(2)}</Text>
               </View>
               <View style={styles.totalRow}>
                 <Text style={{fontSize:12}}>Discount:</Text>
-                <Text style={{fontSize:12}}>Rs. {invoice.discount?.toFixed?.(2)}</Text>
+                <Text style={{fontSize:12}}>Rs. {summary.discount.toFixed(2)}</Text>
               </View>
               {expensesTotal > 0 && (
                 <View style={styles.totalRow}>
@@ -403,24 +401,23 @@ const InvoicePdf = ({ invoice, patient }) => {
               )}
               <View style={[styles.totalRow, styles.grandTotal]}>
                 <Text style={{fontSize:12}}>Grand Total:</Text>
-                <Text style={{fontSize:12}}>Rs. {Number(invoice.total || 0).toFixed(2)}</Text>
+                <Text style={{fontSize:12}}>Rs. {summary.grandTotal.toFixed(2)}</Text>
               </View>
               <View style={styles.totalRow}>
                 <Text style={{fontSize:12}}>Amount Paid:</Text>
-                <Text style={{fontSize:12}}>Rs. {Number(invoice.paid || 0).toFixed(2)}</Text>
+                <Text style={{fontSize:12}}>Rs. {summary.paid.toFixed(2)}</Text>
               </View>
-              <View style={[styles.totalRow, {marginTop: 5}]}>
-                <Text style={{fontSize:12}}>Balance Due:</Text>
-                <Text style={{fontSize:12}}>Rs. {Number(invoice.due || 0).toFixed(2)}</Text>
-              </View>
-              {(Number(invoice.advance || invoice.advancePay || 0) > 0) && (
+              {summary.due > 0 && (
+                <View style={[styles.totalRow, { marginTop: 5 }]}>
+                  <Text style={{ fontSize: 12 }}>Balance Due:</Text>
+                  <Text style={{ fontSize: 12 }}>Rs. {summary.due.toFixed(2)}</Text>
+                </View>
+              )}
+              {summary.advance > 0 && (
                 <View style={[styles.totalRow, { marginTop: 4 }]}>
-                  <Text style={{ fontSize: 11, color: '#333' }}>
-                    Advance / balance credited / change returned to customer:
-                  </Text>
+                  <Text style={{ fontSize: 11, color: '#333' }}>Advance / Credit:</Text>
                   <Text style={{ fontSize: 11, fontWeight: 'bold' }}>
-                    Rs.{' '}
-                    {Number(invoice.advance ?? invoice.advancePay ?? 0).toFixed(2)}
+                    Rs. {summary.advance.toFixed(2)}
                   </Text>
                 </View>
               )}
@@ -901,7 +898,9 @@ const Invoice = () => {
 
     const options: PatientOption[] = (list || []).map((p: any) => ({
       value: p?._id,
-      label: p?.name || 'Patient',
+      label: p?.notInThisBranch
+        ? `${p?.name || 'Patient'} (other branch)`
+        : p?.name || 'Patient',
       patientData: p,
     }));
 
@@ -1186,6 +1185,7 @@ const Invoice = () => {
       const transformedData = filteredData.map((invoice) => {
         const { doctorShare, hospitalShare } = sumInvoiceDoctorHospitalShare(invoice);
         const procedureAdvanceAmount = getProcedureAdvanceAmount(invoice);
+        const grandTotal = getInvoiceListGrandTotal(invoice);
 
         // Get payment date (latest payment date from payment array)
         const paymentEntries = Array.isArray(invoice.payment) ? invoice.payment : [];
@@ -1222,13 +1222,8 @@ const Invoice = () => {
           }
         }
 
-        // Listing par advance/due ko hamesha live recompute karte hain (totalBill aur totalPay se).
-        // Pehle stored `advancePay` / `duePay` use ho raha tha, lekin purani buggy data
-        // (e.g. 50k paid pe 100k advance) wahi galat values dikhati thi. Live recompute = always sahi.
-        const totalBillNum = Number(invoice.totalBill) || 0;
-        const totalPayNum = Number(invoice.totalPay) || 0;
-        const advance = Math.max(0, totalPayNum - totalBillNum);
-        const due = Math.max(0, totalBillNum - totalPayNum);
+        // Due/advance vs Grand Total (dated bill + undated procedure advance), not dated-only totalBill.
+        const { due, advance } = invoiceListDueAndAdvance(grandTotal, invoice.totalPay);
 
         const createdByName =
           invoice.createdByData?.name ||
@@ -1263,6 +1258,7 @@ const Invoice = () => {
             invoice.doctorData?._id ||
             invoice.doctorId ||
             null,
+          doctorIds: getInvoiceDoctorEntries(invoice).map((d) => d.id),
           departmentId:
             (invoice.doctorId?.departmentId &&
               (invoice.doctorId.departmentId._id || invoice.doctorId.departmentId)) ||
@@ -1270,9 +1266,9 @@ const Invoice = () => {
             invoice.departmentId?._id ||
             invoice.departmentId ||
             null,
-          doctor: invoice.doctorId?.name || invoice.doctorData?.name || 'N/A',
+          doctor: formatInvoiceDoctorsLabel(invoice),
           department: invoice.doctorId?.departmentId?.name || invoice.departmentData?.name || 'N/A',
-          items: invoice.item.map(i => i.description).join(', '),
+          items: (invoice.item || []).map(getInvoiceItemProcedureName).join(', '),
           item: invoice.item,
           invoiceExpenses: invoice.invoiceExpenses || [],
           // Keep a list of procedure IDs for client-side filtering
@@ -1282,7 +1278,7 @@ const Invoice = () => {
           subTotal: invoice.subTotalBill || 0,
           discount: invoice.discountBill || 0,
           tax: invoice.taxBill || 0,
-          total: invoice.totalBill || 0,
+          total: grandTotal,
           paid: invoice.totalPay || 0,
           due,
           advance,
@@ -1291,7 +1287,7 @@ const Invoice = () => {
           doctorShare,
           hospitalShare,
           paymentMode: invoice.payment?.[0]?.method || 'N/A',
-          status: advance > 0 ? 'Advance' : due === 0 ? 'Paid' : 'Pending',
+          status: invoiceListStatus(grandTotal, invoice.totalPay),
           createdBy: createdByName,
           updatedBy: updatedByName,
           paymentDate: selectedPayment?.payDate || latestPayment?.payDate || null,
@@ -1309,11 +1305,17 @@ const Invoice = () => {
 
       if (filters.doctor) {
         finalData = finalData.filter((inv) => {
-          const idMatch = inv.doctorId && String(inv.doctorId) === String(filters.doctor);
+          const ids: string[] = Array.isArray(inv.doctorIds) ? inv.doctorIds.map(String) : [];
+          if (inv.doctorId) ids.push(String(inv.doctorId));
+          const idMatch = ids.some((id) => id === String(filters.doctor));
           const nameMatch =
             inv.doctor &&
             selectedDoctor?.label &&
-            inv.doctor.toLowerCase() === selectedDoctor.label.toLowerCase();
+            String(inv.doctor)
+              .toLowerCase()
+              .split(',')
+              .map((s: string) => s.trim())
+              .includes(selectedDoctor.label.toLowerCase());
           return idMatch || nameMatch;
         });
       }
@@ -1500,6 +1502,15 @@ const Invoice = () => {
 
   const columns = [
     {
+      title: 'Sr No.',
+      key: 'srNo',
+      width: 72,
+      fixed: 'left',
+      align: 'center' as const,
+      render: (_text: unknown, _record: unknown, index: number) =>
+        (pagination.current - 1) * pagination.pageSize + index + 1,
+    },
+    {
       title: 'INVOICE #',
       dataIndex: 'invoiceNo',
       key: 'invoiceNo',
@@ -1555,7 +1566,8 @@ const Invoice = () => {
       title: 'DOCTOR',
       dataIndex: 'doctor',
       key: 'doctor',
-      width: 150,
+      width: 200,
+      ellipsis: true,
       sorter: (a, b) => String(a.doctor || '').localeCompare(String(b.doctor || '')),
       sortDirections: ['ascend', 'descend'],
     },
@@ -1604,10 +1616,10 @@ const Invoice = () => {
       sortDirections: ['ascend', 'descend'],
     },
     {
-      title: 'TOTAL',
+      title: 'GRAND TOTAL',
       dataIndex: 'total',
       key: 'total',
-      width: 100,
+      width: 120,
       render: (value) => value.toLocaleString(),
       sorter: (a, b) => Number(a.total) - Number(b.total),
       sortDirections: ['ascend', 'descend'],
@@ -1701,6 +1713,24 @@ const Invoice = () => {
       sortDirections: ['ascend', 'descend'],
     },
     {
+      title: 'CREATED BY',
+      dataIndex: 'createdBy',
+      key: 'createdBy',
+      width: 140,
+      render: (name) => name || 'N/A',
+      sorter: (a, b) => String(a.createdBy || '').localeCompare(String(b.createdBy || '')),
+      sortDirections: ['ascend', 'descend'],
+    },
+    {
+      title: 'UPDATED BY',
+      dataIndex: 'updatedBy',
+      key: 'updatedBy',
+      width: 140,
+      render: (name) => name || 'N/A',
+      sorter: (a, b) => String(a.updatedBy || '').localeCompare(String(b.updatedBy || '')),
+      sortDirections: ['ascend', 'descend'],
+    },
+    {
       title: 'PAYMENT DATE',
       dataIndex: 'paymentDateTs',
       key: 'paymentDate',
@@ -1764,13 +1794,14 @@ const Invoice = () => {
     },
   ];
 
-  const visibleColumns = columns.filter((column) => {
+  const tabColumns = columns.filter((column) => {
     const key = String(column?.key || '');
     if (activeListTab === 'all') {
       return key !== 'advance' && key !== 'procedureAdvanceAmount';
     }
     if (activeListTab === 'procedureAdvance') {
       return [
+        'srNo',
         'invoiceNo',
         'invoiceEffectiveDate',
         'patientMR',
@@ -1787,11 +1818,15 @@ const Invoice = () => {
     return true;
   });
 
-  
-   
-
-    
-    
+  const {
+    visibleColumns,
+    columnOptions,
+    setColumnVisible,
+    setAllVisible,
+    resetColumns,
+  } = useTableColumnPrefs('invoices.list', tabColumns, {
+    lockedKeys: ['action', 'srNo'],
+  });
 
   return (
      <>
@@ -2176,11 +2211,19 @@ const Invoice = () => {
                     >
                       Reset
                     </Button>
+
+                    <TableColumnCustomize
+              options={columnOptions}
+              onToggle={setColumnVisible}
+              onShowAll={() => setAllVisible(true)}
+              onHideAll={() => setAllVisible(false)}
+              onReset={resetColumns}
+            />
                   </Col>
             
           </Row>
 
-          <div className="mb-4">
+          <div className="mb-4 flex flex-col justify-between gap-3">
             <Tabs
               activeKey={activeListTab}
               onChange={(key) => {
@@ -2192,7 +2235,9 @@ const Invoice = () => {
                 { key: 'procedureAdvance', label: 'Procedure Advance' },
               ]}
             />
+           
           </div>
+        
           
           <div className="overflow-x-auto">
             <Table

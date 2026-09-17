@@ -3,7 +3,7 @@ const PharmItem = require("../models/pharmItemModel");
 const {
   mergeBranchScopedQuery,
   assignBranchIdForCreate,
-  branchDocumentVisible,
+  branchDocumentVisible, branchDocumentDeletable,
   resolveWriteBranchOid,
 } = require("../utils/branchScope");
 const { resolvePharmItemIdForBranchStock } = require("../utils/pharmBranchInventory");
@@ -377,7 +377,7 @@ const deletepharmAddStock = async (req, res) => {
   try {
     const id = req.params.id;
     const doc = await PharmInboundStock.findById(id);
-    if (!doc || !(await branchDocumentVisible(req, doc.branchId))) {
+    if (!doc || !(await branchDocumentDeletable(req, doc.branchId))) {
       return res.status(404).json({ status: "fail", message: "Inbound stock not found" });
     }
     await PharmInboundStock.findByIdAndDelete(id);

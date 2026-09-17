@@ -8,6 +8,13 @@ import { Base_url } from '../../utils/Base_url';
 import { getInvoiceHeaderForPdf } from '../../utils/branchPdfHeader';
 import { enrichInvoiceForPdf } from '../../utils/enrichInvoiceForPdf';
 import { sumInvoiceDoctorHospitalShare } from '../../utils/invoiceShare';
+import {
+  getInvoiceItemProcedureName,
+  getInvoiceListGrandTotal,
+  invoiceListDueAndAdvance,
+  invoiceListStatus,
+  invoicePdfPaymentSummary,
+} from './invoiceListUtils';
 import logoDataUrl from '../../images/logo-icon.png';
 import Breadcrumb from '../../components/Breadcrumbs/Breadcrumb';
 
@@ -258,15 +265,16 @@ const InvoicePdf = ({ invoice, patient }) => {
           .filter((e: any) => e?.showInPrint)
           .reduce((sum: number, e: any) => sum + (Number(e?.amount) || 0), 0);
         const expensesTotal = itemExpenses + invoiceLevelExpenses;
+        const summary = invoicePdfPaymentSummary(invoice, expensesTotal);
         return (
           <View style={styles.totalsContainer}>
             <View style={styles.totalRow}>
               <Text style={{fontSize:12}}>Sub Total:</Text>
-              <Text style={{fontSize:12}}>Rs. {Number(invoice.subTotalBill || 0).toFixed(2)}</Text>
+              <Text style={{fontSize:12}}>Rs. {summary.subTotal.toFixed(2)}</Text>
             </View>
             <View style={styles.totalRow}>
               <Text style={{fontSize:12}}>Discount:</Text>
-              <Text style={{fontSize:12}}>Rs. {Number(invoice.discountBill || 0).toFixed(2)}</Text>
+              <Text style={{fontSize:12}}>Rs. {summary.discount.toFixed(2)}</Text>
             </View>
             {expensesTotal > 0 && (
               <View style={styles.totalRow}>
@@ -276,16 +284,26 @@ const InvoicePdf = ({ invoice, patient }) => {
             )}
             <View style={[styles.totalRow, styles.grandTotal]}>
               <Text style={{fontSize:12}}>Grand Total:</Text>
-              <Text style={{fontSize:12}}>Rs. {Number(invoice.totalBill || 0).toFixed(2)}</Text>
+              <Text style={{fontSize:12}}>Rs. {summary.grandTotal.toFixed(2)}</Text>
             </View>
             <View style={styles.totalRow}>
               <Text style={{fontSize:12}}>Amount Paid:</Text>
-              <Text style={{fontSize:12}}>Rs. {Number(invoice.totalPay || 0).toFixed(2)}</Text>
+              <Text style={{fontSize:12}}>Rs. {summary.paid.toFixed(2)}</Text>
             </View>
-            <View style={[styles.totalRow, {marginTop: 5}]}>
-              <Text style={{fontSize:12}}>Balance Due:</Text>
-              <Text style={{fontSize:12}}>Rs. {Number(invoice.duePay || 0).toFixed(2)}</Text>
-            </View>
+            {summary.due > 0 && (
+              <View style={[styles.totalRow, { marginTop: 5 }]}>
+                <Text style={{ fontSize: 12 }}>Balance Due:</Text>
+                <Text style={{ fontSize: 12 }}>Rs. {summary.due.toFixed(2)}</Text>
+              </View>
+            )}
+            {summary.advance > 0 && (
+              <View style={[styles.totalRow, { marginTop: 4 }]}>
+                <Text style={{ fontSize: 11, color: '#333' }}>Advance / Credit:</Text>
+                <Text style={{ fontSize: 11, fontWeight: 'bold' }}>
+                  Rs. {summary.advance.toFixed(2)}
+                </Text>
+              </View>
+            )}
           </View>
         );
       })()}
@@ -583,31 +601,39 @@ const PatientInvoice = () => {
       const transformedData = filteredData
         .map((invoice) => {
           const { doctorShare, hospitalShare } = sumInvoiceDoctorHospitalShare(invoice);
+          const grandTotal = getInvoiceListGrandTotal(invoice);
+          const { due, advance } = invoiceListDueAndAdvance(grandTotal, invoice.totalPay);
 
           return {
             key: invoice._id,
             _id: invoice._id,
             invoiceNo: invoice.invoiceNo,
-            date: invoice.createdAt,
+            date: invoice.invoiceDate || invoice.createdAt,
+            invoiceDate: invoice.invoiceDate || null,
+            createdAt: invoice.createdAt,
             patientId: invoice.patientId,
             branchId: invoice.branchId,
-            patientMR: invoice.patientId?.mr || 'N/A',
-            patientName: invoice.patientId?.name || 'N/A',
-            patientPhone: invoice.patientId?.phone || 'N/A',
-            doctor: invoice.doctorId?.name || 'N/A',
-            department: invoice.doctorId?.departmentId?.name || invoice.departmentData?.name || 'N/A',
-            items: invoice.item.map(i => i.description).join(', '),
+            patientMR: invoice.patientId?.mr || invoice.patientData?.mr || 'N/A',
+            patientName: invoice.patientId?.name || invoice.patientData?.name || 'N/A',
+            patientPhone: invoice.patientId?.phone || invoice.patientData?.phone || 'N/A',
+            doctor: invoice.doctorId?.name || invoice.doctorData?.name || 'N/A',
+            department:
+              invoice.doctorId?.departmentId?.name ||
+              invoice.departmentData?.name ||
+              'N/A',
+            items: (invoice.item || []).map(getInvoiceItemProcedureName).join(', '),
             item: invoice.item,
             subTotal: invoice.subTotalBill || 0,
             discount: invoice.discountBill || 0,
             tax: invoice.taxBill || 0,
-            total: invoice.totalBill || 0,
+            total: grandTotal,
             paid: invoice.totalPay || 0,
-            due: invoice.duePay || 0,
+            due,
+            advance,
             doctorShare,
             hospitalShare,
             paymentMode: invoice.payment?.[0]?.method || 'N/A',
-            status: invoice.duePay > 0 ? 'Pending' : 'Paid',
+            status: invoiceListStatus(grandTotal, invoice.totalPay),
           };
         })
         // Final safety check: Ensure all invoices belong to current patient
@@ -622,15 +648,32 @@ const PatientInvoice = () => {
 
       console.log(`✅ Final result: ${transformedData.length} invoice(s) for patient ${patient?.name || id}`);
 
+      const patientFilterShrunk = beforeFilterCount > filteredData.length;
+      const rowCount = transformedData.length;
+      let total = shouldShowNoDataMessage ? 0 : Number(paginationData.count) || 0;
+      let currentPage = Number(paginationData.currentPage) || page;
+      let totalPages = shouldShowNoDataMessage ? 0 : Number(paginationData.totalPages) || 0;
+
+      // Backend used to ignore patientId — client filter left 1 row but pagination still showed all invoices.
+      if (patientFilterShrunk) {
+        total = rowCount;
+        totalPages = rowCount > 0 ? 1 : 0;
+        currentPage = 1;
+      }
+
+      if (!shouldShowNoDataMessage && rowCount === 0 && page > 1) {
+        fetchInvoices(1, pageSize);
+        return;
+      }
+
       setInvoices(transformedData);
       setFilteredInvoices(transformedData);
-      
-      // Update pagination state
+
       setPagination({
-        current: paginationData.currentPage || 1,
-        pageSize: paginationData.limit || 20,
-        total: shouldShowNoDataMessage ? 0 : (paginationData.count || 0), // Set total to 0 if no exact date match
-        totalPages: shouldShowNoDataMessage ? 0 : (paginationData.totalPages || 0)
+        current: currentPage,
+        pageSize: paginationData.limit || pageSize,
+        total,
+        totalPages,
       });
     } catch (err) {
       message.error('Failed to fetch invoices');
@@ -853,11 +896,11 @@ const PatientInvoice = () => {
       fixed: 'left',
     },
     {
-      title: 'DATE',
+      title: 'INVOICE DATE',
       dataIndex: 'date',
       key: 'date',
-      render: (date) => moment(date).format('DD/MM/YYYY HH:mm'),
-      width: 150,
+      render: (date) => (date ? moment(date).format('DD/MM/YYYY') : 'N/A'),
+      width: 125,
     },
     {
       title: 'MR#',
@@ -925,10 +968,10 @@ const PatientInvoice = () => {
       render: (value) => value.toLocaleString(),
     },
     {
-      title: 'TOTAL',
+      title: 'GRAND TOTAL',
       dataIndex: 'total',
       key: 'total',
-      width: 100,
+      width: 120,
       render: (value) => value.toLocaleString(),
     },
     {
@@ -956,16 +999,21 @@ const PatientInvoice = () => {
       dataIndex: 'status',
       key: 'status',
       render: (_, record) => {
-        const status = record.paid >= record.total ? 'Paid' : 'Pending';
+        const status = record.status || invoiceListStatus(record.total, record.paid);
+        const isPaid = status === 'Paid';
+        const isAdvance = status === 'Advance';
+        const color = isPaid ? '#52c41a' : isAdvance ? '#1890ff' : '#f5222d';
+        const bg = isPaid ? '#f6ffed' : isAdvance ? '#e6f7ff' : '#fff1f0';
+        const border = isPaid ? '#b7eb8f' : isAdvance ? '#91d5ff' : '#ffa39e';
         return (
-          <span 
+          <span
             style={{
-              color: status === 'Paid' ? '#52c41a' : '#f5222d',
-              backgroundColor: status === 'Paid' ? '#f6ffed' : '#fff1f0',
+              color,
+              backgroundColor: bg,
               padding: '4px 8px',
               borderRadius: '4px',
               display: 'inline-block',
-              border: `1px solid ${status === 'Paid' ? '#b7eb8f' : '#ffa39e'}`
+              border: `1px solid ${border}`,
             }}
           >
             {status}
@@ -1032,7 +1080,7 @@ const PatientInvoice = () => {
       width: 300,
     },
     {
-      title: 'TOTAL',
+      title: 'GRAND TOTAL',
       dataIndex: 'total',
       key: 'total',
       width: 120,
@@ -1099,7 +1147,7 @@ const PatientInvoice = () => {
             </div>
 
             <Link
-              to={`/patient/invoice/new/${id}`}
+              to={`/invoice/new?patientId=${id}`}
               className="inline-flex items-center justify-center gap-2.5 rounded-md bg-primary py-3 px-10 text-center font-medium text-white hover:bg-opacity-90 lg:px-8 xl:px-10"
             >
               <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="20px" height="20px">

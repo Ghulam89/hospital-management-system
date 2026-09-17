@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, message, DatePicker, Modal } from 'antd';
+import { Table, Button, message, DatePicker, Modal, Space } from 'antd';
 import { Link, useParams } from 'react-router-dom';
 import axios from 'axios';
 import { RiDeleteBin5Line, RiFile2Line, RiEdit2Line } from 'react-icons/ri';

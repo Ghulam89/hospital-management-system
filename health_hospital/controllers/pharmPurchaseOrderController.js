@@ -1,5 +1,5 @@
 const PharmPurchaseOrder = require("../models/pharmPurchaseOrderModel");
-const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible } = require("../utils/branchScope");
+const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible, branchDocumentDeletable } = require("../utils/branchScope");
 
 // 1. Create Purchase Order
 const addPurchaseOrder = async (req, res) => {
@@ -232,6 +232,10 @@ const updatePurchaseOrder = async (req, res) => {
 const deletePurchaseOrder = async (req, res) => {
   try {
     const id = req.params.id;
+    const existing = await PharmPurchaseOrder.findById(id);
+    if (!existing || !(await branchDocumentDeletable(req, existing.branchId))) {
+      return res.status(404).json({ status: "fail", message: "Purchase order not found" });
+    }
     await PharmPurchaseOrder.findByIdAndDelete(id);
     return res
       .status(200)

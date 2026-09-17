@@ -19,6 +19,8 @@ import {
   setSuperadminSelectedBranchId,
 } from '../../utils/branchScope';
 import { canMenuAction, getStoredUserForPermissions } from '../../utils/permissions';
+import TableColumnCustomize from '../../components/TableColumnCustomize';
+import { useTableColumnPrefs } from '../../hooks/useTableColumnPrefs';
 
 type BranchRow = { _id: string; name: string; code?: string };
 
@@ -58,6 +60,7 @@ const Patients = () => {
   const [branchListScope, setBranchListScope] = useState(0);
   const [branches, setBranches] = useState<BranchRow[]>([]);
   const [branchListLoading, setBranchListLoading] = useState(false);
+  const [statusTab, setStatusTab] = useState<'all' | 'active' | 'inactive'>('active');
 
   const isSuper = isSuperAdminRole(getUserDataFromStorage()?.role);
   const userBranchId = getUserBranchIdFromStorage();
@@ -144,6 +147,11 @@ const Patients = () => {
     if (dateRange[1]) {
       params.append('toDate', dateRange[1].format('YYYY-MM-DD'));
     }
+
+    params.append(
+      'status',
+      statusTab === 'all' ? 'all' : statusTab === 'inactive' ? 'inactive' : 'active',
+    );
 
     const phoneQ = searchFilters.phone.trim();
     const cnicDigits = searchFilters.cnic.replace(/\D/g, '');
@@ -269,13 +277,30 @@ const Patients = () => {
       render: (date: string) => new Date(date).toLocaleDateString(),
     },
     {
+      title: 'STATUS',
+      dataIndex: 'status',
+      width: 100,
+      render: (status: string) => {
+        const active = String(status || 'active').toLowerCase() !== 'inactive';
+        return (
+          <span
+            className={`px-2 py-1 rounded-full text-xs ${
+              active ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+            }`}
+          >
+            {active ? 'Active' : 'Inactive'}
+          </span>
+        );
+      },
+    },
+    {
       title: 'ACTION',
       key: 'action',
-      width: 176,
+      width: 220,
       fixed: 'right' as const,
       align: 'center' as const,
       render: (_: unknown, record: any) => (
-        <div className="flex min-w-0 w-full items-center justify-center py-0.5">
+        <div className="flex min-w-0 w-full items-center justify-center gap-2 py-0.5">
           {record.notInThisBranch ? (
             <Tooltip title="Open a visit at your current branch — patient keeps the same MR#.">
               <button
@@ -287,11 +312,32 @@ const Patients = () => {
               </button>
             </Tooltip>
           ) : (
-            <div
-              className="inline-flex items-stretch justify-center overflow-hidden rounded-lg border border-stroke bg-gray-2/50 shadow-sm dark:border-strokedark dark:bg-boxdark-2/80"
-              role="group"
-              aria-label="Patient actions"
-            >
+            <>
+              {canPatientUpdate ? (
+                <button
+                  type="button"
+                  onClick={() => handleToggleActive(record)}
+                  title={
+                    String(record.status || 'active').toLowerCase() === 'inactive'
+                      ? 'Activate'
+                      : 'Deactivate'
+                  }
+                  className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${
+                    String(record.status || 'active').toLowerCase() === 'inactive'
+                      ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                      : 'bg-red-100 text-red-700 hover:bg-red-200'
+                  }`}
+                >
+                  {String(record.status || 'active').toLowerCase() === 'inactive'
+                    ? 'Activate'
+                    : 'Deactivate'}
+                </button>
+              ) : null}
+              <div
+                className="inline-flex items-stretch justify-center overflow-hidden rounded-lg border border-stroke bg-gray-2/50 shadow-sm dark:border-strokedark dark:bg-boxdark-2/80"
+                role="group"
+                aria-label="Patient actions"
+              >
               <Tooltip title="View details">
                 <Link
                   to={`/details-patients/${record?._id}`}
@@ -332,15 +378,42 @@ const Patients = () => {
                 </>
               ) : null}
             </div>
+            </>
           )}
         </div>
       ),
     },
   ];
 
+  const {
+    visibleColumns,
+    columnOptions,
+    setColumnVisible,
+    setAllVisible,
+    resetColumns,
+  } = useTableColumnPrefs('patients.list', columns, {
+    lockedKeys: ['action'],
+  });
+
   useEffect(() => {
     fetchPatientData();
-  }, [currentPage, pageSize, searchFilters, dateRange, branchListScope]);
+  }, [currentPage, pageSize, searchFilters, dateRange, branchListScope, statusTab]);
+
+  const handleToggleActive = async (record: any) => {
+    if (!canPatientUpdate) {
+      message.warning('You do not have permission to change patient status.');
+      return;
+    }
+    const nextStatus =
+      String(record.status || 'active').toLowerCase() === 'inactive' ? 'active' : 'inactive';
+    try {
+      await axios.put(`${Base_url}/apis/patient/update/${record._id}`, { status: nextStatus });
+      message.success(`Patient ${nextStatus === 'active' ? 'activated' : 'deactivated'} successfully`);
+      fetchPatientData();
+    } catch {
+      message.error('Failed to update patient status');
+    }
+  };
 
   const exportToExcel = async () => {
     if (exportLoading) return;
@@ -525,11 +598,18 @@ const Patients = () => {
         patientData={editingPatient}
       />
 
-      <div className="mb-5 flex justify-between items-center">
+      <div className="mb-5 flex justify-between items-center flex-wrap gap-3">
         <h4 className="text-xl font-semibold text-black dark:text-white">
           Patients ({total} total)
         </h4>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          <TableColumnCustomize
+            options={columnOptions}
+            onToggle={setColumnVisible}
+            onShowAll={() => setAllVisible(true)}
+            onHideAll={() => setAllVisible(false)}
+            onReset={resetColumns}
+          />
           <Button
             onClick={exportToExcel}
             loading={exportLoading}
@@ -576,6 +656,25 @@ const Patients = () => {
 
       <div className="rounded-sm border border-stroke bg-white px-5 pt-6 pb-2.5 shadow-default dark:border-strokedark dark:bg-boxdark sm:px-7.5 xl:pb-1">
         <div className="mb-4 flex flex-col gap-3">
+          <div className="flex p-1 bg-white rounded-lg shadow-sm overflow-hidden border border-stroke w-fit">
+            {(['all', 'active', 'inactive'] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => {
+                  setStatusTab(tab);
+                  setCurrentPage(1);
+                }}
+                className={`px-4 py-2 text-sm font-medium transition-colors capitalize ${
+                  statusTab === tab
+                    ? 'bg-primary text-white rounded-lg'
+                    : 'text-gray-600 hover:text-gray-800 hover:bg-gray-50'
+                }`}
+              >
+                {tab}
+              </button>
+            ))}
+          </div>
           <div className="flex flex-wrap gap-2 items-center">
             <Input
               placeholder="Search by Name"
@@ -628,7 +727,7 @@ const Patients = () => {
         <div className="w-full overflow-x-auto">
           <Table
             rowSelection={rowSelection}
-            columns={columns}
+            columns={visibleColumns}
             dataSource={patientData}
             loading={loading}
             pagination={false}

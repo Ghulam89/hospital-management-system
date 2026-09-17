@@ -1,16 +1,13 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useState } from 'react';
 import { Table, message, Modal } from 'antd';
 import { Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import moment from 'moment';
 import { RiDeleteBin5Line } from 'react-icons/ri';
 import { Base_url } from '../../utils/Base_url';
-import { BRANCH_CHANGED_EVENT, buildAxiosBranchScopedParams } from '../../utils/branchScope';
 
-const TodayAppointments = () => {
+const TodayAppointments = ({ appointments = [], loading = false, onRefresh }) => {
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
-  const [appointments, setAppointments] = useState([]);
-  const [loading, setLoading] = useState(false);
   const navigate = useNavigate();
 
   const onSelectChange = (newSelectedRowKeys) => {
@@ -28,45 +25,18 @@ const TodayAppointments = () => {
         key: 'odd',
         text: 'Select Odd Row',
         onSelect: (changeableRowKeys) => {
-          let newSelectedRowKeys = [];
-          newSelectedRowKeys = changeableRowKeys.filter((_, index) => index % 2 !== 0);
-          setSelectedRowKeys(newSelectedRowKeys);
+          setSelectedRowKeys(changeableRowKeys.filter((_, index) => index % 2 !== 0));
         },
       },
       {
         key: 'even',
         text: 'Select Even Row',
         onSelect: (changeableRowKeys) => {
-          let newSelectedRowKeys = [];
-          newSelectedRowKeys = changeableRowKeys.filter((_, index) => index % 2 === 0);
-          setSelectedRowKeys(newSelectedRowKeys);
+          setSelectedRowKeys(changeableRowKeys.filter((_, index) => index % 2 === 0));
         },
       },
     ],
   };
-
-  const fetchAppointments = useCallback(() => {
-    setLoading(true);
-    axios
-      .get(`${Base_url}/apis/appointment/dashboard`, { params: buildAxiosBranchScopedParams() })
-      .then((res) => {
-        setAppointments(res?.data?.data?.todayAppointments || []);
-      })
-      .catch(() => {
-        message.error('Failed to fetch appointments');
-      })
-      .finally(() => setLoading(false));
-  }, []);
-
-  useEffect(() => {
-    fetchAppointments();
-  }, [fetchAppointments]);
-
-  useEffect(() => {
-    const onBranchChange = () => fetchAppointments();
-    window.addEventListener(BRANCH_CHANGED_EVENT, onBranchChange);
-    return () => window.removeEventListener(BRANCH_CHANGED_EVENT, onBranchChange);
-  }, [fetchAppointments]);
 
   const handleEdit = (record) => {
     navigate(`/admin/edit_appointment/${record._id}`);
@@ -84,7 +54,7 @@ const TodayAppointments = () => {
         try {
           await axios.delete(`${Base_url}/apis/appointment/delete/${id}`);
           message.success('Appointment deleted successfully');
-          fetchAppointments();
+          if (typeof onRefresh === 'function') onRefresh();
         } catch (err) {
           message.error('Failed to delete appointment');
         }
@@ -110,7 +80,6 @@ const TodayAppointments = () => {
         );
       },
     },
-    
     {
       title: 'Phone',
       dataIndex: ['patientId', 'phone'],
@@ -137,16 +106,10 @@ const TodayAppointments = () => {
       key: 'action',
       render: (_, record) => (
         <div className='flex items-center gap-2'>
-          {/* <FaRegEdit 
-            color='blue' 
-            size={20} 
-            onClick={() => handleEdit(record)} 
-            style={{ cursor: 'pointer' }}
-          /> */}
-          <RiDeleteBin5Line 
-            color='red' 
-            size={20} 
-            onClick={() => handleDelete(record._id)} 
+          <RiDeleteBin5Line
+            color='red'
+            size={20}
+            onClick={() => handleDelete(record._id)}
             style={{ cursor: 'pointer' }}
           />
         </div>

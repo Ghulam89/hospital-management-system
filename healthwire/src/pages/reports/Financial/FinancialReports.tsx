@@ -28,7 +28,6 @@ import { Base_url } from '../../../utils/Base_url';
 import { AsyncPaginate, type LoadOptions } from 'react-select-async-paginate';
 
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
-import * as XLSX from 'xlsx';
 import { useReactToPrint } from 'react-to-print';
 import { Link } from 'react-router-dom';
 import { getInvoiceHeaderForPdf } from '../../../utils/branchPdfHeader';
@@ -36,10 +35,15 @@ import { enrichInvoiceForPdf } from '../../../utils/enrichInvoiceForPdf';
 import { Document, Image, Page, pdf, StyleSheet, Text, View } from '@react-pdf/renderer';
 import { useBranchScopeEpoch } from '../../../context/BranchScopeEpochContext';
 import { sumInvoiceDoctorHospitalShare } from '../../../utils/invoiceShare';
+import { getInvoiceItemProcedureName, getInvoiceListGrandTotal, invoiceListDueAndAdvance, invoiceListStatus, invoicePdfPaymentSummary } from '../../invoices/invoiceListUtils';
+import { writeFinancialInvoiceExcelFile, writeFinancialInvoiceSummaryExcelFile } from './financialInvoiceExcelExport';
+import TableColumnCustomize from '../../../components/TableColumnCustomize';
+import { useTableColumnPrefs } from '../../../hooks/useTableColumnPrefs';
 
 // TypeScript interfaces
 interface TransactionItem {
   description: string;
+  procedureId?: { name?: string } | string;
   rate: number;
   quantity: number;
   amount: number;
@@ -110,6 +114,7 @@ interface RawTransaction {
   _id: string;
   invoiceNo: string;
   createdAt: string;
+  updatedAt?: string;
   invoiceDate?: string;
   date?: string;
   patientId: Patient;
@@ -150,6 +155,10 @@ interface TransformedTransaction {
   hospitalShare: number;
   paymentMode: string;
   status: string;
+  createdAt: string;
+  updatedAt: string;
+  createdBy: string;
+  updatedBy: string;
   branchId?: unknown;
 }
 
@@ -161,8 +170,8 @@ interface PaginationState {
 }
 
 interface Filters {
-  startDate: moment.Moment;
-  endDate: moment.Moment;
+  startDate: moment.Moment | null;
+  endDate: moment.Moment | null;
   department: string;
   paymentMode: string;
   doctor: string;
@@ -176,13 +185,19 @@ interface Filters {
   minAmount: string;
   maxAmount: string;
   // which amount field min/max applies to
-  amountField: 'paid' | 'total' | 'discount' | 'due' | 'advance';
-  dateRange: [moment.Moment, moment.Moment];
+  amountField: 'paid' | 'total' | 'discount' | 'due' | 'advance' | 'refund';
+  dateRange: [moment.Moment, moment.Moment] | [];
   paymentDateStart?: string;
   paymentDateEnd?: string;
   quickPayment?: '' | 'paid' | 'due' | 'advance';
   discountPercent?: string;
 }
+
+const isValidFilterMoment = (value: unknown): value is moment.Moment =>
+  !!value &&
+  typeof (value as moment.Moment).isValid === 'function' &&
+  (value as moment.Moment).isValid() &&
+  typeof (value as moment.Moment).clone === 'function';
 
 interface ApiResponse {
   status: string;
@@ -198,6 +213,39 @@ interface ApiResponse {
 const effectiveInvoiceDate = (t: RawTransaction): string =>
   (t.invoiceDate as string) || (t.date as string) || t.createdAt;
 
+const invoiceItemsLabel = (items: TransactionItem[] | undefined): string =>
+  (items || []).map((i) => getInvoiceItemProcedureName(i)).filter(Boolean).join(', ');
+
+const invoiceCreatedByName = (transaction: Record<string, unknown>): string => {
+  const t = transaction as {
+    createdByData?: { name?: string };
+    createdById?: { name?: string };
+    createdBy?: { name?: string; user?: { name?: string } };
+  };
+  return (
+    t.createdByData?.name ||
+    t.createdById?.name ||
+    t.createdBy?.name ||
+    t.createdBy?.user?.name ||
+    'N/A'
+  );
+};
+
+const invoiceUpdatedByName = (transaction: Record<string, unknown>): string => {
+  const t = transaction as {
+    updatedByData?: { name?: string };
+    updatedById?: { name?: string };
+    updatedBy?: { name?: string; user?: { name?: string } };
+  };
+  return (
+    t.updatedByData?.name ||
+    t.updatedById?.name ||
+    t.updatedBy?.name ||
+    t.updatedBy?.user?.name ||
+    'N/A'
+  );
+};
+
 const { RangePicker } = DatePicker;
 const { Option } = Select;
 
@@ -206,6 +254,7 @@ const FinancialReports = () => {
   const [transactions, setTransactions] = useState<TransformedTransaction[]>([]);
   const [loading, setLoading] = useState(false);
   const [exporting, setExporting] = useState(false);
+  const [exportingSummary, setExportingSummary] = useState(false);
   const [filteredTransactions, setFilteredTransactions] = useState<TransformedTransaction[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
   const [doctors, setDoctors] = useState<Doctor[]>([]);
@@ -224,6 +273,7 @@ const FinancialReports = () => {
     'Insurance',
   ]);
   const tableRef = useRef<HTMLDivElement>(null);
+  const summaryRequestIdRef = useRef(0);
   const [selectedPatient, setSelectedPatient] = useState<PatientOption | null>(null);
   const [selectedDoctor, setSelectedDoctor] = useState<DoctorOption | null>(null);
   const [selectedDepartment, setSelectedDepartment] = useState<DepartmentOption | null>(null);
@@ -264,222 +314,122 @@ const [filters, setFilters] = useState<Filters>({
     }
   };
 
+  const fetchAllFilteredInvoicesForExport = async (): Promise<RawTransaction[]> => {
+    const baseParams = new URLSearchParams();
+    if (filters.doctor) baseParams.append('doctorId', filters.doctor);
+    if (filters.department) baseParams.append('departmentId', filters.department);
+    if (filters.patientMR) baseParams.append('patientMR', filters.patientMR);
+    if (filters.status) baseParams.append('status', filters.status);
+    if (filters.patientName) baseParams.append('patientName', filters.patientName);
+    if (filters.patientPhone) baseParams.append('patientPhone', filters.patientPhone);
+    if (filters.invoiceNumber) baseParams.append('invoiceNo', filters.invoiceNumber);
+    if (filters.search) baseParams.append('search', filters.search);
+    const amountField = filters.amountField || 'paid';
+    if (filters.minAmount) {
+      const min = Number(filters.minAmount);
+      if (Number.isFinite(min)) {
+        if (amountField === 'total') baseParams.append('minTotalBill', String(min));
+        else if (amountField === 'discount') baseParams.append('minDiscountBill', String(min));
+        else if (amountField === 'due') baseParams.append('minDue', String(min));
+        else if (amountField === 'advance') baseParams.append('minAdvance', String(min));
+        else if (amountField === 'refund') { /* frontend filter only */ }
+        else baseParams.append('minPaid', String(min));
+      }
+    }
+    if (filters.maxAmount) {
+      const max = Number(filters.maxAmount);
+      if (Number.isFinite(max)) {
+        if (amountField === 'total') baseParams.append('maxTotalBill', String(max));
+        else if (amountField === 'discount') baseParams.append('maxDiscountBill', String(max));
+        else if (amountField === 'due') baseParams.append('maxDue', String(max));
+        else if (amountField === 'advance') baseParams.append('maxAdvance', String(max));
+        else if (amountField === 'refund') { /* frontend filter only */ }
+        else baseParams.append('maxPaid', String(max));
+      }
+    }
+    if (filters.procedure) baseParams.append('procedureId', filters.procedure);
+    if (filters.paymentMode) baseParams.append('paymentMode', filters.paymentMode);
+    if (filters.paymentDateStart) baseParams.append('paymentDateStart', filters.paymentDateStart);
+    if (filters.paymentDateEnd) baseParams.append('paymentDateEnd', filters.paymentDateEnd);
+    if (isValidFilterMoment(filters.startDate) && isValidFilterMoment(filters.endDate)) {
+      const startDate = filters.startDate.clone();
+      const endDate = filters.endDate.clone();
+      if (startDate.isSame(endDate, 'day')) {
+        baseParams.append('startDate', startDate.clone().startOf('day').toISOString());
+        baseParams.append('endDate', startDate.clone().endOf('day').toISOString());
+      } else {
+        baseParams.append('startDate', startDate.clone().startOf('day').toISOString());
+        baseParams.append('endDate', endDate.clone().endOf('day').toISOString());
+      }
+    }
+
+    const firstParams = new URLSearchParams(baseParams.toString());
+    firstParams.append('page', '1');
+    firstParams.append('limit', '200');
+
+    const firstResp = await axios.get(`${Base_url}/apis/invoice/get?${firstParams.toString()}`);
+    const firstData: RawTransaction[] = firstResp?.data?.data || [];
+    const meta = firstResp?.data || {};
+    const totalPages: number = meta.totalPages || 1;
+    const limit: number = meta.limit || 200;
+
+    const allRaw: RawTransaction[] = [...firstData];
+
+    const requests: Promise<any>[] = [];
+    for (let page = 2; page <= totalPages; page++) {
+      const pageParams = new URLSearchParams(baseParams.toString());
+      pageParams.append('page', String(page));
+      pageParams.append('limit', String(limit));
+      requests.push(axios.get(`${Base_url}/apis/invoice/get?${pageParams.toString()}`));
+    }
+    const responses = await Promise.all(requests);
+    for (const res of responses) {
+      const dataChunk: RawTransaction[] = res?.data?.data || [];
+      allRaw.push(...dataChunk);
+    }
+
+    return applyClientSideInvoiceFilters(allRaw);
+  };
+
   const exportAllToExcel = async () => {
     try {
       setExporting(true);
-      // Build base query params (same filters, we'll paginate manually)
-      const baseParams = new URLSearchParams();
-      if (filters.doctor) baseParams.append('doctorId', filters.doctor);
-      if (filters.department) baseParams.append('departmentId', filters.department);
-      if (filters.patientMR) baseParams.append('patientMR', filters.patientMR);
-      if (filters.status) baseParams.append('status', filters.status);
-      if (filters.patientName) baseParams.append('patientName', filters.patientName);
-      if (filters.patientPhone) baseParams.append('patientPhone', filters.patientPhone);
-      if (filters.invoiceNumber) baseParams.append('invoiceNo', filters.invoiceNumber);
-      if (filters.search) baseParams.append('search', filters.search);
-      // Amount range (export) – mirror same mapping as filters
-      const amountField = filters.amountField || 'paid';
-      if (filters.minAmount) {
-        const min = Number(filters.minAmount);
-        if (Number.isFinite(min)) {
-          if (amountField === 'total') baseParams.append('minTotalBill', String(min));
-          else if (amountField === 'discount') baseParams.append('minDiscountBill', String(min));
-          else if (amountField === 'due') baseParams.append('minDue', String(min));
-          else if (amountField === 'advance') baseParams.append('minAdvance', String(min));
-          else if (amountField === 'refund') { /* frontend filter only */ }
-          else baseParams.append('minPaid', String(min));
-        }
-      }
-      if (filters.maxAmount) {
-        const max = Number(filters.maxAmount);
-        if (Number.isFinite(max)) {
-          if (amountField === 'total') baseParams.append('maxTotalBill', String(max));
-          else if (amountField === 'discount') baseParams.append('maxDiscountBill', String(max));
-          else if (amountField === 'due') baseParams.append('maxDue', String(max));
-          else if (amountField === 'advance') baseParams.append('maxAdvance', String(max));
-          else if (amountField === 'refund') { /* frontend filter only */ }
-          else baseParams.append('maxPaid', String(max));
-        }
-      }
-      if (filters.procedure) baseParams.append('procedureId', filters.procedure);
-      if (filters.paymentMode) baseParams.append('paymentMode', filters.paymentMode);
-      // Date filtering same as fetchTransactions
-      if (filters.startDate && filters.endDate) {
-        const startDate = filters.startDate.clone();
-        const endDate = filters.endDate.clone();
-        if (startDate.isSame(endDate, 'day')) {
-          baseParams.append('startDate', startDate.clone().startOf('day').toISOString());
-          baseParams.append('endDate', startDate.clone().endOf('day').toISOString());
-        } else {
-          baseParams.append('startDate', startDate.clone().startOf('day').toISOString());
-          baseParams.append('endDate', endDate.clone().endOf('day').toISOString());
-        }
-      }
+      const filteredData = await fetchAllFilteredInvoicesForExport();
 
-      // First request to know total pages
-      const firstParams = new URLSearchParams(baseParams.toString());
-      firstParams.append('page', '1');
-      // Use a large page size to reduce number of requests while being safe
-      firstParams.append('limit', '200');
-
-      const firstResp = await axios.get(`${Base_url}/apis/invoice/get?${firstParams.toString()}`);
-      const firstData: RawTransaction[] = firstResp?.data?.data || [];
-      const meta = firstResp?.data || {};
-      const totalPages: number = meta.totalPages || 1;
-      const limit: number = meta.limit || 200;
-
-      const allRaw: RawTransaction[] = [...firstData];
-
-      // Fetch remaining pages if any
-      const requests: Promise<any>[] = [];
-      for (let page = 2; page <= totalPages; page++) {
-        const pageParams = new URLSearchParams(baseParams.toString());
-        pageParams.append('page', String(page));
-        pageParams.append('limit', String(limit));
-        requests.push(axios.get(`${Base_url}/apis/invoice/get?${pageParams.toString()}`));
-      }
-      const responses = await Promise.all(requests);
-      for (const res of responses) {
-        const dataChunk: RawTransaction[] = res?.data?.data || [];
-        allRaw.push(...dataChunk);
-      }
-
-      // Apply same frontend date filtering safeguards
-      let filteredData: RawTransaction[] = allRaw;
-      if (filters.startDate && filters.endDate && filters.startDate.isSame(filters.endDate, 'day')) {
-        const selectedDate = filters.startDate.format('YYYY-MM-DD');
-        filteredData = allRaw.filter((t) => moment(effectiveInvoiceDate(t)).format('YYYY-MM-DD') === selectedDate);
-      } else if (filters.startDate && filters.endDate) {
-        const startDate = filters.startDate.format('YYYY-MM-DD');
-        const endDate = filters.endDate.format('YYYY-MM-DD');
-        filteredData = allRaw.filter((t) => {
-          const txDate = moment(effectiveInvoiceDate(t)).format('YYYY-MM-DD');
-          return txDate >= startDate && txDate <= endDate;
-        });
-      }
-
-      // Transform for export similar to table
-      const transformed = filteredData.map((transaction: RawTransaction) => {
-        const { doctorShare, hospitalShare } = sumInvoiceDoctorHospitalShare(transaction);
-        const refund = Array.isArray(transaction.payment)
-          ? transaction.payment.reduce((sum: number, p: any) => {
-              const v = Number(p?.paid) || 0;
-              return v < 0 ? sum + Math.abs(v) : sum;
-            }, 0)
-          : 0;
-        return {
-          invoiceNo: transaction.invoiceNo,
-          date: effectiveInvoiceDate(transaction),
-          patientMR: transaction.patientId?.mr || 'N/A',
-          patientName: transaction.patientId?.name || 'N/A',
-          patientPhone: transaction.patientId?.phone || 'N/A',
-          doctor: transaction.doctorId?.name || 'N/A',
-          department: transaction.doctorId?.departmentId?.name || transaction.departmentData?.name || 'N/A',
-          items: (transaction.item || []).map((i) => i.description).join(', '),
-          subTotal: transaction.subTotalBill || 0,
-          discount: transaction.discountBill || 0,
-          tax: transaction.taxBill || 0,
-          total: transaction.totalBill || 0,
-          paid: transaction.totalPay || 0,
-          due: transaction.duePay || 0,
-          refund,
-          doctorShare,
-          hospitalShare,
-          paymentMode: transaction.payment?.[0]?.method || 'N/A',
-        };
-      });
-
-      const exportData = transformed.map((t) => ({
-        'INVOICE #': t.invoiceNo,
-        'DATE': moment(t.date).format('DD/MM/YYYY HH:mm'),
-        'MR#': t.patientMR,
-        'PATIENT NAME': t.patientName,
-        'PHONE': t.patientPhone,
-        'DOCTOR': t.doctor,
-        'DEPARTMENT': t.department,
-        'ITEMS': t.items,
-        'SUBTOTAL': t.subTotal.toLocaleString(),
-        'DISCOUNT': t.discount.toLocaleString(),
-        'TAX': t.tax.toLocaleString(),
-        'TOTAL': t.total.toLocaleString(),
-        'PAID': t.paid.toLocaleString(),
-        'REFUND': t.refund.toLocaleString(),
-        'DUE': t.due.toLocaleString(),
-        'DOCTOR SHARE': t.doctorShare.toLocaleString(),
-        'HOSPITAL SHARE': t.hospitalShare.toLocaleString(),
-        'PAYMENT MODE': t.paymentMode,
-        'Status': t.paid >= t.total ? 'Paid' : 'Pending',
-      }));
-
-      const ws = XLSX.utils.json_to_sheet(exportData);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, 'Financial Transactions');
-      const wscols = columns.map((col) => ({ width: (col.width || 100) / 5 }));
-      (ws as any)['!cols'] = wscols;
-
-      // Append totals row at the bottom
-      const totals = transformed.reduce(
-        (acc, t) => {
-          acc.subTotal += t.subTotal;
-          acc.discount += t.discount;
-          acc.tax += t.tax;
-          acc.total += t.total;
-          acc.paid += t.paid;
-          acc.refund += t.refund;
-          acc.due += t.due;
-          acc.doctorShare += t.doctorShare;
-          acc.hospitalShare += t.hospitalShare;
-          return acc;
-        },
-        {
-          subTotal: 0,
-          discount: 0,
-          tax: 0,
-          total: 0,
-          paid: 0,
-          refund: 0,
-          due: 0,
-          doctorShare: 0,
-          hospitalShare: 0,
-        }
+      const { invoiceCount, procedureCount } = writeFinancialInvoiceExcelFile(
+        filteredData,
+        effectiveInvoiceDate,
+        `Financial_Details_Summary_${moment().format('YYYYMMDD_HHmmss')}.xlsx`,
       );
-
-      // Add an empty row then the totals row
-      XLSX.utils.sheet_add_json(ws, [{} as any], { skipHeader: true, origin: -1 });
-      XLSX.utils.sheet_add_json(
-        ws,
-        [
-          {
-            'INVOICE #': 'TOTAL',
-            'DATE': '',
-            'MR#': '',
-            'PATIENT NAME': '',
-            'PHONE': '',
-            'DOCTOR': '',
-            'DEPARTMENT': '',
-            'ITEMS': '',
-            'SUBTOTAL': totals.subTotal.toLocaleString(),
-            'DISCOUNT': totals.discount.toLocaleString(),
-            'TAX': totals.tax.toLocaleString(),
-            'TOTAL': totals.total.toLocaleString(),
-            'PAID': totals.paid.toLocaleString(),
-            'REFUND': totals.refund.toLocaleString(),
-            'DUE': totals.due.toLocaleString(),
-            'DOCTOR SHARE': totals.doctorShare.toLocaleString(),
-            'HOSPITAL SHARE': totals.hospitalShare.toLocaleString(),
-            'PAYMENT MODE': '',
-            'Status': '',
-          },
-        ],
-        { skipHeader: true, origin: -1 }
+      message.success(
+        `Exported ${invoiceCount} invoice${invoiceCount === 1 ? '' : 's'} (${procedureCount} procedure${procedureCount === 1 ? '' : 's'}) to Details Summary`,
       );
-      XLSX.writeFile(wb, `Financial_Report_${moment().format('YYYYMMDD_HHmmss')}.xlsx`);
-      message.success(`Exported ${exportData.length} records to Excel`);
     } catch (e) {
       console.error('Export error:', e);
-      message.error('Failed to export all records');
+      message.error('Failed to export details summary');
     } finally {
       setExporting(false);
+    }
+  };
+
+  const exportSummaryToExcel = async () => {
+    try {
+      setExportingSummary(true);
+      const filteredData = await fetchAllFilteredInvoicesForExport();
+
+      const { invoiceCount } = writeFinancialInvoiceSummaryExcelFile(
+        filteredData,
+        effectiveInvoiceDate,
+        `Financial_Report_Summary_${moment().format('YYYYMMDD_HHmmss')}.xlsx`,
+      );
+      message.success(
+        `Exported ${invoiceCount} invoice${invoiceCount === 1 ? '' : 's'} to Report Summary`,
+      );
+    } catch (e) {
+      console.error('Summary export error:', e);
+      message.error('Failed to export report summary');
+    } finally {
+      setExportingSummary(false);
     }
   };
 
@@ -677,6 +627,103 @@ const [filters, setFilters] = useState<Filters>({
     }
     return parsePayDateToTs(payDate);
   };
+
+  /** Same client-side filters used by the table — keeps Overall Summary in sync. */
+  const getRawRefund = (t: RawTransaction) =>
+    Array.isArray(t.payment)
+      ? t.payment.reduce((sum: number, p: any) => {
+          const v = Number(p?.paid) || 0;
+          return v < 0 ? sum + Math.abs(v) : sum;
+        }, 0)
+      : 0;
+
+  const applyClientSideInvoiceFilters = (rows: RawTransaction[]): RawTransaction[] => {
+    let filtered = rows;
+    const amountField = filters.amountField || 'paid';
+
+    if (
+      isValidFilterMoment(filters.startDate) &&
+      isValidFilterMoment(filters.endDate) &&
+      filters.startDate.isSame(filters.endDate, 'day')
+    ) {
+      const selectedDate = filters.startDate.format('YYYY-MM-DD');
+      filtered = filtered.filter(
+        (t) => moment(effectiveInvoiceDate(t)).format('YYYY-MM-DD') === selectedDate,
+      );
+    } else if (isValidFilterMoment(filters.startDate) && isValidFilterMoment(filters.endDate)) {
+      const start = filters.startDate.format('YYYY-MM-DD');
+      const end = filters.endDate.format('YYYY-MM-DD');
+      filtered = filtered.filter((t) => {
+        const txDate = moment(effectiveInvoiceDate(t)).format('YYYY-MM-DD');
+        return txDate >= start && txDate <= end;
+      });
+    }
+
+    if (filters.paymentDateStart || filters.paymentDateEnd) {
+      filtered = filtered.filter((t) => {
+        const paymentTimestamps =
+          t.payment?.map((p: any) => parsePayDateToTs(p?.payDate)).filter((v: any) => typeof v === 'number') ||
+          [];
+        if (paymentTimestamps.length === 0) return false;
+        const paymentDateStrs = paymentTimestamps.map((ts: number) => dayjs(ts).format('YYYY-MM-DD'));
+        const start = filters.paymentDateStart || null;
+        const end = filters.paymentDateEnd || null;
+        if (start && end) return paymentDateStrs.some((d: string) => d >= start && d <= end);
+        if (start) return paymentDateStrs.some((d: string) => d >= start);
+        if (end) return paymentDateStrs.some((d: string) => d <= end);
+        return true;
+      });
+    }
+
+    if (filters.discountPercent) {
+      const threshold = Number(filters.discountPercent);
+      if (Number.isFinite(threshold)) {
+        filtered = filtered.filter((t) => {
+          const total = getInvoiceListGrandTotal(t);
+          const discount = Number(t.discountBill) || 0;
+          const pct = total > 0 ? (discount / total) * 100 : 0;
+          return pct >= threshold;
+        });
+      }
+    }
+
+    const amountValue = (t: RawTransaction) => {
+      if (amountField === 'total') return getInvoiceListGrandTotal(t);
+      if (amountField === 'discount') return Number(t.discountBill) || 0;
+      if (amountField === 'due') return invoiceListDueAndAdvance(getInvoiceListGrandTotal(t), t.totalPay).due;
+      if (amountField === 'advance') return invoiceListDueAndAdvance(getInvoiceListGrandTotal(t), t.totalPay).advance;
+      if (amountField === 'refund') return getRawRefund(t);
+      return Number(t.totalPay) || 0;
+    };
+
+    if (filters.minAmount) {
+      const min = Number(filters.minAmount);
+      if (Number.isFinite(min)) {
+        filtered = filtered.filter((t) => amountValue(t) >= min);
+      }
+    }
+    if (filters.maxAmount) {
+      const max = Number(filters.maxAmount);
+      if (Number.isFinite(max)) {
+        filtered = filtered.filter((t) => amountValue(t) <= max);
+      }
+    }
+
+    if (filters.quickPayment === 'paid') {
+      filtered = filtered.filter((t) => Number(t.totalPay) > 0);
+    } else if (filters.quickPayment === 'due') {
+      filtered = filtered.filter(
+        (t) => invoiceListDueAndAdvance(getInvoiceListGrandTotal(t), t.totalPay).due > 0,
+      );
+    } else if (filters.quickPayment === 'advance') {
+      filtered = filtered.filter(
+        (t) => invoiceListDueAndAdvance(getInvoiceListGrandTotal(t), t.totalPay).advance > 0,
+      );
+    }
+
+    return filtered;
+  };
+
   const fetchTransactions = async (page = 1, pageSize = 20, retryCount = 0) => {
     setLoading(true);
     try {
@@ -696,7 +743,7 @@ const [filters, setFilters] = useState<Filters>({
       if (filters.department) queryParams.append('departmentId', filters.department);
       
       // Handle date filtering - if same date, use exact same time range
-      if (filters.startDate && filters.endDate) {
+      if (isValidFilterMoment(filters.startDate) && isValidFilterMoment(filters.endDate)) {
         const startDate = filters.startDate.clone();
         const endDate = filters.endDate.clone();
         
@@ -779,7 +826,12 @@ const [filters, setFilters] = useState<Filters>({
       console.log('Full API Response:', response.data);
       
       // Check if same date was selected and no data found
-      if (filters.startDate && filters.endDate && filters.startDate.isSame(filters.endDate, 'day') && data.length === 0) {
+      if (
+        isValidFilterMoment(filters.startDate) &&
+        isValidFilterMoment(filters.endDate) &&
+        filters.startDate.isSame(filters.endDate, 'day') &&
+        data.length === 0
+      ) {
         message.info(`No transactions found for ${filters.startDate.format('DD/MM/YYYY')}`);
       }
 
@@ -810,7 +862,11 @@ const [filters, setFilters] = useState<Filters>({
         formattedDate: moment(effectiveInvoiceDate(item)).format('YYYY-MM-DD')
       })));
       
-      if (filters.startDate && filters.endDate && filters.startDate.isSame(filters.endDate, 'day')) {
+      if (
+        isValidFilterMoment(filters.startDate) &&
+        isValidFilterMoment(filters.endDate) &&
+        filters.startDate.isSame(filters.endDate, 'day')
+      ) {
         const selectedDate = filters.startDate.format('YYYY-MM-DD');
         filteredData = data.filter((transaction: RawTransaction) => {
           const transactionDate = moment(effectiveInvoiceDate(transaction)).format('YYYY-MM-DD');
@@ -832,7 +888,7 @@ const [filters, setFilters] = useState<Filters>({
             message.info(`No transactions found for ${filters.startDate.format('DD/MM/YYYY')}`);
           }
         }
-      } else if (filters.startDate && filters.endDate) {
+      } else if (isValidFilterMoment(filters.startDate) && isValidFilterMoment(filters.endDate)) {
         // For date ranges, also apply frontend filtering to ensure data is within range
         const startDate = filters.startDate.format('YYYY-MM-DD');
         const endDate = filters.endDate.format('YYYY-MM-DD');
@@ -879,7 +935,7 @@ const [filters, setFilters] = useState<Filters>({
         const threshold = Number(filters.discountPercent);
         if (Number.isFinite(threshold)) {
           filteredData = filteredData.filter((t: RawTransaction) => {
-            const total = Number(t.totalBill) || 0;
+            const total = getInvoiceListGrandTotal(t);
             const discount = Number(t.discountBill) || 0;
             const pct = total > 0 ? (discount / total) * 100 : 0;
             return pct >= threshold;
@@ -926,6 +982,9 @@ const [filters, setFilters] = useState<Filters>({
           }
         }
   
+        const grandTotal = getInvoiceListGrandTotal(transaction);
+        const { due, advance } = invoiceListDueAndAdvance(grandTotal, transaction.totalPay);
+
         return {
           key: transaction._id,
           _id: transaction._id,
@@ -937,38 +996,32 @@ const [filters, setFilters] = useState<Filters>({
           patientPhone: transaction.patientId?.phone || 'N/A',
           doctor: transaction.doctorId?.name || 'N/A',
           department: transaction.doctorId?.departmentId?.name || transaction.departmentData?.name || 'N/A',
-          items: transaction.item.map((i) => i.description).join(', '),
+          items: invoiceItemsLabel(transaction.item),
           item: transaction.item,
           branchId: transaction.branchId,
           subTotal: transaction.subTotalBill || 0,
           discount: transaction.discountBill || 0,
           tax: transaction.taxBill || 0,
-          total: transaction.totalBill || 0,
+          total: grandTotal,
           paid: transaction.totalPay || 0,
-          due: transaction.duePay || 0,
+          due,
           refund: (Array.isArray(transaction.payment)
             ? transaction.payment.reduce((sum: number, p: any) => {
                 const v = Number(p?.paid) || 0;
                 return v < 0 ? sum + Math.abs(v) : sum;
               }, 0)
             : 0),
-          advance: (() => {
-            const rawDue = Number(transaction.duePay) || 0;
-            const adv = Number((transaction as any).advancePay) || 0;
-            return adv > 0 ? adv : rawDue < 0 ? Math.abs(rawDue) : 0;
-          })(),
+          advance,
           doctorShare,
           hospitalShare,
           paymentMode: transaction.payment?.[0]?.method || 'N/A',
           paymentDate: selectedPayment?.payDate || latestPayment?.payDate || null,
           paymentDateTs: selectedPayment?.ts || latestPayment?.ts || null,
-          status: (() => {
-            const adv = Number((transaction as any).advancePay) || 0;
-            const due = Number(transaction.duePay) || 0;
-            if (adv > 0 || due < 0) return 'Advance';
-            if (due === 0) return 'Paid';
-            return 'Pending';
-          })(),
+          createdAt: transaction.createdAt || '',
+          updatedAt: transaction.updatedAt || transaction.createdAt || '',
+          createdBy: invoiceCreatedByName(transaction as Record<string, unknown>),
+          updatedBy: invoiceUpdatedByName(transaction as Record<string, unknown>),
+          status: invoiceListStatus(grandTotal, transaction.totalPay),
         };
       });
   
@@ -1157,142 +1210,127 @@ const [filters, setFilters] = useState<Filters>({
     transactionCount: 0,
   });
 
-  const buildSummaryQueryParams = () => {
-    const queryParams = new URLSearchParams();
-
-    if (filters.doctor) queryParams.append('doctorId', filters.doctor);
-    if (filters.department) queryParams.append('departmentId', filters.department);
-
-    if (filters.startDate && filters.endDate) {
-      const startDate = filters.startDate.clone();
-      const endDate = filters.endDate.clone();
-
-      if (startDate.isSame(endDate, 'day')) {
-        queryParams.append('startDate', startDate.clone().startOf('day').toISOString());
-        queryParams.append('endDate', startDate.clone().endOf('day').toISOString());
-      } else {
-        queryParams.append('startDate', startDate.clone().startOf('day').toISOString());
-        queryParams.append('endDate', endDate.clone().endOf('day').toISOString());
-      }
-    }
-
-    if (filters.patientMR) queryParams.append('patientMR', filters.patientMR);
-    if (filters.status) queryParams.append('status', filters.status);
-    if (filters.patientName) queryParams.append('patientName', filters.patientName);
-    if (filters.patientPhone) queryParams.append('patientPhone', filters.patientPhone);
-    if (filters.invoiceNumber) queryParams.append('invoiceNo', filters.invoiceNumber);
-    if (filters.search) queryParams.append('search', filters.search);
-
-    // Amount range for summary – same mapping as in fetchTransactions
-    const amountField = filters.amountField || 'paid';
-    if (filters.minAmount) {
-      const min = Number(filters.minAmount);
-      if (Number.isFinite(min)) {
-        if (amountField === 'total') queryParams.append('minTotalBill', String(min));
-        else if (amountField === 'discount') queryParams.append('minDiscountBill', String(min));
-        else if (amountField === 'due') queryParams.append('minDue', String(min));
-        else if (amountField === 'advance') queryParams.append('minAdvance', String(min));
-        else queryParams.append('minPaid', String(min)); // default = paid
-      }
-    }
-    if (filters.maxAmount) {
-      const max = Number(filters.maxAmount);
-      if (Number.isFinite(max)) {
-        if (amountField === 'total') queryParams.append('maxTotalBill', String(max));
-        else if (amountField === 'discount') queryParams.append('maxDiscountBill', String(max));
-        else if (amountField === 'due') queryParams.append('maxDue', String(max));
-        else if (amountField === 'advance') queryParams.append('maxAdvance', String(max));
-        else queryParams.append('maxPaid', String(max)); // default = paid
-      }
-    }
-
-    if (filters.procedure) queryParams.append('procedureId', filters.procedure);
-    if (filters.paymentMode) queryParams.append('paymentMode', filters.paymentMode);
-    if (filters.paymentDateStart) queryParams.append('paymentDateStart', filters.paymentDateStart);
-    if (filters.paymentDateEnd) queryParams.append('paymentDateEnd', filters.paymentDateEnd);
-
-    return queryParams;
-  };
-
-  // Fetch summary from invoice list (frontend computed) so it always matches invoiceDate filtering.
+  // Summary: prefer fast /invoice/summary API so date clear stays in sync with the table.
+  // Fall back to full multi-page fetch only when client-only filters are active.
   const fetchSummaryData = async () => {
+    const requestId = ++summaryRequestIdRef.current;
+    // Drop stale filtered totals immediately so UI never keeps the previous date-range numbers.
+    setSummaryData({
+      totalRevenue: 0,
+      totalTax: 0,
+      totalDiscount: 0,
+      totalPaid: 0,
+      totalDue: 0,
+      totalDoctorShare: 0,
+      totalHospitalShare: 0,
+      transactionCount: 0,
+    });
     try {
-      const queryParams = buildSummaryQueryParams();
-      // IMPORTANT: remove start/end from backend query because backend may apply createdAt.
-      // We apply invoiceDate/date/createdAt date filtering on frontend for exact parity.
-      const baseFetchParams = new URLSearchParams(queryParams.toString());
-      baseFetchParams.delete('startDate');
-      baseFetchParams.delete('endDate');
-
-      const firstParams = new URLSearchParams(baseFetchParams.toString());
-      firstParams.set('page', '1');
-      firstParams.set('limit', '200');
-      const firstResp = await axios.get(`${Base_url}/apis/invoice/get?${firstParams.toString()}`);
-      const firstData: RawTransaction[] = firstResp?.data?.data || [];
-      const totalPages: number = firstResp?.data?.totalPages || 1;
-      const limit: number = firstResp?.data?.limit || 200;
-
-      const allRaw: RawTransaction[] = [...firstData];
-      const requests: Promise<any>[] = [];
-      for (let page = 2; page <= totalPages; page++) {
-        const p = new URLSearchParams(baseFetchParams.toString());
-        p.set('page', String(page));
-        p.set('limit', String(limit));
-        requests.push(axios.get(`${Base_url}/apis/invoice/get?${p.toString()}`));
-      }
-      const responses = await Promise.all(requests);
-      for (const res of responses) {
-        const dataChunk: RawTransaction[] = res?.data?.data || [];
-        allRaw.push(...dataChunk);
-      }
-
-      let filtered = allRaw;
-      if (filters.startDate && filters.endDate && filters.startDate.isSame(filters.endDate, 'day')) {
-        const selectedDate = filters.startDate.format('YYYY-MM-DD');
-        filtered = allRaw.filter((t) => moment(effectiveInvoiceDate(t)).format('YYYY-MM-DD') === selectedDate);
-      } else if (filters.startDate && filters.endDate) {
-        const start = filters.startDate.format('YYYY-MM-DD');
-        const end = filters.endDate.format('YYYY-MM-DD');
-        filtered = allRaw.filter((t) => {
-          const txDate = moment(effectiveInvoiceDate(t)).format('YYYY-MM-DD');
-          return txDate >= start && txDate <= end;
-        });
-      }
-
-      const computed = filtered.reduce(
-        (acc, t) => {
-          const { doctorShare, hospitalShare } = sumInvoiceDoctorHospitalShare(t);
-          acc.totalRevenue += Number(t.totalBill) || 0;
-          acc.totalTax += Number(t.taxBill) || 0;
-          acc.totalDiscount += Number(t.discountBill) || 0;
-          acc.totalPaid += Number(t.totalPay) || 0;
-          acc.totalDue += Number(t.duePay) || 0;
-          acc.totalDoctorShare += doctorShare;
-          acc.totalHospitalShare += hospitalShare;
-          acc.transactionCount += 1;
-          return acc;
-        },
-        {
-          totalRevenue: 0,
-          totalTax: 0,
-          totalDiscount: 0,
-          totalPaid: 0,
-          totalDue: 0,
-          totalDoctorShare: 0,
-          totalHospitalShare: 0,
-          transactionCount: 0,
-        },
+      const needsClientOnlyFilters = Boolean(
+        filters.paymentDateStart ||
+          filters.paymentDateEnd ||
+          filters.discountPercent ||
+          filters.quickPayment ||
+          (filters.amountField === 'refund' && (filters.minAmount || filters.maxAmount)),
       );
-      setSummaryData(computed);
-    } catch (error: any) {
-      console.error('❌ Error fetching summary from backend:', error);
-      console.error('❌ Error details:', {
-        message: error.message,
-        response: error.response?.data,
-        status: error.response?.status
+
+      if (needsClientOnlyFilters) {
+        const filtered = await fetchAllFilteredInvoicesForExport();
+        if (requestId !== summaryRequestIdRef.current) return;
+
+        const computed = filtered.reduce(
+          (acc, t) => {
+            const { doctorShare, hospitalShare } = sumInvoiceDoctorHospitalShare(t);
+            const grandTotal = getInvoiceListGrandTotal(t);
+            const { due } = invoiceListDueAndAdvance(grandTotal, t.totalPay);
+            acc.totalRevenue += grandTotal;
+            acc.totalTax += Number(t.taxBill) || 0;
+            acc.totalDiscount += Number(t.discountBill) || 0;
+            acc.totalPaid += Number(t.totalPay) || 0;
+            acc.totalDue += due;
+            acc.totalDoctorShare += doctorShare;
+            acc.totalHospitalShare += hospitalShare;
+            acc.transactionCount += 1;
+            return acc;
+          },
+          {
+            totalRevenue: 0,
+            totalTax: 0,
+            totalDiscount: 0,
+            totalPaid: 0,
+            totalDue: 0,
+            totalDoctorShare: 0,
+            totalHospitalShare: 0,
+            transactionCount: 0,
+          },
+        );
+        setSummaryData(computed);
+        return;
+      }
+
+      const queryParams = new URLSearchParams();
+      if (filters.doctor) queryParams.append('doctorId', filters.doctor);
+      if (filters.department) queryParams.append('departmentId', filters.department);
+      if (filters.patientMR) queryParams.append('patientMR', filters.patientMR);
+      if (filters.status) queryParams.append('status', filters.status);
+      if (filters.patientName) queryParams.append('patientName', filters.patientName);
+      if (filters.patientPhone) queryParams.append('patientPhone', filters.patientPhone);
+      if (filters.invoiceNumber) queryParams.append('invoiceNo', filters.invoiceNumber);
+      if (filters.search) queryParams.append('search', filters.search);
+      if (filters.procedure) queryParams.append('procedureId', filters.procedure);
+      if (filters.paymentMode) queryParams.append('paymentMode', filters.paymentMode);
+
+      const amountField = filters.amountField || 'paid';
+      if (filters.minAmount) {
+        const min = Number(filters.minAmount);
+        if (Number.isFinite(min)) {
+          if (amountField === 'total') queryParams.append('minTotalBill', String(min));
+          else if (amountField === 'discount') queryParams.append('minDiscountBill', String(min));
+          else if (amountField === 'due') queryParams.append('minDue', String(min));
+          else if (amountField === 'advance') queryParams.append('minAdvance', String(min));
+          else queryParams.append('minPaid', String(min));
+        }
+      }
+      if (filters.maxAmount) {
+        const max = Number(filters.maxAmount);
+        if (Number.isFinite(max)) {
+          if (amountField === 'total') queryParams.append('maxTotalBill', String(max));
+          else if (amountField === 'discount') queryParams.append('maxDiscountBill', String(max));
+          else if (amountField === 'due') queryParams.append('maxDue', String(max));
+          else if (amountField === 'advance') queryParams.append('maxAdvance', String(max));
+          else queryParams.append('maxPaid', String(max));
+        }
+      }
+
+      if (isValidFilterMoment(filters.startDate) && isValidFilterMoment(filters.endDate)) {
+        const startDate = filters.startDate.clone();
+        const endDate = filters.endDate.clone();
+        if (startDate.isSame(endDate, 'day')) {
+          queryParams.append('startDate', startDate.clone().startOf('day').toISOString());
+          queryParams.append('endDate', startDate.clone().endOf('day').toISOString());
+        } else {
+          queryParams.append('startDate', startDate.clone().startOf('day').toISOString());
+          queryParams.append('endDate', endDate.clone().endOf('day').toISOString());
+        }
+      }
+
+      const response = await axios.get(`${Base_url}/apis/invoice/summary?${queryParams.toString()}`);
+      if (requestId !== summaryRequestIdRef.current) return;
+
+      const s = response?.data?.summary || response?.data?.data || response?.data || {};
+      setSummaryData({
+        totalRevenue: Number(s.totalRevenue) || 0,
+        totalTax: Number(s.totalTax) || 0,
+        totalDiscount: Number(s.totalDiscount) || 0,
+        totalPaid: Number(s.totalPaid) || 0,
+        totalDue: Math.max(0, Number(s.totalDue) || 0),
+        totalDoctorShare: Number(s.totalDoctorShare) || 0,
+        totalHospitalShare: Number(s.totalHospitalShare) || 0,
+        transactionCount: Number(s.totalTransactions ?? s.transactionCount) || 0,
       });
-      
-      // Set empty summary on error
+    } catch (error: any) {
+      if (requestId !== summaryRequestIdRef.current) return;
+      console.error('❌ Error fetching summary:', error);
       setSummaryData({
         totalRevenue: 0,
         totalTax: 0,
@@ -1303,10 +1341,6 @@ const [filters, setFilters] = useState<Filters>({
         totalHospitalShare: 0,
         transactionCount: 0,
       });
-      
-      if (error.response?.status === 404) {
-        message.error('Summary API not found. Please restart the backend server.');
-      }
     }
   };
 
@@ -1517,7 +1551,7 @@ const [filters, setFilters] = useState<Filters>({
 
         {items.map((item, index) => (
           <View key={index} style={styles.tableRow}>
-            <Text style={styles.descriptionColumn}>{item.description || 'N/A'}</Text>
+            <Text style={styles.descriptionColumn}>{getInvoiceItemProcedureName(item) || 'N/A'}</Text>
             <Text style={styles.rateColumn}>{item.rate?.toFixed(2) || '0.00'}</Text>
             <Text style={styles.quantityColumn}>{item.quantity || '0'}</Text>
             <Text style={styles.amountColumn}>{item.amount?.toFixed(2) || '0.00'}</Text>
@@ -1536,7 +1570,7 @@ const [filters, setFilters] = useState<Filters>({
           </View>
           <View style={[styles.totalRow, styles.grandTotal]}>
             <Text style={{fontSize:12}}>Grand Total:</Text>
-            <Text style={{fontSize:12}}>Rs. {invoice.totalBill?.toFixed(2) || '0.00'}</Text>
+            <Text style={{fontSize:12}}>Rs. {invoicePdfPaymentSummary(invoice).grandTotal.toFixed(2)}</Text>
           </View>
           <View style={styles.totalRow}>
             <Text style={{fontSize:12}}>Amount Paid:</Text>
@@ -1544,7 +1578,7 @@ const [filters, setFilters] = useState<Filters>({
           </View>
           <View style={[styles.totalRow, {marginTop: 5}]}>
             <Text style={{fontSize:12}}>Balance Due:</Text>
-            <Text style={{fontSize:12}}>Rs. {invoice.duePay?.toFixed(2) || '0.00'}</Text>
+            <Text style={{fontSize:12}}>Rs. {invoicePdfPaymentSummary(invoice).due.toFixed(2)}</Text>
           </View>
         </View>
 
@@ -1604,15 +1638,18 @@ const [filters, setFilters] = useState<Filters>({
       const raw = localStorage.getItem('financialReportFilters');
       if (!raw) return;
       const saved = JSON.parse(raw);
-      const startDate = saved.startDate ? moment(saved.startDate) : undefined;
-      const endDate = saved.endDate ? moment(saved.endDate) : undefined;
-      const dateRange = startDate && endDate ? [startDate, endDate] : undefined;
+      const startDate = saved.startDate ? moment(saved.startDate) : null;
+      const endDate = saved.endDate ? moment(saved.endDate) : null;
+      const dateRange =
+        startDate && endDate && startDate.isValid() && endDate.isValid()
+          ? ([startDate, endDate] as [moment.Moment, moment.Moment])
+          : ([] as []);
       setFilters((prev) => ({
         ...prev,
         ...saved,
-        startDate: startDate || prev.startDate,
-        endDate: endDate || prev.endDate,
-        dateRange: dateRange || prev.dateRange,
+        startDate: startDate && startDate.isValid() ? startDate : null,
+        endDate: endDate && endDate.isValid() ? endDate : null,
+        dateRange,
       }));
     } catch {}
   }, []);
@@ -1621,10 +1658,11 @@ const [filters, setFilters] = useState<Filters>({
     try {
       const payload = {
         ...filters,
-        startDate: filters.startDate ? filters.startDate.toISOString() : '',
-        endDate: filters.endDate ? filters.endDate.toISOString() : '',
+        startDate: isValidFilterMoment(filters.startDate) ? filters.startDate.toISOString() : '',
+        endDate: isValidFilterMoment(filters.endDate) ? filters.endDate.toISOString() : '',
         paymentDateStart: filters.paymentDateStart || '',
         paymentDateEnd: filters.paymentDateEnd || '',
+        dateRange: undefined,
       };
       localStorage.setItem('financialReportFilters', JSON.stringify(payload));
     } catch {}
@@ -1691,6 +1729,15 @@ const generatePdf = async (invoice) => {
 
   const columns = [
     {
+      title: 'Sr No.',
+      key: 'srNo',
+      width: 72,
+      fixed: 'left',
+      align: 'center' as const,
+      render: (_text: unknown, _record: unknown, index: number) =>
+        (pagination.current - 1) * pagination.pageSize + index + 1,
+    },
+    {
       title: 'INVOICE #',
       dataIndex: 'invoiceNo',
       key: 'invoiceNo',
@@ -1725,6 +1772,42 @@ const generatePdf = async (invoice) => {
         if (!ts) return 'N/A';
         return dayjs(ts).format('DD/MM/YYYY - hh:mm A');
       },
+    },
+    {
+      title: 'CREATED AT',
+      dataIndex: 'createdAt',
+      key: 'createdAt',
+      width: 170,
+      render: (value) => (value ? moment(value).format('DD/MM/YYYY HH:mm') : 'N/A'),
+      sorter: (a, b) => moment(a.createdAt).valueOf() - moment(b.createdAt).valueOf(),
+      sortDirections: ['ascend', 'descend'],
+    },
+    {
+      title: 'UPDATED AT',
+      dataIndex: 'updatedAt',
+      key: 'updatedAt',
+      width: 170,
+      render: (value) => (value ? moment(value).format('DD/MM/YYYY HH:mm') : 'N/A'),
+      sorter: (a, b) => moment(a.updatedAt).valueOf() - moment(b.updatedAt).valueOf(),
+      sortDirections: ['ascend', 'descend'],
+    },
+    {
+      title: 'CREATED BY',
+      dataIndex: 'createdBy',
+      key: 'createdBy',
+      width: 140,
+      render: (name) => name || 'N/A',
+      sorter: (a, b) => String(a.createdBy || '').localeCompare(String(b.createdBy || '')),
+      sortDirections: ['ascend', 'descend'],
+    },
+    {
+      title: 'UPDATED BY',
+      dataIndex: 'updatedBy',
+      key: 'updatedBy',
+      width: 140,
+      render: (name) => name || 'N/A',
+      sorter: (a, b) => String(a.updatedBy || '').localeCompare(String(b.updatedBy || '')),
+      sortDirections: ['ascend', 'descend'],
     },
     {
       title: 'MR#',
@@ -1811,10 +1894,10 @@ const generatePdf = async (invoice) => {
       sortDirections: ['ascend', 'descend'],
     },
     {
-      title: 'TOTAL',
+      title: 'GRAND TOTAL',
       dataIndex: 'total',
       key: 'total',
-      width: 100,
+      width: 120,
       render: (value) => value.toLocaleString(),
       sorter: (a, b) => Number(a.total) - Number(b.total),
       sortDirections: ['ascend', 'descend'],
@@ -1935,6 +2018,17 @@ const generatePdf = async (invoice) => {
 }
   ];
 
+  const {
+    visibleColumns,
+    columnOptions,
+    setColumnVisible,
+    setAllVisible,
+    resetColumns,
+  } = useTableColumnPrefs('financial.reports', columns as any, {
+    lockedKeys: ['action', 'srNo'],
+  });
+  const columnsCustomized = columnOptions.some((o) => !o.locked && !o.visible);
+
   return (
     <>
       <div className="">
@@ -1948,15 +2042,33 @@ const generatePdf = async (invoice) => {
                 </h1>
 
                 
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2 items-center">
+          <TableColumnCustomize
+            options={columnOptions}
+            onToggle={setColumnVisible}
+            onShowAll={() => setAllVisible(true)}
+            onHideAll={() => setAllVisible(false)}
+            onReset={resetColumns}
+          />
           <Button
             type="default"
             icon={<RiFileExcel2Line />}
             onClick={exportAllToExcel}
             loading={exporting}
+            disabled={exportingSummary}
             className="flex items-center"
           >
-            {exporting ? 'Exporting…' : 'Export Excel'}
+            {exporting ? 'Exporting…' : 'Details Summary'}
+          </Button>
+          <Button
+            type="default"
+            icon={<RiFileExcel2Line />}
+            onClick={exportSummaryToExcel}
+            loading={exportingSummary}
+            disabled={exporting}
+            className="flex items-center"
+          >
+            {exportingSummary ? 'Exporting…' : 'Report Summary'}
           </Button>
                   <Button
                     type="default"
@@ -1980,22 +2092,7 @@ const generatePdf = async (invoice) => {
                   >
                     Print
                   </Button>
-                  <Button
-                    type="default"
-                    onClick={() => {
-                      console.log('Debug Info:', {
-                        pagination,
-                        transactionsCount: transactions.length,
-                        filteredTransactionsCount: filteredTransactions.length,
-                        filters,
-                        loading
-                      });
-                      message.info('Check console for debug info');
-                    }}
-                    className="flex items-center"
-                  >
-                    Debug
-                  </Button>
+                 
                 </div>
 
               
@@ -2015,10 +2112,10 @@ const generatePdf = async (invoice) => {
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-lg font-semibold text-gray-800">
                     {(() => {
-                      const hasStart = Boolean(filters.startDate) && typeof (filters.startDate as any).format === 'function';
-                      const hasEnd = Boolean(filters.endDate) && typeof (filters.endDate as any).format === 'function';
-                      const startLabel = hasStart ? (filters.startDate as any).format('DD/MM/YYYY') : 'All';
-                      const endLabel = hasEnd ? (filters.endDate as any).format('DD/MM/YYYY') : 'All';
+                      const hasStart = isValidFilterMoment(filters.startDate);
+                      const hasEnd = isValidFilterMoment(filters.endDate);
+                      const startLabel = hasStart ? filters.startDate.format('DD/MM/YYYY') : 'All';
+                      const endLabel = hasEnd ? filters.endDate.format('DD/MM/YYYY') : 'All';
                       return `Overall Summary (${startLabel} - ${endLabel})`;
                     })()}
                   </h3>
@@ -2310,7 +2407,7 @@ const generatePdf = async (invoice) => {
                       <RangePicker
                         style={{ flex: 1 }}
                         value={
-                          filters.startDate && filters.endDate
+                          isValidFilterMoment(filters.startDate) && isValidFilterMoment(filters.endDate)
                             ? [dayjs(filters.startDate.toDate()), dayjs(filters.endDate.toDate())]
                             : null
                         }
@@ -2322,9 +2419,9 @@ const generatePdf = async (invoice) => {
                           if (!dates) {
                             setFilters((prev) => ({
                               ...prev,
-                              dateRange: [] as any,
-                              startDate: '' as any,
-                              endDate: '' as any,
+                              dateRange: [],
+                              startDate: null,
+                              endDate: null,
                             }));
                             return;
                           }
@@ -2416,9 +2513,9 @@ const generatePdf = async (invoice) => {
                             ...prev,
                             paymentDateStart: dates[0].format('YYYY-MM-DD'),
                             paymentDateEnd: dates[1].format('YYYY-MM-DD'),
-                            startDate: '' as any,
-                            endDate: '' as any,
-                            dateRange: [] as any,
+                            startDate: null,
+                            endDate: null,
+                            dateRange: [],
                           }));
                         }}
                       />
@@ -2545,7 +2642,10 @@ const generatePdf = async (invoice) => {
                   <Col xs={24} className="flex justify-end gap-2">
                     <Button
                       type="default"
-                      onClick={() => fetchTransactions(1, pagination.pageSize)}
+                      onClick={() => {
+                        fetchTransactions(1, pagination.pageSize);
+                        fetchSummaryData();
+                      }}
                       loading={loading}
                     >
                       Search
@@ -2597,7 +2697,7 @@ const generatePdf = async (invoice) => {
 
             <div ref={tableRef}>
               <Table
-                columns={columns}
+                columns={visibleColumns}
                 dataSource={filteredTransactions}
                 loading={loading}
                 scroll={{ x: 2000 }}
@@ -2621,10 +2721,13 @@ const generatePdf = async (invoice) => {
                 locale={{
                   emptyText: 'No transactions found',
                 }}
-                summary={() => (
+                summary={
+                  columnsCustomized
+                    ? undefined
+                    : () => (
                   <Table.Summary fixed>
                     <Table.Summary.Row>
-                      <Table.Summary.Cell index={0} colSpan={8} align="right">
+                      <Table.Summary.Cell index={0} colSpan={9} align="right">
                         <strong>Total</strong>
                       </Table.Summary.Cell>
                       <Table.Summary.Cell index={1}>

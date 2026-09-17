@@ -253,12 +253,27 @@ const userSchema = new mongoose.Schema({
         type: Date,
         allowNull: true,
     },
+    lastLogin: {
+        type: Date,
+        allowNull: true,
+    },
+    loginCount: {
+        type: Number,
+        default: 0,
+    },
     block: {
         type: Boolean,
         allowNull: true,
     },
+    /** Soft lifecycle — inactive rows stay in history but are hidden from pickers by default. */
+    isActive: {
+        type: Boolean,
+        default: true,
+        index: true,
+    },
 },{timestamps:true});
 
+userSchema.index({ role: 1, branchId: 1 });
 
 const User = mongoose.model('User', userSchema);
 

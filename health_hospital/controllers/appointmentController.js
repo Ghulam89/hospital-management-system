@@ -5,14 +5,12 @@ const User = require('../models/userModel');
 const Patient = require('../models/patientModel');
 const {
     applyPatientIdScopeToQuery,
-    getScopedPatientIds,
-    getScopedDepartmentIds,
     patientVisibleForRequest,
     mergeBranchScopedQuery,
     applyStrictBranchListFilter,
     assignBranchIdForCreate,
-    branchDocumentVisible,
-} = require('../utils/branchScope');
+    branchDocumentVisible, branchDocumentDeletable,
+} = require("../utils/branchScope");
 
 // Utility for recurrence
 
@@ -163,43 +161,49 @@ const addAppointment = async (req, res) => {
 
 
 
+// Short in-memory cache so dashboard doesn't re-hit Mongo on every remount/refresh
+const DASHBOARD_CACHE_TTL_MS = 20000;
+const dashboardCache = new Map();
+
+function dashboardCacheKey(req) {
+    const uid = req.user?._id ? String(req.user._id) : 'anon';
+    const branch = req.query?.branchId != null ? String(req.query.branchId) : '';
+    const page = req.query?.page != null ? String(req.query.page) : '1';
+    const doctorId = req.query?.doctorId != null ? String(req.query.doctorId) : '';
+    const patientId = req.query?.patientId != null ? String(req.query.patientId) : '';
+    return `${uid}|${branch}|${page}|${doctorId}|${patientId}`;
+}
+
 const getAppointmentDashboard = async (req, res) => {
     try {
-        // Get today's date range
+        const cacheKey = dashboardCacheKey(req);
+        const bustCache = req.query?.refresh === '1' || req.query?._ts != null;
+        if (!bustCache) {
+            const cached = dashboardCache.get(cacheKey);
+            if (cached && Date.now() - cached.at < DASHBOARD_CACHE_TTL_MS) {
+                return res.status(200).json(cached.payload);
+            }
+        } else {
+            dashboardCache.delete(cacheKey);
+        }
+
         const startOfDay = new Date();
         startOfDay.setHours(0, 0, 0, 0);
 
         const endOfDay = new Date();
         endOfDay.setHours(23, 59, 59, 999);
 
-
-
-        var search = "";
-        if (req.query.search) {
-            search = req.query.search;
-        }
-
-        var page = "1";
-        if (req.query.page) {
-            page = req.query.page;
-        }
-
-        const limit = "20";
+        const search = req.query.search || '';
+        const page = req.query.page || '1';
+        const limit = '20';
         const limitNum = parseInt(limit, 10);
         const pageNum = parseInt(page, 10) || 1;
 
-        const scopedPatientIds = await getScopedPatientIds(req);
-        const scopedDeptIds = await getScopedDepartmentIds(req);
-
-        const scopeByPatient = {};
-        if (scopedPatientIds !== null) {
-            scopeByPatient.patientId = scopedPatientIds.length === 0 ? { $in: [] } : { $in: scopedPatientIds };
-        }
-
+        // Branch filter is enough for appointments — avoid getScopedPatientIds (huge $in).
         const branchProbe = {};
         const branchListResult = await applyStrictBranchListFilter(req, branchProbe);
         if (branchListResult === 'empty') {
-            return res.status(200).json({
+            const emptyPayload = {
                 status: 'ok',
                 data: {
                     totalAppointments: 0,
@@ -216,82 +220,135 @@ const getAppointmentDashboard = async (req, res) => {
                     count: 0,
                     totalPages: 0,
                     currentPage: pageNum,
-                    limit
-                }
-            });
+                    limit,
+                },
+            };
+            dashboardCache.set(cacheKey, { at: Date.now(), payload: emptyPayload });
+            return res.status(200).json(emptyPayload);
         }
 
-        const apptBranchPart =
-            branchProbe.branchId ? { branchId: branchProbe.branchId } : {};
+        const apptBranchPart = branchProbe.branchId ? { branchId: branchProbe.branchId } : {};
+        const baseApptQuery = { ...apptBranchPart };
 
-        const dctQuery = { ...scopeByPatient, ...apptBranchPart };
-        if (req.query.doctorId) {
-            dctQuery.doctorId = req.query.doctorId;
-        }
-
-        const patQuery = { ...scopeByPatient, ...apptBranchPart };
-        if (req.query.patientId) {
-            patQuery.patientId = req.query.patientId;
-        }
-
-        const allDoctorAppointments = await Appointment.find(dctQuery).populate(['doctorId', 'patientId']);
-        const allPatientAppointments = await Appointment.find(patQuery).populate(['doctorId', 'patientId']);
-        const allAppointments = await Appointment.find({ ...scopeByPatient, ...apptBranchPart }).populate(['doctorId', 'patientId']);
+        const todayMatch = {
+            ...baseApptQuery,
+            appointmentDate: { $gte: startOfDay, $lte: endOfDay },
+        };
 
         const branchFilter = await mergeBranchScopedQuery(req);
-        let doctorQuery = { role: 'doctor' };
+        const doctorQuery = { role: 'doctor' };
         if (branchFilter && branchFilter.branchId) {
             doctorQuery.branchId = branchFilter.branchId;
         }
-        if (scopedDeptIds !== null) {
-            doctorQuery.departmentId = scopedDeptIds.length === 0 ? { $in: [] } : { $in: scopedDeptIds };
-        }
-        const allDoctor = await User.find(doctorQuery);
-        const allPatient = await Patient.find(scopedPatientIds === null ? {} : { _id: { $in: scopedPatientIds } });
 
-        const todayQuery = {
-            ...scopeByPatient,
-            ...apptBranchPart,
-            appointmentDate: { $gte: startOfDay, $lte: endOfDay }
-        };
-        const todayAppointments = await Appointment.find(todayQuery)
-            .populate(['doctorId', 'patientId'])
-            .limit(limitNum)
-            .skip((pageNum - 1) * limitNum)
-            .exec();
+        // totalPatient: avoid 4-collection distinct scan on every dashboard hit
+        const patientCountPromise = (async () => {
+            if (!branchFilter?.branchId) {
+                return Patient.countDocuments({});
+            }
+            const branchId = branchFilter.branchId;
+            const [fromAppts, fromLegacy] = await Promise.all([
+                Appointment.distinct('patientId', { branchId }),
+                Patient.distinct('_id', { branchId }),
+            ]);
+            const set = new Set();
+            for (const id of fromAppts) if (id) set.add(String(id));
+            for (const id of fromLegacy) if (id) set.add(String(id));
+            return set.size;
+        })();
 
-        const count = await Appointment.countDocuments(todayQuery);
+        const todayFacetPromise = Appointment.aggregate([
+            { $match: todayMatch },
+            {
+                $facet: {
+                    meta: [
+                        {
+                            $group: {
+                                _id: null,
+                                count: { $sum: 1 },
+                                patients: { $addToSet: '$patientId' },
+                                doctors: { $addToSet: '$doctorId' },
+                                checkins: {
+                                    $sum: {
+                                        $cond: [{ $eq: ['$appointmentStatus', 'Checkin'] }, 1, 0],
+                                    },
+                                },
+                            },
+                        },
+                    ],
+                    list: [
+                        { $sort: { appointmentDate: 1, startTime: 1 } },
+                        { $skip: (pageNum - 1) * limitNum },
+                        { $limit: limitNum },
+                    ],
+                },
+            },
+        ]);
 
+        const [
+            totalAppointments,
+            totalDoctor,
+            totalPatient,
+            todayFacet,
+            totalDoctorAppointments,
+            totalPatientAppointments,
+        ] = await Promise.all([
+            Appointment.countDocuments(baseApptQuery),
+            User.countDocuments(doctorQuery),
+            patientCountPromise,
+            todayFacetPromise,
+            req.query?.doctorId
+                ? Appointment.countDocuments({ ...baseApptQuery, doctorId: req.query.doctorId })
+                : Promise.resolve(0),
+            req.query?.patientId
+                ? Appointment.countDocuments({ ...baseApptQuery, patientId: req.query.patientId })
+                : Promise.resolve(0),
+        ]);
 
-        // Unique today patients
-        const todayPatientIds = [...new Set(todayAppointments.map(app => app.patientId?._id?.toString()))];
+        const facet = todayFacet?.[0] || { meta: [], list: [] };
+        const meta = facet.meta?.[0] || {};
+        const count = meta.count || 0;
+        const todayPatientIds = (meta.patients || []).filter(Boolean);
+        const todayDoctorIds = (meta.doctors || []).filter(Boolean);
+        const totalTodayCheckinVisits = meta.checkins || 0;
+        const listDocs = facet.list || [];
 
-        // Unique today doctors
-        const todayDoctorIds = [...new Set(todayAppointments.map(app => app.doctorId?._id?.toString()))];
+        // Populate only the page of today's appointments (name/phone fields only)
+        const todayAppointments = listDocs.length
+            ? await Appointment.populate(listDocs, [
+                { path: 'doctorId', select: 'name' },
+                { path: 'patientId', select: 'name phone' },
+            ])
+            : [];
 
-        // Count of check-in visits today
-        const todayCheckinCount = todayAppointments.filter(app => app.appointmentStatus === 'Checkin').length;
-
-        res.status(200).json({
+        const payload = {
             status: 'ok',
             data: {
-                totalAppointments: allAppointments.length,
-                totalDoctorAppointments: req.query?.doctorId?allDoctorAppointments.length:0,
-                totalPatientAppointments: req.query?.patientId?allPatientAppointments.length:0,
-                totalDoctor: allDoctor.length,
-                totalPatient: allPatient.length,
+                totalAppointments,
+                totalDoctorAppointments,
+                totalPatientAppointments,
+                totalDoctor,
+                totalPatient,
                 todayAppointments,
                 totalTodayPatients: todayPatientIds.length,
                 totalTodayDoctors: todayDoctorIds.length,
-                totalTodayCheckinVisits: todayCheckinCount,
+                totalTodayCheckinVisits,
                 search,
                 page,
                 count,
-                totalPages: Math.ceil(count / limit),
+                totalPages: Math.ceil(count / limitNum),
                 currentPage: pageNum,
-                limit
-            }
-        });
+                limit,
+            },
+        };
+
+        dashboardCache.set(cacheKey, { at: Date.now(), payload });
+        if (dashboardCache.size > 200) {
+            const oldest = dashboardCache.keys().next().value;
+            dashboardCache.delete(oldest);
+        }
+
+        res.status(200).json(payload);
     } catch (err) {
         res.status(500).json({ status: 'error', message: err.message });
     }
@@ -761,7 +818,7 @@ const deleteAppointment = async (req, res) => {
         if (!existing) {
             return res.status(404).json({ status: 'fail', message: 'Appointment not found' });
         }
-        if (!(await branchDocumentVisible(req, existing.branchId))) {
+        if (!(await branchDocumentDeletable(req, existing.branchId))) {
             return res.status(404).json({ status: 'fail', message: 'Appointment not found' });
         }
         if (existing.patientId && !(await patientVisibleForRequest(req, existing.patientId))) {

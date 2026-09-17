@@ -1,5 +1,5 @@
 const RoomDetail = require("../models/roomDetailModel");
-const { getScopedRoomIds, idInList } = require("../utils/branchScope");
+const { getScopedRoomIds, idInList} = require("../utils/branchScope");
 
 // 1. Create roomDetail
 const addroomDetail = async (req, res) => {
@@ -25,7 +25,7 @@ const addroomDetail = async (req, res) => {
     else {
 
 
-      const roomDetail = await RoomDetail.create({ ...req.body, });
+      const roomDetail = await RoomDetail.create({ ...req.body });
       return res.status(200).json({ status: "ok", data: roomDetail });
     }
   } catch (err) {
@@ -200,6 +200,4 @@ module.exports = {
   getroomDetails,
   getroomDetailById,
   updateroomDetail,
-  deleteroomDetail,
-
-};
+  deleteroomDetail };

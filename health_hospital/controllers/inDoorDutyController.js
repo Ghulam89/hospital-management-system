@@ -1,5 +1,5 @@
 const InDoorDuty = require("../models/inDoorDutyModel");
-const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible } = require("../utils/branchScope");
+const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible, branchDocumentDeletable } = require("../utils/branchScope");
 
 // 1. Create Detail
 const addDetail = async (req, res) => {
@@ -94,7 +94,7 @@ const deleteDetail = async (req, res) => {
   try {
     const id = req.params.id;
     const row = await InDoorDuty.findById(id);
-    if (!row || !(await branchDocumentVisible(req, row.branchId))) {
+    if (!row || !(await branchDocumentDeletable(req, row.branchId))) {
       return res.status(404).json({ status: "fail", message: "Indoor duty record not found" });
     }
     await InDoorDuty.findByIdAndDelete(id);

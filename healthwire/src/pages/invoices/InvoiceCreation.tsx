@@ -1,17 +1,38 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 import axios from 'axios';
 import { Base_url } from '../../utils/Base_url';
 import { localCalendarYmd } from '../../utils/dateLocal';
 import { toast } from 'react-toastify';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { BsFillFileEarmarkPdfFill } from 'react-icons/bs';
 import AddProcedureExpense from './AddProcedureExpense';
-import { expenseDeductBeforeDoctorShareTotal } from './invoiceExpenseUtils';
+import {
+  expenseDeductBeforeDoctorShareTotal,
+  invoiceUsesProcedureWiseDiscount,
+  isProcedureFreeFromPricing,
+  isProcedureLineEffectivelyFree,
+} from './invoiceExpenseUtils';
+import {
+  resolveInvoiceDiscountAmount,
+  splitDiscountAcrossLines,
+} from './invoiceDiscountUtils';
+import {
+  installmentAmountDisplay,
+  installmentAmountNumber,
+  InstallmentAmount,
+  parseInstallmentAmountInput,
+} from './paymentInstallmentUtils';
 import { AsyncPaginate, LoadOptions } from 'react-select-async-paginate';
 import AddPatients from '../Patients/AddPatients';
 import { fetchPatientsForInvoiceLookup } from '../../utils/patientInvoiceSearch';
 import InvoiceClientBalanceRow from '../../components/invoices/InvoiceClientBalanceRow';
+import {
+  procedureMasterHasCostingDefaults,
+  procedureMasterToCostingBundle,
+  procedureCostingBundleSummary,
+  getCostingBundleForProcedureRow,
+} from '../Preferences/Procedures/procedureMasterUtils';
 
 type Procedure = {
   _id: string;
@@ -65,7 +86,7 @@ type PaymentInstallment = {
   id: number;
   date: string;
   method: string;
-  amount: number;
+  amount: InstallmentAmount;
   reference: string;
   installmentPlan: string; // New field for installment plan
 };
@@ -81,6 +102,8 @@ type Patient = {
   name: string;
   gender: string;
   phone: string;
+  /** Present when selected via hospital-wide identity match (invoice at this branch is still allowed). */
+  notInThisBranch?: boolean;
 };
 
 type ProcedureOption = {
@@ -95,6 +118,7 @@ type ExpenseCategory = {
 
 export default function InvoiceCreation() {
     const [invoiceDate, setInvoiceDate] = useState<string>(() => localCalendarYmd());
+  const [hcloudInvoiceNo, setHcloudInvoiceNo] = useState('');
   const [dateFormat, setDateFormat] = useState<string>('YYYY-MM-DD'); // Default format
 
   const [patientInfo, setPatientInfo] = useState<Patient | null>(null);
@@ -107,8 +131,11 @@ export default function InvoiceCreation() {
   const [remarks, setRemarks] = useState('');
   const [invoiceDiscount, setInvoiceDiscount] = useState(0);
   const [invoiceDiscountType, setInvoiceDiscountType] = useState(0);
+  const [discountSource, setDiscountSource] = useState<'invoice' | 'procedure'>('invoice');
+  const skipDiscountModeSwitchRef = useRef(false);
   const [searchError, setSearchError] = useState('');
    const navigate = useNavigate()
+   const [searchParams] = useSearchParams();
    const [isSubmitting, setIsSubmitting] = useState(false);
    
   const [procedures, setProcedures] = useState<ProcedureItem[]>(() => {
@@ -147,6 +174,8 @@ export default function InvoiceCreation() {
       installmentPlan: '', // New field
     },
   ]);
+  /** Monotonic ids — never reuse after delete (avoids date-input DOM reuse). */
+  const paymentRowIdRef = useRef(2);
 
   const [localExpenses, setLocalExpenses] = useState<any[]>([]);
   const [selectedProcedureRowId, setSelectedProcedureRowId] = useState<number | null>(null);
@@ -164,21 +193,17 @@ export default function InvoiceCreation() {
     e.currentTarget.blur();
   };
 
-  const normalizeInstallmentAmount = (value: string) => {
-    if (value === '') return 0;
-    return Math.max(0, Number(value) || 0);
-  };
-
   const validateFirstInstallment = () => {
     if (!paymentInstallments.length) {
       toast.error('First payment installment is required');
       return false;
     }
 
-    if ((Number(paymentInstallments[0]?.amount) || 0) <= 0) {
-      toast.error('Please enter the first payment installment amount');
-      return false;
-    }
+    // TEMP: allow zero first payment — uncomment when required again
+    // if ((Number(paymentInstallments[0]?.amount) || 0) <= 0) {
+    //   toast.error('Please enter the first payment installment amount');
+    //   return false;
+    // }
 
     return true;
   };
@@ -255,6 +280,31 @@ export default function InvoiceCreation() {
     fetchData();
   }, []);
 
+  // Prefill patient from ?patientId= (patient detail / legacy create links)
+  useEffect(() => {
+    const patientId = String(searchParams.get('patientId') || '').trim();
+    if (!patientId || !/^[0-9a-fA-F]{24}$/i.test(patientId)) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await axios.get(`${Base_url}/apis/patient/get/${patientId}`);
+        const p = res?.data?.data;
+        if (cancelled || !p?._id) return;
+        setPatientInfo({
+          ...p,
+          notInThisBranch: !!res?.data?.notInThisBranch,
+        });
+        setSearchTerm(p.mr || p.name || '');
+        setShowSearchResults(false);
+      } catch {
+        /* ignore — user can still search */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [searchParams]);
+
   // Patient search — branch-scoped + MR/phone exact (same rules as Patients list)
   useEffect(() => {
     const fetchPatients = async () => {
@@ -271,7 +321,7 @@ export default function InvoiceCreation() {
           setSearchError('');
         } else {
           setSearchResults([]);
-          setSearchError('Patient not found in this branch');
+          setSearchError('Patient not found');
         }
       } catch (error) {
         console.error('Error searching patients:', error);
@@ -349,8 +399,77 @@ export default function InvoiceCreation() {
     };
   }
 };
-  const getBundleForProcedureRow = (procedureRowId: number) =>
-    localExpenses.find((b) => b?.procedureRowId === procedureRowId) || null;
+  const procedureMasterLoadSeq = useRef<Record<number, number>>({});
+
+  const getBundleForProcedureRow = (procedureRowId: number) => {
+    const row = procedures.find((p) => p.id === procedureRowId);
+    return getCostingBundleForProcedureRow(
+      localExpenses,
+      procedureRowId,
+      row?.procedureId || '',
+    );
+  };
+
+  const getBundleForProcedureRowWithExpenses = (
+    expenses: any[],
+    procedureRowId: number,
+    rows: ProcedureItem[] = procedures,
+  ) => {
+    const row = rows.find((p) => p.id === procedureRowId);
+    return getCostingBundleForProcedureRow(
+      expenses,
+      procedureRowId,
+      row?.procedureId || '',
+    );
+  };
+
+  const isRowFreeProcedure = (item: ProcedureItem) =>
+    isProcedureFreeFromPricing(getBundleForProcedureRow(item.id));
+
+  const clearProcedureFreeFlag = (rowId: number) => {
+    setLocalExpenses((prev) =>
+      prev.map((e) => {
+        if (e.procedureRowId !== rowId) return e;
+        const pricing = e.procedurePricing;
+        if (!pricing?.isFreeProcedure) return e;
+        return {
+          ...e,
+          procedurePricing: {
+            ...pricing,
+            isFreeProcedure: false,
+          },
+        };
+      }),
+    );
+  };
+
+  const clearInvoiceLevelDiscountControl = () => {
+    setDiscountSource('procedure');
+    setInvoiceDiscount(0);
+    setInvoiceDiscountType(0);
+  };
+
+  const syncDiscountSourceFromRows = (rows: ProcedureItem[], expenses: any[]) => {
+    const bundleFor = (rowId: number) =>
+      getBundleForProcedureRowWithExpenses(expenses, rowId, rows);
+    if (invoiceUsesProcedureWiseDiscount(rows, bundleFor)) {
+      if (!skipDiscountModeSwitchRef.current) {
+        clearInvoiceLevelDiscountControl();
+      }
+    } else if (!skipDiscountModeSwitchRef.current) {
+      setDiscountSource('invoice');
+    }
+  };
+
+  const clearProcedureRowCosting = (rowId: number, closeModal = true) => {
+    setLocalExpenses((prev) => prev.filter((e) => e.procedureRowId !== rowId));
+    if (closeModal && selectedProcedureRowId === rowId && isProcedureExpenseModalOpen) {
+      setEditingExpense(null);
+      setIsProcedureExpenseModalOpen(false);
+    } else if (selectedProcedureRowId === rowId) {
+      setEditingExpense(null);
+    }
+  };
 
   const getPrimaryDoctorProfile = (bundle: any) => {
     const raw = bundle?.primaryDoctorProfile;
@@ -367,24 +486,45 @@ export default function InvoiceCreation() {
   };
 
   const calculateDoctorGrossShareFromBundle = (bundle: any, gross: number) => {
-    const validRows = (bundle?.doctorShares || []).filter((s: any) => {
+    const configuredRows = (bundle?.doctorShares || []).filter((s: any) => {
       const id = refId(s?.doctorId ?? s?.userId ?? s?.doctor);
-      const rawShare = Number(s?.share ?? s?.shareValue);
-      return id && /^[0-9a-fA-F]{24}$/i.test(id) && Number.isFinite(rawShare) && rawShare > 0;
+      return id && /^[0-9a-fA-F]{24}$/i.test(id);
     });
-    if (validRows.length === 0) return null;
-    const total = validRows.reduce((sum: number, s: any) => {
+    if (configuredRows.length === 0) return null;
+
+    const positiveRows = configuredRows.filter((s: any) => {
+      const rawShare = Number(s?.share ?? s?.shareValue);
+      return Number.isFinite(rawShare) && rawShare > 0;
+    });
+    if (positiveRows.length === 0) return 0;
+
+    const total = positiveRows.reduce((sum: number, s: any) => {
       const rawShare = Number(s?.share ?? s?.shareValue) || 0;
       const isPct = String(s?.shareType || '').toLowerCase() === 'percentage';
       return sum + (isPct ? gross * (rawShare / 100) : rawShare);
     }, 0);
     return Math.min(total, gross);
   };
+
+  const bundleHasConfiguredDoctorShares = (bundle: any): boolean =>
+    (bundle?.doctorShares || []).some((s: any) => {
+      const id = refId(s?.doctorId ?? s?.userId ?? s?.doctor);
+      return id && /^[0-9a-fA-F]{24}$/i.test(id);
+    });
+  const nextProcedureRowId = (rows: { id: number }[]) =>
+    rows.reduce((max, row) => (row.id > max ? row.id : max), 0) + 1;
+
+  const allocPaymentRowId = () => {
+    const id = paymentRowIdRef.current;
+    paymentRowIdRef.current = id + 1;
+    return id;
+  };
+
   const addProcedure = () => {
-    setProcedures([
-      ...procedures,
+    setProcedures((prev) => [
+      ...prev,
       {
-        id: procedures.length + 1,
+        id: nextProcedureRowId(prev),
         procedureId: '',
         procedure: '',
         description: '',
@@ -404,8 +544,15 @@ export default function InvoiceCreation() {
     ]);
   };
 
+  /** Remove only that row — never reindex or rewrite other rows' procedureDate. */
   const removeProcedure = (id: number) => {
-    setProcedures(procedures.filter((item) => item.id !== id));
+    setProcedures((prev) => prev.filter((item) => item.id !== id));
+    setLocalExpenses((prev) => prev.filter((b) => b?.procedureRowId !== id));
+    if (selectedProcedureRowId === id) {
+      setEditingExpense(null);
+      setIsProcedureExpenseModalOpen(false);
+      setSelectedProcedureRowId(null);
+    }
   };
   useEffect(() => {
     const fetchCategories = async () => {
@@ -421,18 +568,10 @@ export default function InvoiceCreation() {
     fetchCategories();
   }, []);
 
-  const calculateShares = (item: ProcedureItem, bundle?: any) => {
+  const calculateShareGrossSplit = (item: ProcedureItem, bundle?: any) => {
     const gross = numField(item.rate) * numField(item.quantity, 1);
     const expenseDeduct = expenseDeductBeforeDoctorShareTotal(bundle?.expenses);
     const shareBaseGross = Math.max(0, gross - expenseDeduct);
-    let discountAmount = numField(item.discount);
-
-    if (item.discountType === 1) {
-      discountAmount = gross * (numField(item.discount) / 100);
-    }
-
-    const net = Math.max(0, gross - discountAmount);
-
     const selectedDoctor = usersList.find((user) => user._id === item.performedBy);
     const primaryDoctorProfile = getPrimaryDoctorProfile(bundle);
 
@@ -443,7 +582,7 @@ export default function InvoiceCreation() {
     if (manualDoctorShare != null) {
       doctorShareGross = manualDoctorShare;
       hospitalShareGross = shareBaseGross - doctorShareGross;
-    } else {
+    } else if (!bundleHasConfiguredDoctorShares(bundle)) {
       const sharePrice =
         primaryDoctorProfile?.sharePrice != null && String(primaryDoctorProfile.sharePrice).trim() !== ''
           ? parseFloat(String(primaryDoctorProfile.sharePrice).replace(/,/g, ''))
@@ -461,6 +600,20 @@ export default function InvoiceCreation() {
         hospitalShareGross = shareBaseGross - doctorShareGross;
       }
     }
+
+    return { doctorShareGross, hospitalShareGross };
+  };
+
+  const calculateShares = (item: ProcedureItem, bundle?: any) => {
+    const gross = numField(item.rate) * numField(item.quantity, 1);
+    let discountAmount = numField(item.discount);
+
+    if (item.discountType === 1) {
+      discountAmount = gross * (numField(item.discount) / 100);
+    }
+
+    const net = Math.max(0, gross - discountAmount);
+    const { doctorShareGross, hospitalShareGross } = calculateShareGrossSplit(item, bundle);
 
     let doctorShare = doctorShareGross;
     let hospitalShare = hospitalShareGross;
@@ -498,32 +651,7 @@ export default function InvoiceCreation() {
   };
 
   const calculateShareBreakdown = (item: ProcedureItem, bundle?: any) => {
-    const gross = numField(item.rate) * numField(item.quantity, 1);
-    const selectedDoctor = usersList.find((user) => user._id === item.performedBy);
-    const primaryDoctorProfile = getPrimaryDoctorProfile(bundle);
-
-    let doctorShareGross = 0;
-    let hospitalShareGross = gross;
-    const manualDoctorShare = calculateDoctorGrossShareFromBundle(bundle, gross);
-    if (manualDoctorShare != null) {
-      doctorShareGross = manualDoctorShare;
-      hospitalShareGross = gross - doctorShareGross;
-    } else {
-      const sharePrice =
-        primaryDoctorProfile?.sharePrice != null && String(primaryDoctorProfile.sharePrice).trim() !== ''
-          ? parseFloat(String(primaryDoctorProfile.sharePrice).replace(/,/g, ''))
-          : selectedDoctor?.sharePrice != null && String(selectedDoctor.sharePrice).trim() !== ''
-            ? parseFloat(String(selectedDoctor.sharePrice).replace(/,/g, ''))
-            : NaN;
-      if (Number.isFinite(sharePrice)) {
-        const isPct =
-          String(primaryDoctorProfile?.shareType || '').toLowerCase().includes('percent') ||
-          String(selectedDoctor?.shareType || '').toLowerCase().includes('percent');
-        doctorShareGross = Math.min(isPct ? gross * (sharePrice / 100) : sharePrice, gross);
-        hospitalShareGross = gross - doctorShareGross;
-      }
-    }
-
+    const { doctorShareGross, hospitalShareGross } = calculateShareGrossSplit(item, bundle);
     const finalShares = calculateShares(item, bundle);
     return {
       doctorShare: finalShares.doctorAmount,
@@ -533,47 +661,178 @@ export default function InvoiceCreation() {
     };
   };
 
-  const handleLocalExpenseAdd = (procedureRowId: number | null, bundle: any) => {
-    const proc = procedureRowId != null ? procedures.find((p) => p.id === procedureRowId) : null;
-    const payload = { procedureRowId, procedureId: proc?.procedureId || '', ...bundle };
-    const primaryDoctorProfile = getPrimaryDoctorProfile(payload);
-    if (primaryDoctorProfile) {
-      setUsersList((prev) => {
-        const idx = prev.findIndex((u) => u._id === primaryDoctorProfile._id);
-        if (idx >= 0) {
-          const next = [...prev];
-          next[idx] = { ...next[idx], ...primaryDoctorProfile };
-          return next;
-        }
-        return [...prev, primaryDoctorProfile];
-      });
-    }
-    setLocalExpenses((prev) => {
-      const idx = prev.findIndex((e) => e.procedureRowId === procedureRowId);
-      if (idx >= 0) {
-        const next = [...prev];
-        next[idx] = payload;
-        return next;
+  const handleLocalExpenseAdd = (
+    procedureRowId: number | null,
+    bundle: any,
+    opts?: { keepModalOpen?: boolean },
+  ) => {
+    const bundleProcedureId = String(
+      bundle?.procedureId || bundle?.sourceProcedureId || '',
+    ).trim();
+
+    setProcedures((prevProcedures) => {
+      const proc =
+        procedureRowId != null
+          ? prevProcedures.find((p) => p.id === procedureRowId)
+          : null;
+      const payload = {
+        procedureRowId,
+        procedureId: String(proc?.procedureId || bundleProcedureId || '').trim(),
+        ...bundle,
+      };
+
+      const primaryDoctorProfile = getPrimaryDoctorProfile(payload);
+      if (primaryDoctorProfile) {
+        setUsersList((prev) => {
+          const idx = prev.findIndex((u) => u._id === primaryDoctorProfile._id);
+          if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = { ...next[idx], ...primaryDoctorProfile };
+            return next;
+          }
+          return [...prev, primaryDoctorProfile];
+        });
       }
-      return [...prev, payload];
-    });
-    if (procedureRowId != null) {
-      const firstDoc = bundle?.doctorShares?.find((s: any) => {
-        const id = refId(s?.doctorId ?? s?.userId ?? s?.doctor);
-        return id && /^[0-9a-fA-F]{24}$/i.test(id);
-      });
-      const docId = firstDoc ? refId(firstDoc.doctorId ?? firstDoc.userId ?? firstDoc.doctor) : '';
-      setProcedures((prev) =>
-        prev.map((p) => {
+
+      let nextProcedures = prevProcedures;
+
+      if (procedureRowId != null) {
+        const firstDoc = bundle?.doctorShares?.find((s: any) => {
+          const id = refId(s?.doctorId ?? s?.userId ?? s?.doctor);
+          return id && /^[0-9a-fA-F]{24}$/i.test(id);
+        });
+        const docId = firstDoc
+          ? refId(firstDoc.doctorId ?? firstDoc.userId ?? firstDoc.doctor)
+          : '';
+        const pricing = bundle?.procedurePricing;
+        nextProcedures = prevProcedures.map((p) => {
           if (p.id !== procedureRowId) return p;
-          const next = docId ? { ...p, performedBy: docId } : p;
+          let next = docId ? { ...p, performedBy: docId } : { ...p };
+          if (pricing) {
+            const gross =
+              numField(next.amount) ||
+              numField(next.rate) * Math.max(1, numField(next.quantity, 1));
+            next = {
+              ...next,
+              discount: pricing.isFreeProcedure
+                ? gross
+                : Math.max(0, Number(pricing.discount) || 0),
+              discountType: pricing.isFreeProcedure
+                ? 0
+                : Number(pricing.discountType) === 1
+                  ? 1
+                  : 0,
+              deductDiscount:
+                pricing.deductDiscount === 'Hospital' ||
+                pricing.deductDiscount === 'Doctor'
+                  ? pricing.deductDiscount
+                  : 'Hospital & Doctor',
+            };
+          }
           const sh = calculateShares(next, payload);
-          return { ...next, doctorAmount: sh.doctorAmount, hospitalAmount: sh.hospitalAmount };
-        }),
-      );
+          return {
+            ...next,
+            doctorAmount: sh.doctorAmount,
+            hospitalAmount: sh.hospitalAmount,
+          };
+        });
+      }
+
+      const proceduresForSync = nextProcedures;
+      setLocalExpenses((prevExpenses) => {
+        const idx = prevExpenses.findIndex((e) => e.procedureRowId === procedureRowId);
+        const nextExpenses =
+          idx >= 0
+            ? prevExpenses.map((e, i) => (i === idx ? payload : e))
+            : [...prevExpenses, payload];
+
+        if (procedureRowId != null) {
+          syncDiscountSourceFromRows(proceduresForSync, nextExpenses);
+        }
+
+        return nextExpenses;
+      });
+
+      return nextProcedures;
+    });
+
+    if (!opts?.keepModalOpen) {
+      setIsProcedureExpenseModalOpen(false);
+      setEditingExpense(null);
     }
-    setIsProcedureExpenseModalOpen(false);
-    setEditingExpense(null);
+  };
+
+  const applyProcedureMasterToInvoiceRow = async (
+    rowId: number,
+    procedureId: string,
+    opts?: { quiet?: boolean },
+  ): Promise<Record<string, unknown> | null> => {
+    if (!procedureId) return null;
+    procedureMasterLoadSeq.current[rowId] = (procedureMasterLoadSeq.current[rowId] || 0) + 1;
+    const seq = procedureMasterLoadSeq.current[rowId];
+    try {
+      const res = await axios.get(`${Base_url}/apis/procedure/get/${procedureId}`);
+      if (procedureMasterLoadSeq.current[rowId] !== seq) return null;
+
+      const proc = res?.data?.data as Record<string, unknown> | undefined;
+      if (!proc) return null;
+
+      const bundle = procedureMasterHasCostingDefaults(proc)
+        ? procedureMasterToCostingBundle(proc, procedureId)
+        : null;
+
+      setProcedures((prev) => {
+        const row = prev.find((p) => p.id === rowId);
+        if (!row || row.procedureId !== procedureId) return prev;
+        return prev.map((p) => {
+          if (p.id !== rowId) return p;
+          const rate = Number(proc.amount) || p.rate;
+          const qty = numField(p.quantity, 1);
+          const gross = rate * qty;
+          const next = {
+            ...p,
+            rate,
+            amount: gross,
+            // Discount is invoice-only — not copied from procedure master when costing loads
+          };
+          if (bundle) {
+            const shares = calculateShares(next, bundle);
+            next.doctorAmount = shares.doctorAmount;
+            next.hospitalAmount = shares.hospitalAmount;
+            const firstDoc = bundle.doctorShares?.find(
+              (d: { doctorId?: string }) => d.doctorId,
+            );
+            if (firstDoc?.doctorId) next.performedBy = firstDoc.doctorId;
+          } else {
+            const shares = calculateShares(next, null);
+            next.doctorAmount = shares.doctorAmount;
+            next.hospitalAmount = shares.hospitalAmount;
+          }
+          return next;
+        });
+      });
+
+      if (procedureMasterLoadSeq.current[rowId] !== seq) return null;
+
+      if (bundle) {
+        const payload = {
+          procedureRowId: rowId,
+          procedureId,
+          ...bundle,
+        };
+        handleLocalExpenseAdd(rowId, bundle, { keepModalOpen: true });
+        if (!opts?.quiet) {
+          toast.info('Procedure costing loaded from master (doctor / expense / pharmacy)');
+        }
+        return payload;
+      }
+      return null;
+    } catch {
+      if (procedureMasterLoadSeq.current[rowId] === seq && !opts?.quiet) {
+        toast.error('Could not load procedure master details');
+      }
+      return null;
+    }
   };
 
   const updateProcedure = (
@@ -583,18 +842,29 @@ export default function InvoiceCreation() {
   ) => {
     const updatedProcedures = procedures.map((item) => {
       if (item.id === id) {
+        const isFreeRow = isRowFreeProcedure(item);
+        if (isFreeRow && (field === 'discount' || field === 'discountType')) {
+          clearProcedureFreeFlag(id);
+        }
+
         const updatedItem = { ...item, [field]: value };
 
         if (field === 'procedureId') {
-          const selectedProcedure = proceduresList.find((p) => p._id === value);
-          if (selectedProcedure) {
-            updatedItem.procedure = selectedProcedure.name;
-            updatedItem.description = selectedProcedure.name;
-            updatedItem.rate = selectedProcedure.amount;
-            updatedItem.amount =
-              selectedProcedure.amount * updatedItem.quantity;
-            // Set cost from procedure, but not shown in UI
-            updatedItem.cost = selectedProcedure.cost || 0;
+          const newProcId = String(value || '').trim();
+          const oldProcId = String(item.procedureId || '').trim();
+          if (newProcId !== oldProcId) {
+            clearProcedureRowCosting(id, true);
+            updatedItem.discount = 0;
+            updatedItem.discountType = 0;
+            const selectedProcedure = proceduresList.find((p) => p._id === value);
+            if (selectedProcedure) {
+              updatedItem.procedure = selectedProcedure.name;
+              updatedItem.description = selectedProcedure.name;
+              updatedItem.rate = selectedProcedure.amount;
+              updatedItem.amount =
+                selectedProcedure.amount * updatedItem.quantity;
+              updatedItem.cost = selectedProcedure.cost || 0;
+            }
           }
         }
 
@@ -619,6 +889,10 @@ export default function InvoiceCreation() {
               .catch(() => {/* Optionally show error */});
           }
           updatedItem.amount = Number(value) * Number(updatedItem.quantity);
+          if (isFreeRow) {
+            updatedItem.discount = updatedItem.amount;
+            updatedItem.discountType = 0;
+          }
         }
 
         if (field === 'quantity') {
@@ -627,8 +901,10 @@ export default function InvoiceCreation() {
           
           updatedItem.amount = Number(updatedItem.rate) * newQuantity;
           
-          // Adjust discount proportionally when quantity changes and discount type is Amount (0)
-          if (oldQuantity > 0 && updatedItem.discountType === 0 && item.discount > 0) {
+          if (isFreeRow) {
+            updatedItem.discount = updatedItem.amount;
+            updatedItem.discountType = 0;
+          } else if (oldQuantity > 0 && updatedItem.discountType === 0 && item.discount > 0) {
             // Calculate discount ratio based on quantity change
             const quantityRatio = newQuantity / oldQuantity;
             updatedItem.discount = item.discount * quantityRatio;
@@ -669,14 +945,27 @@ export default function InvoiceCreation() {
       }
       return item;
     });
+    const priorRow = procedures.find((p) => p.id === id);
     setProcedures(updatedProcedures);
+    if (!skipDiscountModeSwitchRef.current && (field === 'discount' || field === 'discountType')) {
+      clearInvoiceLevelDiscountControl();
+    }
+    if (field === 'procedureId' && value) {
+      const newProcId = String(value).trim();
+      const oldProcId = String(priorRow?.procedureId || '').trim();
+      if (newProcId !== oldProcId) {
+        void applyProcedureMasterToInvoiceRow(id, newProcId);
+      }
+    } else if (field === 'procedureId' && !value) {
+      clearProcedureRowCosting(id, true);
+    }
   };
 
   const addPaymentInstallment = () => {
-    setPaymentInstallments([
-      ...paymentInstallments,
+    setPaymentInstallments((prev) => [
+      ...prev,
       {
-        id: paymentInstallments.length + 1,
+        id: allocPaymentRowId(),
         date: localCalendarYmd(),
         method: 'Cash',
         amount: 0,
@@ -686,10 +975,9 @@ export default function InvoiceCreation() {
     ]);
   };
 
+  /** Remove only that payment — never reindex or rewrite other rows' dates. */
   const removePaymentInstallment = (id: number) => {
-    setPaymentInstallments(
-      paymentInstallments.filter((item) => item.id !== id),
-    );
+    setPaymentInstallments((prev) => prev.filter((item) => item.id !== id));
   };
 
   const updatePaymentInstallment = (
@@ -697,28 +985,25 @@ export default function InvoiceCreation() {
     field: keyof PaymentInstallment,
     value: any,
   ) => {
-    const updatedPayments = paymentInstallments.map((item) => {
-      if (item.id === id) {
-        return { ...item, [field]: value };
-      }
-      return item;
-    });
-    setPaymentInstallments(updatedPayments);
+    setPaymentInstallments((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, [field]: value } : item)),
+    );
   };
 
-  const calculateSubTotal = () => {
-    return procedures.filter(isProcDated).reduce((sum, item) => sum + item.amount, 0);
-  };
+  /** All selected procedure rows (dated or not) — subtotal shows full procedure amounts. */
+  const selectedProcedureRows = () =>
+    procedures.filter((p) => String(p.procedureId || '').trim());
 
-  const calculateProcedureDiscountTotal = () => {
-    return procedures.filter(isProcDated).reduce((sum, item) => {
+  const calculateSubTotal = () =>
+    selectedProcedureRows().reduce((sum, item) => sum + numField(item.amount), 0);
+
+  const calculateProcedureDiscountTotal = () =>
+    selectedProcedureRows().reduce((sum, item) => {
       if (item.discountType === 0) {
-        return sum + item.discount;
-      } else {
-        return sum + item.amount * (item.discount / 100);
+        return sum + numField(item.discount);
       }
+      return sum + numField(item.amount) * (numField(item.discount) / 100);
     }, 0);
-  };
 
   /** Patient bill: dated procedure lines only. Popup (costing) expenses are not added to grand total. */
   const calculateBillBeforeInvoiceDiscount = () => {
@@ -730,23 +1015,72 @@ export default function InvoiceCreation() {
     return procedureNet;
   };
 
-  const calculateInvoiceLevelDiscount = () => {
-    const base = calculateBillBeforeInvoiceDiscount();
-    if (base <= 0) return 0;
-    if (invoiceDiscountType === 1) {
-      return Math.min(base, Math.max(0, base * (numField(invoiceDiscount) / 100)));
+  const calculateInvoiceLevelDiscount = () => 0;
+
+  const applyTotalDiscountToProcedureLines = (discountVal: number, discountType: number) => {
+    const eligible = procedures.filter(
+      (p) =>
+        isProcDated(p) &&
+        String(p.procedureId || '').trim() &&
+        !isProcedureLineEffectivelyFree(p, getBundleForProcedureRow(p.id)),
+    );
+    if (eligible.length === 0) {
+      syncDiscountSourceFromRows(procedures, localExpenses);
+      return;
     }
-    return Math.min(base, Math.max(0, numField(invoiceDiscount)));
+    const gross = eligible.reduce((sum, p) => sum + numField(p.amount), 0);
+    const totalDisc = resolveInvoiceDiscountAmount(gross, discountVal, discountType);
+    const splits = splitDiscountAcrossLines(eligible, totalDisc);
+    skipDiscountModeSwitchRef.current = true;
+    setProcedures((prev) =>
+      prev.map((p) => {
+        if (!eligible.some((row) => row.id === p.id)) return p;
+        const lineDisc = splits.get(p.id) ?? 0;
+        const updated = { ...p, discount: lineDisc, discountType: 0 };
+        const shares = calculateShares(updated, getBundleForProcedureRow(p.id));
+        return {
+          ...updated,
+          doctorAmount: shares.doctorAmount,
+          hospitalAmount: shares.hospitalAmount,
+        };
+      }),
+    );
+    queueMicrotask(() => {
+      skipDiscountModeSwitchRef.current = false;
+    });
   };
 
-  const calculateTotalDiscount = () =>
-    calculateProcedureDiscountTotal() + calculateInvoiceLevelDiscount();
+  const handleInvoiceDiscountInputChange = (rawVal: number) => {
+    const val =
+      invoiceDiscountType === 1
+        ? Math.min(100, Math.max(0, rawVal))
+        : Math.max(0, rawVal);
+    setDiscountSource('invoice');
+    setInvoiceDiscount(val);
+    applyTotalDiscountToProcedureLines(val, invoiceDiscountType);
+  };
 
-  const calculateGrandTotal = () =>
-    Math.max(0, calculateBillBeforeInvoiceDiscount() - calculateInvoiceLevelDiscount());
+  const handleInvoiceDiscountTypeChange = (nextType: number) => {
+    let val = numField(invoiceDiscount);
+    if (nextType === 1 && val > 100) val = 100;
+    setDiscountSource('invoice');
+    setInvoiceDiscountType(nextType);
+    applyTotalDiscountToProcedureLines(val, nextType);
+  };
+
+  const calculateTotalDiscount = () => calculateProcedureDiscountTotal();
+
+  const calculateGrandTotal = () => Math.max(0, calculateBillBeforeInvoiceDiscount());
+
+  /** Summary line: Sub Total − discounts (stays same when procedure date is cleared). */
+  const calculateSummaryGrandTotal = () =>
+    Math.max(0, calculateSubTotal() - calculateTotalDiscount());
 
   const calculateTotalPaid = () => {
-    return paymentInstallments.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+    return paymentInstallments.reduce(
+      (sum, item) => sum + installmentAmountNumber(item.amount),
+      0,
+    );
   };
 
   const calculateDue = () => {
@@ -850,26 +1184,28 @@ export default function InvoiceCreation() {
         setIsSubmitting(false);
         return;
       }
-      const hasAssisted = (costing?.assistedBy || []).some(
-        (s: any) => s?.userId && /^[0-9a-fA-F]{24}$/i.test(String(s.userId)),
-      );
-      if (!hasAssisted) {
-        toast.error(
-          `Procedure "${item.procedure || item.id}" (${item.procedureDate}): open costing and add at least one staff (Assisted By)`,
-        );
-        setIsSubmitting(false);
-        return;
-      }
-      const hasReception = (costing?.receptionStaff || []).some(
-        (s: any) => s?.userId && /^[0-9a-fA-F]{24}$/i.test(String(s.userId)),
-      );
-      if (!hasReception) {
-        toast.error(
-          `Procedure "${item.procedure || item.id}" (${item.procedureDate}): open costing and add at least one Reception staff`,
-        );
-        setIsSubmitting(false);
-        return;
-      }
+      // TEMP: Assisted By optional — uncomment when required again
+      // const hasAssisted = (costing?.assistedBy || []).some(
+      //   (s: any) => s?.userId && /^[0-9a-fA-F]{24}$/i.test(String(s.userId)),
+      // );
+      // if (!hasAssisted) {
+      //   toast.error(
+      //     `Procedure "${item.procedure || item.id}" (${item.procedureDate}): open costing and add at least one staff (Assisted By)`,
+      //   );
+      //   setIsSubmitting(false);
+      //   return;
+      // }
+      // TEMP: Reception staff optional — uncomment when required again
+      // const hasReception = (costing?.receptionStaff || []).some(
+      //   (s: any) => s?.userId && /^[0-9a-fA-F]{24}$/i.test(String(s.userId)),
+      // );
+      // if (!hasReception) {
+      //   toast.error(
+      //     `Procedure "${item.procedure || item.id}" (${item.procedureDate}): open costing and add at least one Reception staff`,
+      //   );
+      //   setIsSubmitting(false);
+      //   return;
+      // }
       // Validate discount doesn't exceed amount
       const maxDiscount = item.discountType === 0 ? item.amount : 100;
       if (item.discount > maxDiscount) {
@@ -959,7 +1295,9 @@ export default function InvoiceCreation() {
             const val = Number(share.share ?? share.shareValue) || 0;
             const st = String(share.shareType || '').toLowerCase();
             const grossLine = numField(item.rate) * numField(item.quantity, 1);
-            const amount = st === 'percentage' ? grossLine * (val / 100) : val;
+            const expenseDeduct = expenseDeductBeforeDoctorShareTotal(bundle?.expenses);
+            const shareBaseGross = Math.max(0, grossLine - expenseDeduct);
+            const amount = st === 'percentage' ? shareBaseGross * (val / 100) : val;
             return {
               doctorId: refId(share.doctorId ?? share.userId ?? share.doctor),
               shareType: st === 'percentage' ? 'percentage' : 'value',
@@ -1017,10 +1355,11 @@ export default function InvoiceCreation() {
       ),
       subTotalBill: calculateSubTotal(),
       discountBill: calculateTotalDiscount(),
-      invoiceDiscount: numField(invoiceDiscount),
-      invoiceDiscountType: numField(invoiceDiscountType),
+      invoiceDiscount: 0,
+      invoiceDiscountType: 0,
       taxBill: 0,
        invoiceDate: invoiceDate,
+      hcloudInvoiceNo: String(hcloudInvoiceNo || '').trim(),
       totalBill: billingTotal,
       duePay: rawDue > 0 ? rawDue : 0,
       // Advance = sirf wahi paid amount jo billed (dated procedures) se zyada hai.
@@ -1049,7 +1388,7 @@ export default function InvoiceCreation() {
           const parsed = new Date(payment.date);
           return Number.isFinite(parsed.getTime()) ? parsed.toISOString() : payment.date;
         })(),
-        paid: payment.amount,
+        paid: installmentAmountNumber(payment.amount),
         reference: payment.reference,
       })),
       note: remarks,
@@ -1140,27 +1479,38 @@ export default function InvoiceCreation() {
           <div className="flex justify-between items-center mb-4">
             <h2 className="text-xl font-semibold text-gray-700">Procedures</h2>
           </div>
-          <div>
-               <label className="mb-2 block text-black dark:text-white">
-              Date
-            </label>
-            <input
-              type="date"
-              className="rounded border-[1.5px] border-stroke bg-transparent py-2 px-3 w-56 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
-              value={invoiceDate}
-              onChange={(e) => {
-                const v = e.target.value;
-                const prevTop = invoiceDate;
-                setInvoiceDate(v);
-                setProcedures((prev) => {
-                  const allEmptyOrSameAsTop = prev.every(
-                    (p) => !String(p.procedureDate || '').trim() || p.procedureDate === prevTop,
+          <div className="mb-4 flex flex-wrap items-end gap-6">
+            <div>
+              <label className="mb-2 block text-black dark:text-white">Date</label>
+              <input
+                type="date"
+                className="rounded border-[1.5px] border-stroke bg-transparent py-2 px-3 w-56 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                value={invoiceDate}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  const prevTop = invoiceDate;
+                  setInvoiceDate(v);
+                  // Only rows still following the old top date (or empty) — never overwrite custom dates.
+                  setProcedures((prev) =>
+                    prev.map((p) =>
+                      !String(p.procedureDate || '').trim() || p.procedureDate === prevTop
+                        ? { ...p, procedureDate: v }
+                        : p,
+                    ),
                   );
-                  if (!allEmptyOrSameAsTop) return prev;
-                  return prev.map((p) => ({ ...p, procedureDate: v }));
-                });
-              }}
-            />
+                }}
+              />
+            </div>
+            <div>
+              <label className="mb-2 block text-black dark:text-white">HCloud Invoice No</label>
+              <input
+                type="text"
+                placeholder="Enter HCloud invoice no"
+                className="rounded border-[1.5px] border-stroke bg-transparent py-2 px-3 w-56 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                value={hcloudInvoiceNo}
+                onChange={(e) => setHcloudInvoiceNo(e.target.value)}
+              />
+            </div>
           </div>
           <div className="mb-4 relative patient-search-container">
             <div className="flex justify-between items-center mb-2.5">
@@ -1200,13 +1550,23 @@ export default function InvoiceCreation() {
                             name: patient.name,
                             gender: patient.gender,
                             phone: patient.phone,
+                            notInThisBranch: !!patient.notInThisBranch,
                           });
                           setSearchTerm(`${patient.name} (MR# ${patient.mr})`);
                           setShowSearchResults(false);
                           setSearchError('');
                         }}
                       >
-                        {patient.name} (MR# {patient.mr}) - {patient.phone}
+                        <div className="flex items-center justify-between gap-2">
+                          <span>
+                            {patient.name} (MR# {patient.mr}) - {patient.phone}
+                          </span>
+                          {patient.notInThisBranch ? (
+                            <span className="shrink-0 rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-800">
+                              Other branch
+                            </span>
+                          ) : null}
+                        </div>
                       </div>
                     ))
                   : searchError && (
@@ -1220,6 +1580,11 @@ export default function InvoiceCreation() {
 
           {patientInfo && (
             <div className="mb-4 bg-gray-50 p-3 rounded-md">
+              {patientInfo.notInThisBranch ? (
+                <p className="mb-2 text-xs text-amber-700">
+                  Patient is from another branch (same MR#). New invoice will be saved on this branch; history here shows only this branch&apos;s invoices.
+                </p>
+              ) : null}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <label className="block text-sm font-medium text-gray-500">
@@ -1251,6 +1616,9 @@ export default function InvoiceCreation() {
             <table className="min-w-full divide-y divide-gray-200">
               <thead className="bg-gray-100">
                 <tr>
+                  {/* <th className="px-2 py-3 text-center text-sm font-medium text-gray-500 whitespace-nowrap tracking-wider w-12">
+                    Sr No.
+                  </th> */}
                   <th className="px-4 py-3 text-left text-sm font-medium text-gray-500 whitespace-nowrap  tracking-wider">
                     Procedure
                   </th>
@@ -1288,10 +1656,11 @@ export default function InvoiceCreation() {
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
-                {procedures.map((item: ProcedureItem) => (
+                {procedures.map((item: ProcedureItem) => {
+                  return (
                   <tr key={item.id} className="hover:bg-gray-50">
                     <td className="px-1 py-3 whitespace-nowrap">
-                      <div className="flex w-70 items-center">
+                      <div className="flex flex-col w-70 gap-1">
                       <AsyncPaginate
   key={`procedure-select-${item.id}-${item.procedureId}`} // Crucial for resetting
   name={`procedureId-${item.id}`}
@@ -1308,29 +1677,14 @@ export default function InvoiceCreation() {
   }
   loadOptions={loadProcedureOptions}
   onChange={(option: ProcedureOption | null) => {
-    if (option) {
-      // Immediate local update
-      const updatedItem = {
-        ...item,
-        procedureId: option.value,
-        procedure: option.procedureData?.name || '',
-        description: option.procedureData?.name || '',
-        procedureDate: item.procedureDate,
-        rate: option.procedureData?.amount || 0,
-        amount: (option.procedureData?.amount || 0) * item.quantity,
-        cost: option.procedureData?.cost || 0
-      };
-      
-      // Update the procedures array
-      setProcedures(prev => 
-        prev.map(proc => proc.id === item.id ? updatedItem : proc)
-      );
-      
-      // Update proceduresList if needed
-      if (!proceduresList.some(p => p._id === option.value)) {
-        setProceduresList(prev => [...prev, option.procedureData]);
+    if (option?.value) {
+      if (String(option.value) === String(item.procedureId || '')) return;
+      if (option.procedureData && !proceduresList.some((p) => p._id === option.value)) {
+        setProceduresList((prev) => [...prev, option.procedureData]);
       }
+      updateProcedure(item.id, 'procedureId', option.value);
     } else {
+      clearProcedureRowCosting(item.id, true);
       updateProcedure(item.id, 'procedureId', '');
     }
   }}
@@ -1346,7 +1700,7 @@ export default function InvoiceCreation() {
     menuPortal: base => ({ ...base, zIndex: 9999 }),
     control: provided => ({ ...provided, minHeight: '42px' })
   }}
-  cacheUniqs={[proceduresList]}
+  cacheUniqs={[item.id]}
   debounceTimeout={500}
   keepSelectedInList={true}
   closeMenuOnSelect={true}
@@ -1362,10 +1716,25 @@ export default function InvoiceCreation() {
     loadProcedureOptions('', [], { page: 1 });
   }}
 />
+                      {item.procedureId && (() => {
+                        const summary = procedureCostingBundleSummary(
+                          getCostingBundleForProcedureRow(
+                            localExpenses,
+                            item.id,
+                            item.procedureId,
+                          ),
+                        );
+                        return summary ? (
+                          <span className="text-xs text-green-700 font-medium" title="Loaded from procedure master — open costing icon to edit">
+                            ✓ {summary}
+                          </span>
+                        ) : null;
+                      })()}
                       </div>
                     </td>
                     <td className="px-1 py-3 whitespace-nowrap">
                       <input
+                        key={`proc-date-${item.id}`}
                         type="date"
                         title="Procedure date bills this row; rows without date count toward advance only"
                         className="rounded border-[1.5px] border-stroke bg-transparent py-2 px-1 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
@@ -1487,6 +1856,7 @@ export default function InvoiceCreation() {
                     <td className="px-1 py-3 whitespace-nowrap">
                       <div className=' flex gap-3 items-center'>
                         <button
+                        type="button"
                         onClick={() => removeProcedure(item.id)}
                         className="text-red-500 float-end  hover:text-red-700"
                         title="Remove"
@@ -1506,11 +1876,23 @@ export default function InvoiceCreation() {
                       </button>
                    
                       <button className={`text-primary ${!item.procedureId ? 'opacity-50 cursor-not-allowed' : ''}`} disabled={!item.procedureId} onClick={() => { 
-                        const existing =
-                          localExpenses.find((e) => e.procedureRowId === item.id) || null;
-                        setSelectedProcedureRowId(item.id);
-                        setEditingExpense(existing);
-                        setIsProcedureExpenseModalOpen(true); 
+                        void (async () => {
+                          let existing = getCostingBundleForProcedureRow(
+                            localExpenses,
+                            item.id,
+                            item.procedureId,
+                          );
+                          if (item.procedureId && !existing) {
+                            existing = (await applyProcedureMasterToInvoiceRow(
+                              item.id,
+                              item.procedureId,
+                              { quiet: true },
+                            )) as typeof existing;
+                          }
+                          setSelectedProcedureRowId(item.id);
+                          setEditingExpense(existing);
+                          setIsProcedureExpenseModalOpen(true);
+                        })();
                       }}>
                       <BsFillFileEarmarkPdfFill size={20} className=' text-primary' />
                       </button>
@@ -1518,7 +1900,8 @@ export default function InvoiceCreation() {
                       </div>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
             <p className="text-sm text-gray-600 mt-2">
@@ -1670,10 +2053,13 @@ export default function InvoiceCreation() {
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
                 {paymentInstallments.map((item) => (
-                  <tr key={item.id} className="hover:bg-gray-50">
+                  <tr key={`payment-${item.id}`} className="hover:bg-gray-50">
                     <td className="px-4 py-3 whitespace-nowrap">
                       <div className="flex items-center gap-2">
                         <input
+                          key={`pay-date-${item.id}`}
+                          name={`payment-date-${item.id}`}
+                          autoComplete="off"
                           type="date"
                           className="rounded border-[1.5px] border-stroke bg-transparent py-2 px-1 w-40 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                           value={item.date}
@@ -1688,12 +2074,10 @@ export default function InvoiceCreation() {
                         {item.date && (
                           <span className="text-sm text-gray-600 min-w-[100px]">
                             {(() => {
-                              const date = new Date(item.date);
-                              const day = String(date.getDate()).padStart(2, '0');
-                              const month = String(date.getMonth() + 1).padStart(2, '0');
-                              const year = date.getFullYear();
-                              
-                              switch(dateFormat) {
+                              const ymd = String(item.date).trim().slice(0, 10);
+                              const [year, month, day] = ymd.split('-');
+                              if (!year || !month || !day) return ymd;
+                              switch (dateFormat) {
                                 case 'DD/MM/YYYY':
                                   return `${day}/${month}/${year}`;
                                 case 'MM/DD/YYYY':
@@ -1734,15 +2118,20 @@ export default function InvoiceCreation() {
                         type="number"
                         min={0}
                         className="rounded border-[1.5px] border-stroke bg-transparent py-2 px-1 w-40 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
-                        value={(Number(item.amount) || 0) === 0 ? '' : item.amount}
+                        value={installmentAmountDisplay(item.amount)}
                         placeholder="Enter amount"
                         onChange={(e) =>
                           updatePaymentInstallment(
                             item.id,
                             'amount',
-                            normalizeInstallmentAmount(e.target.value),
+                            parseInstallmentAmountInput(e.target.value),
                           )
                         }
+                        onBlur={() => {
+                          if (item.amount === '') {
+                            updatePaymentInstallment(item.id, 'amount', 0);
+                          }
+                        }}
                         onWheel={handleNumberInputWheel}
                       />
                     </td>
@@ -1764,6 +2153,7 @@ export default function InvoiceCreation() {
                    
                     <td className="px-4 py-3 whitespace-nowrap">
                       <button
+                        type="button"
                         onClick={() => removePaymentInstallment(item.id)}
                         disabled={paymentInstallments.length === 1}
                         className={`text-red-500 hover:text-red-700 ${
@@ -1932,24 +2322,13 @@ export default function InvoiceCreation() {
                       placeholder="0"
                       onWheel={handleNumberInputWheel}
                       onChange={(e) =>
-                        setInvoiceDiscount(
-                          Math.max(
-                            0,
-                            invoiceDiscountType === 1
-                              ? Math.min(100, Number(e.target.value) || 0)
-                              : Number(e.target.value) || 0,
-                          ),
-                        )
+                        handleInvoiceDiscountInputChange(Number(e.target.value) || 0)
                       }
                       className="w-28 rounded border border-stroke px-2 py-1"
                     />
                     <select
                       value={invoiceDiscountType}
-                      onChange={(e) => {
-                        const nextType = Number(e.target.value) || 0;
-                        setInvoiceDiscountType(nextType);
-                        if (nextType === 1 && invoiceDiscount > 100) setInvoiceDiscount(100);
-                      }}
+                      onChange={(e) => handleInvoiceDiscountTypeChange(Number(e.target.value) || 0)}
                       className="rounded border border-stroke px-2 py-1"
                     >
                       <option value={0}>Amount</option>
@@ -1957,12 +2336,11 @@ export default function InvoiceCreation() {
                     </select>
                   </div>
                 </div>
-                <div className="mt-2 flex justify-between text-sm">
-                  <span>Applied Invoice Discount:</span>
-                  <span className="font-medium text-red-500">
-                    - Rs. {calculateInvoiceLevelDiscount().toFixed(2)}
-                  </span>
-                </div>
+                {/* <div className="mt-2 text-xs text-gray-500">
+                  {discountSource === 'procedure'
+                    ? 'Procedure-wise discount applied — total field is read-only.'
+                    : 'Auto-splits across dated procedure rows when you enter a value here.'}
+                </div> */}
               </div>
               <div className="flex justify-between">
                 <span>Total Discount:</span>
@@ -2003,21 +2381,19 @@ export default function InvoiceCreation() {
                   <span className="text-xs text-gray-500">Not included in grand total.</span>
                 </div>
               )}
-              {localExpenses.some(expense => (expense.doctorShares?.length || 0) > 0) && (
+              {/* {localExpenses.some(expense => (expense.doctorShares?.length || 0) > 0) && (
                 <div className="flex justify-between">
                   <span className="text-gray-700">Doctor shares (costing reference):</span>
                   <span className="font-medium text-gray-700">
                     Rs. {calculateDoctorSharesTotal().toFixed(2)}
                   </span>
                 </div>
-              )}
+              )} */}
               <div className="border-t pt-2 mt-2 flex justify-between font-bold text-lg">
                 <span>Grand Total:</span>
-                <span>Rs. {calculateGrandTotal().toFixed(2)}</span>
+                <span>Rs. {calculateSummaryGrandTotal().toFixed(2)}</span>
               </div>
-              <p className="text-xs text-gray-500 mt-1">
-                Expenses from the costing popup are not added to grand total or due amount.
-              </p>
+             
               
             </div>
           </div>
@@ -2097,6 +2473,11 @@ export default function InvoiceCreation() {
 
 
       <AddProcedureExpense
+        key={
+          selectedProcedureRowId != null
+            ? `costing-${selectedProcedureRowId}-${procedures.find((p) => p.id === selectedProcedureRowId)?.procedureId || 'none'}`
+            : 'costing-none'
+        }
         isModalOpen={isProcedureExpenseModalOpen}
         setIsModalOpen={setIsProcedureExpenseModalOpen}
         selectedExpense={editingExpense}
@@ -2104,6 +2485,19 @@ export default function InvoiceCreation() {
         selectedProcedureId={selectedProcedureRowId}
         procedureDate={procedures.find((p) => p.id === selectedProcedureRowId)?.procedureDate}
         performedBy={procedures.find((p) => p.id === selectedProcedureRowId)?.performedBy}
+        procedureRowState={(() => {
+          const row = procedures.find((p) => p.id === selectedProcedureRowId);
+          if (!row) return undefined;
+          return {
+            rate: row.rate,
+            quantity: row.quantity,
+            amount: row.amount,
+            discount: row.discount,
+            discountType: row.discountType,
+            deductDiscount: row.deductDiscount,
+          };
+        })()}
+        mongoProcedureId={procedures.find((p) => p.id === selectedProcedureRowId)?.procedureId}
         onLocalExpenseAdd={handleLocalExpenseAdd}
       />
 

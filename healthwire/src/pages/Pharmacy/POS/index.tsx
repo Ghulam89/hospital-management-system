@@ -7,6 +7,7 @@ import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 import { AsyncPaginate, LoadOptions } from 'react-select-async-paginate';
 import Modal from '../../../components/modal';
 import { getStoredUserForPermissions, getUserRoleSlug, hasAnyPermission } from '../../../utils/permissions';
+import { localCalendarYmd } from '../../../utils/dateLocal';
 
 // Enhanced type definitions
 // Custom option types for AsyncPaginate
@@ -175,6 +176,429 @@ function posRecalcItemTotals(item: PosItem): PosItem {
   return { ...item, netAmount, totalAmount };
 }
 
+/** Map API line → POS row (shared for edit load and return merge). */
+function mapApiLineToPosItem(it: any, idx: number, invNo: string): PosItem {
+  const rate = Number(it?.rate || 0);
+  let qty = Number(it?.quantity || 0);
+  const isRet = Boolean(it?.isReturn);
+  const rQty = Number(it?.returnQuantity || 0);
+  if (isRet && rQty > 0 && qty < rQty) {
+    qty = rQty;
+  }
+  let discount = Number(it?.discount || 0);
+  if (isRet && rQty > 0 && rate > 0 && discount <= 0) {
+    const storedTotal = Number(it?.totalAmount);
+    if (storedTotal < 0) {
+      const inferred = rate * rQty + storedTotal;
+      if (inferred > 0.0001) discount = inferred;
+    }
+  }
+  if (!isRet && rate > 0 && qty > 0 && discount <= 0) {
+    const gross = rate * qty;
+    const storedTotal = Number(it?.totalAmount);
+    if (Number.isFinite(storedTotal) && storedTotal >= 0 && gross > storedTotal + 0.0001) {
+      discount = gross - storedTotal;
+    }
+  }
+  const convUnit = Number(it?.conversionUnit || 1);
+  const unit = String(it?.unit || 'pack');
+  const computedUnitQty =
+    unit === 'pack' ? (convUnit > 0 ? qty * convUnit : qty) : qty;
+  const unitQuantity =
+    Number(it?.unitQuantity || 0) > 0 ? Number(it.unitQuantity) : computedUnitQty;
+  const row: PosItem = {
+    id: idx + 1,
+    pharmItemId:
+      typeof it?.pharmItemId === 'object' && it?.pharmItemId?._id
+        ? String(it.pharmItemId._id)
+        : String(it?.pharmItemId || ''),
+    itemName:
+      typeof it?.pharmItemId === 'object' && it?.pharmItemId?.name
+        ? String(it.pharmItemId.name)
+        : String(it?.itemName || ''),
+    unit,
+    unitQuantity,
+    conversionUnit: convUnit,
+    batchNumber: String(it?.batchNumber || ''),
+    unitCost: Number(it?.unitCost || 0),
+    rate,
+    quantity: qty,
+    returnQuantity: rQty,
+    discountMode: 'value',
+    discount,
+    taxMode: 'percentage',
+    tax: 0,
+    netAmount: 0,
+    totalAmount: 0,
+    isReturn: isRet,
+    originalInvoiceNumber: String(it?.originalInvoiceNumber || (isRet ? invNo : '')),
+  };
+  return posRecalcItemTotals(row);
+}
+
+/** Sale lines from an existing bill → return rows (sold qty fixed, return qty entered by user). */
+function saleLinesToReturnPosItems(allItem: unknown[], invNo: string): PosItem[] {
+  const saleLines = (Array.isArray(allItem) ? allItem : []).filter(
+    (it: { isReturn?: boolean }) => !it?.isReturn,
+  );
+  const rows: PosItem[] = [];
+  saleLines.forEach((it, idx) => {
+    const base = mapApiLineToPosItem(it, idx, invNo);
+    const soldQty = Math.max(0, Number(base.quantity) || 0);
+    if (soldQty <= 0) return;
+    rows.push(
+      posRecalcItemTotals({
+        ...base,
+        id: rows.length + 1,
+        isReturn: true,
+        quantity: soldQty,
+        returnQuantity: 0,
+        originalInvoiceNumber: invNo,
+      }),
+    );
+  });
+  return rows;
+}
+
+function isSalePosBill(inv: { allItem?: unknown[] }): boolean {
+  const items = Array.isArray(inv.allItem) ? inv.allItem : [];
+  return items.length > 0 && items.some((it: { isReturn?: boolean }) => !it?.isReturn);
+}
+
+function returnBillPatientLabel(inv: Record<string, unknown>): string {
+  const p = inv.patientId;
+  if (p && typeof p === 'object') {
+    const pt = p as Patient;
+    const name = String(pt.name || '').trim();
+    const mr = String(pt.mr || '').trim();
+    if (name && mr) return `${name} (MR: ${mr})`;
+    return name || `MR: ${mr}`;
+  }
+  return String(inv.patientName || 'Walk-in').trim() || 'Walk-in';
+}
+
+const PAYMENT_METHODS: PaymentMethod[] = [
+  'Cash',
+  'Credit',
+  'Card',
+  'Bank Transfer',
+  'Cheque',
+];
+
+function parseApiPayDate(value: unknown, fallback?: unknown): string {
+  const tryParse = (v: unknown): string | null => {
+    if (v == null || v === '') return null;
+    const d = v instanceof Date ? v : new Date(String(v));
+    if (Number.isNaN(d.getTime())) return null;
+    return d.toISOString().split('T')[0];
+  };
+  return tryParse(value) || tryParse(fallback) || localCalendarYmd();
+}
+
+function normalizePaymentMethod(method: unknown): PaymentMethod {
+  const m = String(method || 'Cash').trim();
+  const hit = PAYMENT_METHODS.find((x) => x.toLowerCase() === m.toLowerCase());
+  return hit || 'Cash';
+}
+
+function mapApiPaymentsToInstallments(
+  payments: unknown[],
+  fallbackDate?: unknown,
+): PaymentInstallment[] {
+  return (Array.isArray(payments) ? payments : [])
+    .map((p: unknown, idx: number) => {
+      const row = (p && typeof p === 'object' ? p : {}) as Record<string, unknown>;
+      const paid = Number(row.paid ?? row.amount ?? 0);
+      if (!Number.isFinite(paid) || paid === 0) return null;
+      return {
+        id: idx + 1,
+        date: parseApiPayDate(row.payDate ?? row.date ?? row.paymentDate, fallbackDate),
+        method: normalizePaymentMethod(row.method),
+        amount: paid,
+        reference: String(row.reference || row.notes || ''),
+      };
+    })
+    .filter((row): row is PaymentInstallment => row !== null);
+}
+
+function getInvoicePaymentRows(inv: Record<string, unknown>): PaymentInstallment[] {
+  const fallbackDate = inv.createdAt ?? inv.updatedAt;
+  const rows =
+    (Array.isArray(inv.payment) && inv.payment.length > 0 && inv.payment) ||
+    (Array.isArray(inv.payments) && inv.payments.length > 0 && inv.payments) ||
+    [];
+  const mapped = mapApiPaymentsToInstallments(rows as unknown[], fallbackDate);
+  if (mapped.length > 0) {
+    return mapped.map((p, idx) => ({ ...p, id: idx + 1 }));
+  }
+
+  const headerPaid = Number(inv.paid ?? 0);
+  if (Number.isFinite(headerPaid) && headerPaid !== 0) {
+    const firstMethod =
+      rows.length > 0 && typeof rows[0] === 'object' && rows[0] !== null
+        ? (rows[0] as Record<string, unknown>).method
+        : 'Cash';
+    return [
+      {
+        id: 1,
+        date: parseApiPayDate(fallbackDate),
+        method: normalizePaymentMethod(firstMethod),
+        amount: headerPaid,
+        reference: String(inv.invoiceNumber || ''),
+      },
+    ];
+  }
+
+  return [];
+}
+
+/** Split payment across original methods; negative = refund out, positive = customer pays in. */
+function buildSplitPayments(
+  originalPayments: PaymentInstallment[],
+  invoiceNumber: string,
+  signedTotal: number,
+  referenceLabel?: string,
+): PaymentInstallment[] {
+  const today = localCalendarYmd();
+  const ref = referenceLabel || `Return · ${invoiceNumber}`;
+  const total = Math.round((Number(signedTotal) || 0) * 100) / 100;
+  const absTotal = Math.abs(total);
+  const sign = total < 0 ? -1 : 1;
+
+  if (originalPayments.length === 0) {
+    return [{ id: 1, date: today, method: 'Cash', amount: total, reference: ref }];
+  }
+
+  if (absTotal <= 0) {
+    return originalPayments.map((p, idx) => ({
+      id: idx + 1,
+      date: today,
+      method: p.method,
+      amount: 0,
+      reference: ref,
+    }));
+  }
+
+  const origTotal = originalPayments.reduce(
+    (s, p) => s + Math.abs(Number(p.amount) || 0),
+    0,
+  );
+  if (origTotal <= 0) {
+    return [
+      {
+        id: 1,
+        date: today,
+        method: originalPayments[0]?.method || 'Cash',
+        amount: total,
+        reference: ref,
+      },
+    ];
+  }
+
+  if (originalPayments.length === 1) {
+    return [
+      {
+        id: 1,
+        date: today,
+        method: originalPayments[0].method,
+        amount: total,
+        reference: ref,
+      },
+    ];
+  }
+
+  let allocated = 0;
+  return originalPayments.map((p, idx) => {
+    const isLast = idx === originalPayments.length - 1;
+    const shareAbs = isLast
+      ? Math.round((absTotal - allocated) * 100) / 100
+      : Math.round(absTotal * (Math.abs(Number(p.amount) || 0) / origTotal) * 100) / 100;
+    if (!isLast) allocated += shareAbs;
+    return {
+      id: idx + 1,
+      date: today,
+      method: p.method,
+      amount: sign * shareAbs,
+      reference: ref,
+    };
+  });
+}
+
+/** Cash to refund for returned qty (per line). */
+function posLineRefundAmount(item: PosItem): number {
+  const R = Math.max(0, Number(item.returnQuantity) || 0);
+  if (R <= 0) return 0;
+  const Q = Math.max(0, Number(item.quantity) || 0);
+  const effectiveR = Q > 0 ? Math.min(R, Q) : R;
+
+  if (Q > 0 && item.rate > 0) {
+    const fullDisc = posGetFullSaleLineDiscount(item);
+    const lineSaleTotal = item.rate * Q - fullDisc;
+    if (lineSaleTotal > 0.0001) {
+      return Math.max(
+        0,
+        Math.round(((lineSaleTotal * effectiveR) / Q) * 100) / 100,
+      );
+    }
+  }
+
+  const disc = posGetDiscountAmount({
+    ...item,
+    isReturn: true,
+    returnQuantity: effectiveR,
+  });
+  return Math.max(0, item.rate * effectiveR - disc);
+}
+
+function computeReturnRefundTotal(items: PosItem[]): number {
+  return items.reduce((sum, it) => sum + posLineRefundAmount(it), 0);
+}
+
+/** Net customer payment when return + new sale on one bill (sale total − return refund). */
+function computeReturnExchangeNet(items: PosItem[]): number {
+  const newSaleTotal = items
+    .filter((it) => !it.isReturn)
+    .reduce((s, it) => s + (Number(it.totalAmount) || 0), 0);
+  const refund = computeReturnRefundTotal(items);
+  return Math.round((newSaleTotal - refund) * 100) / 100;
+}
+
+/** Payment rows for return / exchange — mirrors original sale until return qty is entered. */
+function syncReturnBillPayments(
+  items: PosItem[],
+  invoiceNumber: string,
+  originalPayments: PaymentInstallment[],
+): PaymentInstallment[] {
+  const invNo = invoiceNumber.trim();
+  const today = localCalendarYmd();
+  const hasNewSaleRows = items.some((it) => !it.isReturn);
+  const returnQtyEntered = items.some(
+    (it) => it.isReturn && (Number(it.returnQuantity) || 0) > 0,
+  );
+
+  if (hasNewSaleRows) {
+    const net = computeReturnExchangeNet(items);
+    const ref =
+      net > 0.000001
+        ? `Exchange · ${invNo}`
+        : net < -0.000001
+          ? `Return · ${invNo}`
+          : `Return + sale · ${invNo}`;
+    return buildSplitPayments(originalPayments, invNo, net, ref);
+  }
+
+  const refund = Math.round(computeReturnRefundTotal(items) * 100) / 100;
+
+  if (!returnQtyEntered && originalPayments.length > 0) {
+    const ref = `Return · ${invNo}`;
+    return originalPayments.map((p, idx) => ({
+      id: idx + 1,
+      date: today,
+      method: p.method,
+      amount: Math.round(p.amount * 100) / 100,
+      reference: ref,
+    }));
+  }
+
+  return buildSplitPayments(originalPayments, invNo, refund > 0 ? -refund : 0);
+}
+
+type PreservedReturnLine = {
+  isReturn: boolean;
+  returnQuantity: number;
+  originalInvoiceNumber: string;
+};
+
+function buildPosPayloadFromRows(
+  items: PosItem[],
+  payments: PaymentInstallment[],
+  meta: {
+    patientId?: string | null;
+    patientName?: string;
+    referId?: string | null;
+    doctorName?: string | null;
+    allowNegativeInventory: boolean;
+    note: string;
+    createdBy: string | null;
+    editingInvoiceNumber?: string;
+    isEdit?: boolean;
+    allowPatientReturns?: boolean;
+    preservedReturnByRowId?: Map<number, PreservedReturnLine>;
+  },
+) {
+  const totalDiscount = items.reduce(
+    (sum, item) => sum + posGetEffectiveLineDiscountForTotals(item),
+    0,
+  );
+  const lineGrandTotal = items.reduce((sum, item) => sum + item.totalAmount, 0);
+  const hasReturnRows = items.some(
+    (i) => i.isReturn && (Number(i.returnQuantity) || 0) > 0,
+  );
+  const hasNewSaleRows = items.some((i) => !i.isReturn);
+  let grandTotal = lineGrandTotal;
+  if (hasReturnRows && !hasNewSaleRows) {
+    grandTotal = -Math.round(computeReturnRefundTotal(items) * 100) / 100;
+  } else if (hasReturnRows && hasNewSaleRows) {
+    grandTotal = computeReturnExchangeNet(items);
+  }
+  const paid = payments.reduce((sum, p) => sum + p.amount, 0);
+  return {
+    patientId: meta.patientId,
+    patientName: meta.patientName,
+    referId: meta.referId,
+    doctorName: meta.doctorName,
+    allowNegativeInventory: meta.allowNegativeInventory,
+    totalDiscount,
+    totalTax: 0,
+    due: Math.max(0, grandTotal - paid),
+    advance: Math.max(0, paid - grandTotal),
+    paid,
+    note: meta.note,
+    createdBy: meta.createdBy,
+    allItem: items.map((item) => {
+      const preserved = meta.preservedReturnByRowId?.get(item.id);
+      const allowRet = meta.allowPatientReturns !== false;
+      const isReturn = allowRet ? item.isReturn : Boolean(preserved?.isReturn);
+      const returnQuantity = allowRet
+        ? item.isReturn
+          ? item.returnQuantity
+          : 0
+        : Number(preserved?.returnQuantity || 0);
+      const originalInvoiceNumber = isReturn
+        ? allowRet
+          ? item.originalInvoiceNumber?.trim() ||
+            (meta.isEdit ? meta.editingInvoiceNumber : '') ||
+            ''
+          : String(preserved?.originalInvoiceNumber || '')
+        : undefined;
+      const soldQty = Math.max(0, Number(item.quantity) || 0);
+      const quantity =
+        isReturn && soldQty <= 0 && returnQuantity > 0 ? returnQuantity : soldQty;
+      return {
+        pharmItemId: item.pharmItemId,
+        unit: item.unit,
+        batchNumber: item.batchNumber,
+        unitCost: item.unitCost,
+        rate: item.rate,
+        quantity,
+        returnQuantity,
+        discount: posGetEffectiveLineDiscountForTotals(item),
+        tax: 0,
+        netAmount: item.netAmount,
+        totalAmount: item.totalAmount,
+        isReturn,
+        originalInvoiceNumber,
+      };
+    }),
+    payment: payments.map((payment) => ({
+      method: payment.method,
+      payDate: new Date(payment.date).toISOString(),
+      paid: payment.amount,
+      reference: payment.reference,
+    })),
+  };
+}
+
 /** Remaining qty for Pack / Single Piece when return is checked (sold − returned). */
 function posGetNetQtyDisplay(item: PosItem): { packs: number; units: number } {
   const conv = Math.max(1, Number(item.conversionUnit) || 1);
@@ -200,6 +624,42 @@ function posGetNetQtyDisplay(item: PosItem): { packs: number; units: number } {
 export default function PharmacyPOS() {
   const { id } = useParams();
   const navigate = useNavigate();
+  /** Patient returns only on new POS — not on Edit Invoice page. */
+  const allowPatientReturns = !id;
+  const preservedReturnByRowId = useRef<Map<number, PreservedReturnLine>>(new Map());
+  const [returnLookupMode, setReturnLookupMode] = useState<'invoice' | 'patient'>('invoice');
+  const [returnLookupInput, setReturnLookupInput] = useState('');
+  const [returnPatientLookup, setReturnPatientLookup] = useState<Patient | null>(null);
+  const [returnPatientMatches, setReturnPatientMatches] = useState<Patient[]>([]);
+  const [returnInvoiceCandidates, setReturnInvoiceCandidates] = useState<
+    Array<{
+      _id: string;
+      invoiceNumber: string;
+      createdAt?: string;
+      paid: number;
+      due: number;
+      patientLabel: string;
+      itemCount: number;
+      raw: Record<string, unknown>;
+    }>
+  >([]);
+  const [returnSourceInvoice, setReturnSourceInvoice] = useState<{
+    _id: string;
+    invoiceNumber: string;
+    createdAt?: string;
+  } | null>(null);
+  /** Original sale installments (read-only reference when processing a return). */
+  const [originalSalePayments, setOriginalSalePayments] = useState<PaymentInstallment[]>([]);
+  const originalSalePaymentsRef = useRef<PaymentInstallment[]>([]);
+  const applyReturnPaymentsSync = (
+    items: PosItem[],
+    invoiceNumber: string,
+    originalPayments?: PaymentInstallment[],
+  ) => {
+    const orig = originalPayments ?? originalSalePaymentsRef.current;
+    setPaymentInstallments(syncReturnBillPayments(items, invoiceNumber, orig));
+  };
+  const [returnInvoiceLoading, setReturnInvoiceLoading] = useState(false);
   const [patientInfo, setPatientInfo] = useState<Patient | null>(null);
   const [manualPatientName, setManualPatientName] = useState('');
   const [useManualPatient, setUseManualPatient] = useState(false);
@@ -259,7 +719,7 @@ export default function PharmacyPOS() {
   const [paymentInstallments, setPaymentInstallments] = useState<PaymentInstallment[]>([
     {
       id: 1,
-      date: new Date().toISOString().split('T')[0],
+      date: localCalendarYmd(),
       method: 'Cash',
       amount: 0,
       reference: ''
@@ -328,6 +788,7 @@ export default function PharmacyPOS() {
         const inv = res?.data?.data;
         if (!inv) return;
         setEditingInvoiceNumber(String(inv.invoiceNumber || ''));
+        preservedReturnByRowId.current = new Map();
 
         // Patient
         if (inv.patientId && typeof inv.patientId === 'object' && inv.patientId._id) {
@@ -364,58 +825,13 @@ export default function PharmacyPOS() {
         const items = Array.isArray(inv.allItem) ? inv.allItem : [];
         const invNo = String(inv.invoiceNumber || '');
         const mappedItems: PosItem[] = items.map((it: any, idx: number) => {
-          const rate = Number(it?.rate || 0);
-          let qty = Number(it?.quantity || 0);
-          const isRet = Boolean(it?.isReturn);
-          const rQty = Number(it?.returnQuantity || 0);
-          if (isRet && rQty > 0 && qty < rQty) {
-            qty = rQty;
-          }
-          let discount = Number(it?.discount || 0);
-          if (isRet && rQty > 0 && rate > 0 && discount <= 0) {
-            const storedTotal = Number(it?.totalAmount);
-            if (storedTotal < 0) {
-              const inferred = rate * rQty + storedTotal;
-              if (inferred > 0.0001) discount = inferred;
-            }
-          }
-          const convUnit = Number(it?.conversionUnit || 1);
-          const unit = String(it?.unit || 'pack');
-          const computedUnitQty =
-            unit === 'pack'
-              ? (convUnit > 0 ? qty * convUnit : qty)
-              : qty;
-          const unitQuantity = Number(it?.unitQuantity || 0) > 0 ? Number(it?.unitQuantity) : computedUnitQty;
-          const row: PosItem = {
-            id: idx + 1,
-            pharmItemId:
-              typeof it?.pharmItemId === 'object' && it?.pharmItemId?._id
-                ? String(it.pharmItemId._id)
-                : String(it?.pharmItemId || ''),
-            itemName:
-              typeof it?.pharmItemId === 'object' && it?.pharmItemId?.name
-                ? String(it.pharmItemId.name)
-                : String(it?.itemName || ''),
-            unit,
-            unitQuantity,
-            conversionUnit: convUnit,
-            batchNumber: String(it?.batchNumber || ''),
-            unitCost: Number(it?.unitCost || 0),
-            rate,
-            quantity: qty,
-            returnQuantity: rQty,
-            discountMode: 'value',
-            discount,
-            taxMode: 'percentage',
-            tax: 0,
-            netAmount: 0,
-            totalAmount: 0,
-            isReturn: isRet,
-            originalInvoiceNumber: String(
-              it?.originalInvoiceNumber || (isRet ? invNo : '')
-            ),
-          };
-          return posRecalcItemTotals(row);
+          const row = mapApiLineToPosItem(it, idx, invNo);
+          preservedReturnByRowId.current.set(row.id, {
+            isReturn: row.isReturn,
+            returnQuantity: row.returnQuantity,
+            originalInvoiceNumber: row.originalInvoiceNumber || '',
+          });
+          return row;
         });
         setPosItems(mappedItems.length ? mappedItems : [
           {
@@ -441,21 +857,20 @@ export default function PharmacyPOS() {
           },
         ]);
 
-        const payments = Array.isArray(inv.payment) ? inv.payment : [];
-        const mappedPayments: PaymentInstallment[] = payments.map((p: any, idx: number) => ({
-          id: idx + 1,
-          date: String((p?.payDate || new Date().toISOString()).split('T')[0]),
-          method: String(p?.method || 'Cash') as PaymentMethod,
-          amount: Number(p?.paid || 0),
-          reference: String(p?.reference || ''),
-        }));
-        setPaymentInstallments(mappedPayments.length ? mappedPayments : [{
-          id: 1,
-          date: new Date().toISOString().split('T')[0],
-          method: 'Cash',
-          amount: 0,
-          reference: '',
-        }]);
+        const mappedPayments = getInvoicePaymentRows(inv);
+        setPaymentInstallments(
+          mappedPayments.length
+            ? mappedPayments
+            : [
+                {
+                  id: 1,
+                  date: localCalendarYmd(),
+                  method: 'Cash',
+                  amount: 0,
+                  reference: '',
+                },
+              ],
+        );
         const uniqueItemIds: string[] = Array.from(
           new Set(
             (Array.isArray(items) ? items : [])
@@ -501,6 +916,298 @@ export default function PharmacyPOS() {
         setIsLoading(false);
       });
   }, [id]);
+
+  const applyReturnFromSaleInvoice = (inv: Record<string, unknown>) => {
+    const invNo = String(inv.invoiceNumber || '').trim();
+    const rows = saleLinesToReturnPosItems(
+      Array.isArray(inv.allItem) ? inv.allItem : [],
+      invNo,
+    );
+    if (!rows.length) {
+      toast.error('No sale items found on this invoice to return.');
+      return;
+    }
+
+    if (inv.patientId && typeof inv.patientId === 'object' && (inv.patientId as Patient)._id) {
+      const p = inv.patientId as Patient;
+      setUseManualPatient(false);
+      setPatientInfo({
+        _id: String(p._id),
+        mr: String(p.mr || ''),
+        name: String(p.name || ''),
+      });
+      setManualPatientName('');
+    } else {
+      setUseManualPatient(true);
+      setPatientInfo(null);
+      setManualPatientName(String(inv.patientName || ''));
+    }
+
+    if (inv.referId && typeof inv.referId === 'object' && (inv.referId as User)._id) {
+      const d = inv.referId as User;
+      setUseManualDoctor(false);
+      setReferDoctor({
+        _id: String(d._id),
+        name: String(d.name || ''),
+        role: 'doctor',
+      });
+      setManualDoctorName('');
+    } else {
+      setUseManualDoctor(true);
+      setReferDoctor(null);
+      setManualDoctorName(String(inv.doctorName || ''));
+    }
+
+    setReturnSourceInvoice({
+      _id: String(inv._id || ''),
+      invoiceNumber: invNo,
+      createdAt: inv.createdAt ? String(inv.createdAt) : undefined,
+    });
+    setReturnLookupInput(invNo);
+    setPosItems(rows);
+    const origPayments = getInvoicePaymentRows(inv);
+    originalSalePaymentsRef.current = origPayments;
+    setOriginalSalePayments(origPayments);
+    applyReturnPaymentsSync(rows, invNo, origPayments);
+
+    const itemIds = rows.map((r) => r.pharmItemId).filter(Boolean);
+    const missingIds = itemIds.filter((pid) => !itemsList.some((i) => i._id === pid));
+    if (missingIds.length) {
+      Promise.all(
+        missingIds.map((pid) =>
+          axios
+            .get(`${Base_url}/apis/pharmItem/get/${pid}`)
+            .then((r) => r?.data?.data || null)
+            .catch(() => null),
+        ),
+      ).then((fetched) => {
+        const valid = fetched.filter(Boolean) as PharmItem[];
+        if (valid.length) {
+          setItemsList((prev) => {
+            const merged = [...prev];
+            valid.forEach((it) => {
+              if (!merged.some((m) => m._id === it._id)) merged.push(it);
+            });
+            return merged;
+          });
+        }
+      });
+    }
+  };
+
+  const clearReturnLookup = () => {
+    setReturnSourceInvoice(null);
+    originalSalePaymentsRef.current = [];
+    setOriginalSalePayments([]);
+    setReturnLookupInput('');
+    setReturnPatientLookup(null);
+    setReturnPatientMatches([]);
+    setReturnInvoiceCandidates([]);
+    setPaymentInstallments([
+      {
+        id: 1,
+        date: localCalendarYmd(),
+        method: 'Cash',
+        amount: 0,
+        reference: '',
+      },
+    ]);
+    setPosItems([
+      {
+        id: 1,
+        pharmItemId: '',
+        itemName: '',
+        unit: 'pack',
+        unitQuantity: 1,
+        conversionUnit: 1,
+        batchNumber: '',
+        unitCost: 0,
+        rate: 0,
+        quantity: 1,
+        returnQuantity: 0,
+        discountMode: 'value',
+        discount: 0,
+        taxMode: 'percentage',
+        tax: 0,
+        netAmount: 0,
+        totalAmount: 0,
+        isReturn: false,
+        originalInvoiceNumber: '',
+      },
+    ]);
+  };
+
+  const loadSaleInvoiceFromRecord = async (original: Record<string, unknown>) => {
+    if (!original?._id) return;
+    setReturnInvoiceLoading(true);
+    try {
+      let inv: Record<string, unknown> = original;
+      const billId = String(original._id || '');
+      if (billId) {
+        const res = await axios.get(`${Base_url}/apis/pharmPos/get/${billId}`);
+        if (res?.data?.data) {
+          inv = res.data.data as Record<string, unknown>;
+        }
+      }
+      const allReturnBill = (Array.isArray(inv.allItem) ? inv.allItem : []).every(
+        (it: { isReturn?: boolean }) => Boolean(it?.isReturn),
+      );
+      if (allReturnBill) {
+        toast.error('This is a return bill. Pick an original sale invoice.');
+        return;
+      }
+      applyReturnFromSaleInvoice(inv);
+      setReturnInvoiceCandidates([]);
+      setReturnPatientMatches([]);
+      toast.success(`Loaded items from ${String(inv.invoiceNumber || '')}`);
+    } catch {
+      toast.error('Failed to load invoice details');
+    } finally {
+      setReturnInvoiceLoading(false);
+    }
+  };
+
+  const buildReturnInvoiceCandidates = (saleBills: Record<string, unknown>[]) =>
+    saleBills.map((inv) => {
+      const items = Array.isArray(inv.allItem) ? inv.allItem : [];
+      return {
+        _id: String(inv._id || ''),
+        invoiceNumber: String(inv.invoiceNumber || ''),
+        createdAt: inv.createdAt ? String(inv.createdAt) : undefined,
+        paid: Number(inv.paid || 0),
+        due: Number(inv.due || 0),
+        patientLabel: returnBillPatientLabel(inv),
+        itemCount: items.filter((it: { isReturn?: boolean }) => !it?.isReturn).length,
+        raw: inv,
+      };
+    });
+
+  const fetchPatientSaleBills = async (patient: Patient, autoLoadIfSingle = true) => {
+    setReturnInvoiceLoading(true);
+    setReturnInvoiceCandidates([]);
+    let autoLoaded = false;
+    try {
+      const listRes = await axios.get(`${Base_url}/apis/pharmPos/get`, {
+        params: { patientId: patient._id, limit: 80, sort: '-createdAt' },
+      });
+      const saleBills = (listRes.data?.data || []).filter(isSalePosBill);
+      if (!saleBills.length) {
+        toast.error('No sale invoices found for this patient');
+        return;
+      }
+      const candidates = buildReturnInvoiceCandidates(saleBills);
+      if (autoLoadIfSingle && candidates.length === 1) {
+        autoLoaded = true;
+        await loadSaleInvoiceFromRecord(candidates[0].raw);
+        return;
+      }
+      setReturnInvoiceCandidates(candidates);
+      toast.success(`Found ${candidates.length} sale bill(s) — pick one to load items`);
+    } catch {
+      toast.error('Failed to load patient bills');
+    } finally {
+      if (!autoLoaded) setReturnInvoiceLoading(false);
+    }
+  };
+
+  const resolvePatientForReturnSearch = async (): Promise<Patient | null> => {
+    if (returnPatientLookup?._id) return returnPatientLookup;
+    const q = returnLookupInput.trim();
+    if (!q) return null;
+    const patRes = await axios.get(`${Base_url}/apis/patient/get`, {
+      params: { search: q, limit: 20, sort: 'name' },
+    });
+    const list: Patient[] = (patRes.data?.data || []).map((p: Record<string, unknown>) => ({
+      _id: String(p._id || ''),
+      name: String(p.name || ''),
+      mr: String(p.mr || ''),
+    }));
+    if (list.length === 1) {
+      setReturnPatientLookup(list[0]);
+      setReturnPatientMatches([]);
+      return list[0];
+    }
+    if (list.length > 1) {
+      setReturnPatientMatches(list);
+      toast.info('Several patients matched — select the correct one below');
+      return null;
+    }
+    return null;
+  };
+
+  const searchPatientBillsForReturn = async () => {
+    setReturnInvoiceLoading(true);
+    setReturnInvoiceCandidates([]);
+    try {
+      const patient = await resolvePatientForReturnSearch();
+      if (!patient?._id) {
+        if (!returnPatientMatches.length) {
+          toast.error('Select patient or enter MR #, name, or phone');
+        }
+        setReturnInvoiceLoading(false);
+        return;
+      }
+      setReturnInvoiceLoading(false);
+      await fetchPatientSaleBills(patient, true);
+    } catch {
+      toast.error('Failed to search patient bills');
+      setReturnInvoiceLoading(false);
+    }
+  };
+
+  const pickPatientForReturnSearch = async (patient: Patient) => {
+    setReturnPatientLookup(patient);
+    setReturnPatientMatches([]);
+    setReturnLookupInput(patient.mr ? patient.mr : patient.name);
+    await fetchPatientSaleBills(patient, true);
+  };
+
+  const loadSaleInvoiceForReturn = async () => {
+    if (returnLookupMode === 'patient') {
+      await searchPatientBillsForReturn();
+      return;
+    }
+    const q = returnLookupInput.trim();
+    if (!q) {
+      toast.error('Enter the original sale invoice number');
+      return;
+    }
+    setReturnInvoiceLoading(true);
+    setReturnInvoiceCandidates([]);
+    try {
+      const listRes = await axios.get(`${Base_url}/apis/pharmPos/get`, {
+        params: { invoiceNumber: q, limit: 30 },
+      });
+      let original = (listRes.data?.data || []).find(
+        (inv: { invoiceNumber?: string }) =>
+          String(inv.invoiceNumber || '').trim().toLowerCase() === q.toLowerCase(),
+      );
+      if (!original?._id) {
+        const searchRes = await axios.get(`${Base_url}/apis/pharmPos/get`, {
+          params: { search: q, limit: 30, sort: '-createdAt' },
+        });
+        original = (searchRes.data?.data || []).find(isSalePosBill);
+      }
+      if (!original?._id) {
+        toast.error(`Invoice "${q}" not found`);
+        return;
+      }
+      await loadSaleInvoiceFromRecord(original);
+    } catch {
+      toast.error('Failed to load invoice');
+    } finally {
+      setReturnInvoiceLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!returnSourceInvoice) return;
+    const orig =
+      originalSalePaymentsRef.current.length > 0
+        ? originalSalePaymentsRef.current
+        : originalSalePayments;
+    applyReturnPaymentsSync(posItems, returnSourceInvoice.invoiceNumber, orig);
+  }, [posItems, returnSourceInvoice, originalSalePayments]);
 
   useEffect(() => {
     if (!isProductSearchOpen) return;
@@ -805,27 +1512,34 @@ export default function PharmacyPOS() {
       return;
     }
     
-    setPosItems([...posItems, {
-      id: posItems.length > 0 ? Math.max(...posItems.map(i => i.id)) + 1 : 1,
-      pharmItemId: '',
-      itemName: '',
-      unit: 'pack',
-      unitQuantity: 1,
-      conversionUnit: 1,
-      batchNumber: '',
-      unitCost: 0,
-      rate: 0,
-      quantity: 1,
-      returnQuantity: 0,
-      discountMode: 'value',
-      discount: 0,
-      taxMode: 'percentage',
-      tax: 0,
-      netAmount: 0,
-      totalAmount: 0,
-      isReturn: false,
-      originalInvoiceNumber: '',
-    }]);
+    const nextItems: PosItem[] = [
+      ...posItems,
+      {
+        id: posItems.length > 0 ? Math.max(...posItems.map((i) => i.id)) + 1 : 1,
+        pharmItemId: '',
+        itemName: '',
+        unit: 'pack',
+        unitQuantity: 1,
+        conversionUnit: 1,
+        batchNumber: '',
+        unitCost: 0,
+        rate: 0,
+        quantity: 1,
+        returnQuantity: 0,
+        discountMode: 'value',
+        discount: 0,
+        taxMode: 'percentage',
+        tax: 0,
+        netAmount: 0,
+        totalAmount: 0,
+        isReturn: false,
+        originalInvoiceNumber: '',
+      },
+    ];
+    setPosItems(nextItems);
+    if (returnSourceInvoice) {
+      applyReturnPaymentsSync(nextItems, returnSourceInvoice.invoiceNumber);
+    }
   };
 
   const removePosItem = (id: number) => {
@@ -833,7 +1547,11 @@ export default function PharmacyPOS() {
       toast.warning('At least one item is required');
       return;
     }
-    setPosItems(posItems.filter(item => item.id !== id));
+    const nextItems = posItems.filter((item) => item.id !== id);
+    setPosItems(nextItems);
+    if (returnSourceInvoice) {
+      applyReturnPaymentsSync(nextItems, returnSourceInvoice.invoiceNumber);
+    }
   };
 
   const getTaxAmount = (_item: PosItem) => {
@@ -945,6 +1663,7 @@ export default function PharmacyPOS() {
       }
       
       if (field === 'isReturn') {
+        if (!allowPatientReturns) return item;
         updatedItem.returnQuantity = 0;
         if (!value) {
           updatedItem.originalInvoiceNumber = '';
@@ -952,6 +1671,9 @@ export default function PharmacyPOS() {
           updatedItem.originalInvoiceNumber = editingInvoiceNumber || '';
         }
         updatedItem = posRecalcItemTotals(updatedItem);
+      }
+      if (field === 'returnQuantity' || field === 'originalInvoiceNumber') {
+        if (!allowPatientReturns) return item;
       }
       
       // Calculate profit - for return items, profit should be negative (loss)
@@ -965,6 +1687,9 @@ export default function PharmacyPOS() {
     });
     
     setPosItems(updatedItems);
+    if (returnSourceInvoice) {
+      applyReturnPaymentsSync(updatedItems, returnSourceInvoice.invoiceNumber);
+    }
   };
 
   const openProductSearch = (id: number) => {
@@ -1032,7 +1757,7 @@ export default function PharmacyPOS() {
     
     setPaymentInstallments([...paymentInstallments, {
       id: paymentInstallments.length > 0 ? Math.max(...paymentInstallments.map(p => p.id)) + 1 : 1,
-      date: new Date().toISOString().split('T')[0],
+      date: localCalendarYmd(),
       method: 'Cash',
       amount: 0,
       reference: ''
@@ -1081,12 +1806,51 @@ export default function PharmacyPOS() {
     return posItems.reduce((sum, item) => sum + item.totalAmount, 0);
   };
 
+  /** Amount customer pays (+) or receives as refund (−). */
+  const calculateBillNet = () => {
+    if (returnSourceInvoice && posItems.some((it) => !it.isReturn)) {
+      return computeReturnExchangeNet(posItems);
+    }
+    if (returnSourceInvoice && posItems.every((it) => it.isReturn)) {
+      return -Math.round(computeReturnRefundTotal(posItems) * 100) / 100;
+    }
+    return calculateGrandTotal();
+  };
+
+  const isRefundNetBill = () => calculateBillNet() < -0.000001;
+
+  const isPureReturnBill = () =>
+    Boolean(returnSourceInvoice) && posItems.every((it) => it.isReturn);
+
+  const isExchangeReturnBill = () =>
+    Boolean(returnSourceInvoice) && posItems.some((it) => !it.isReturn);
+
+  const returnRefundToday = () => computeReturnRefundTotal(posItems);
+
+  const originalSalePaidTotal = () =>
+    originalSalePayments.reduce((sum, p) => sum + Math.abs(Number(p.amount) || 0), 0);
+
+  /** Original sale payment still applied after today's return refund. */
+  const calculateRemainingPaidBalance = () => {
+    if (!returnSourceInvoice) return 0;
+    return Math.max(
+      0,
+      Math.round((originalSalePaidTotal() - returnRefundToday()) * 100) / 100,
+    );
+  };
+
+  const formatPosMoney = (amount: number) =>
+    Math.abs(amount).toLocaleString('en-PK', {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    });
+
   const calculateTotalPaid = () => {
     return paymentInstallments.reduce((sum, item) => sum + item.amount, 0);
   };
 
   const calculateDue = () => {
-    return calculateGrandTotal() - calculateTotalPaid();
+    return Math.round((calculateBillNet() - calculateTotalPaid()) * 100) / 100;
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -1105,20 +1869,35 @@ export default function PharmacyPOS() {
         return;
       }
       
-      const rowsToValidate = posItems.map((item) => {
-        if (
-          item.isReturn &&
-          item.returnQuantity > 0 &&
-          id &&
-          !(item.originalInvoiceNumber || '').trim()
-        ) {
-          return {
+      const rowsToValidate = (() => {
+        if (!allowPatientReturns) {
+          return posItems.map((item) => ({
             ...item,
-            originalInvoiceNumber: editingInvoiceNumber || item.originalInvoiceNumber || '',
-          };
+            isReturn: preservedReturnByRowId.current.get(item.id)?.isReturn ?? false,
+            returnQuantity:
+              preservedReturnByRowId.current.get(item.id)?.returnQuantity ?? 0,
+            originalInvoiceNumber:
+              preservedReturnByRowId.current.get(item.id)?.originalInvoiceNumber ?? '',
+          }));
         }
-        return item;
-      });
+        if (returnSourceInvoice) {
+          const ref = returnSourceInvoice.invoiceNumber;
+          return posItems.map((item) => ({
+            ...item,
+            isReturn: item.isReturn,
+            originalInvoiceNumber: item.isReturn
+              ? (item.originalInvoiceNumber?.trim() || ref)
+              : '',
+            returnQuantity: item.isReturn ? item.returnQuantity : 0,
+          }));
+        }
+        return posItems.map((item) => ({
+          ...item,
+          isReturn: false,
+          returnQuantity: 0,
+          originalInvoiceNumber: '',
+        }));
+      })();
 
       for (const item of rowsToValidate) {
         if (!item.pharmItemId) {
@@ -1162,14 +1941,18 @@ export default function PharmacyPOS() {
           }
         }
         
-        if (item.isReturn && item.returnQuantity > item.quantity) {
+        if (allowPatientReturns && item.isReturn && item.returnQuantity > item.quantity) {
           toast.error(`Return quantity cannot exceed sold quantity for ${selectedItem.name}`);
           setIsSubmitting(false);
           return;
         }
-        
-        // Validate: Return items must have original invoice number
-        if (item.isReturn && item.returnQuantity > 0 && !item.originalInvoiceNumber?.trim()) {
+
+        if (
+          allowPatientReturns &&
+          item.isReturn &&
+          item.returnQuantity > 0 &&
+          !item.originalInvoiceNumber?.trim()
+        ) {
           toast.error(`Please enter original invoice number for return item: ${selectedItem.name}`);
           setIsSubmitting(false);
           return;
@@ -1177,18 +1960,23 @@ export default function PharmacyPOS() {
       }
       
       const totalPaid = calculateTotalPaid();
-      const grandTotal = calculateGrandTotal();
-      
-      const billHasPositiveNet = grandTotal > 0.000001;
-      // Pure refunds (net ≤ 0) may omit payment; any bill where customer still owes must have payments.
+      const billNet = calculateBillNet();
+
+      const billHasPositiveNet = billNet > 0.000001;
+      const billHasNegativeNet = billNet < -0.000001;
       if (billHasPositiveNet) {
         if (totalPaid <= 0) {
           toast.error('At least one payment with positive amount is required');
           return;
         }
-        
-        if (paymentInstallments.some(p => p.amount <= 0)) {
+
+        if (paymentInstallments.some((p) => p.amount <= 0)) {
           toast.error('All payment amounts must be greater than 0');
+          return;
+        }
+      } else if (billHasNegativeNet) {
+        if (totalPaid >= -0.000001) {
+          toast.error('Refund payment must be negative (money returned to customer)');
           return;
         }
       }
@@ -1204,55 +1992,71 @@ export default function PharmacyPOS() {
         console.error('Error parsing user data:', error);
       }
       
-      const posPayload = {
+      const payloadMeta = {
         patientId: useManualPatient ? null : patientInfo?._id,
         patientName: useManualPatient ? manualPatientName : patientInfo?.name,
         referId: useManualDoctor ? null : (referDoctor?._id || null),
         doctorName: useManualDoctor ? manualDoctorName : (referDoctor?.name || null),
         allowNegativeInventory,
-        totalDiscount: calculateTotalDiscount(),
-        totalTax: 0,
-        due: Math.max(0, calculateDue()),
-        advance: Math.max(0, -calculateDue()),
-        paid: calculateTotalPaid(),
         note: remarks,
         createdBy: currentUserId,
-        allItem: rowsToValidate.map(item => ({
-          pharmItemId: item.pharmItemId,
-          unit: item.unit,
-          batchNumber: item.batchNumber,
-          unitCost: item.unitCost,
-          rate: item.rate,
-          quantity: item.quantity,
-          returnQuantity: item.isReturn ? item.returnQuantity : 0,
-          discount: posGetEffectiveLineDiscountForTotals(item),
-          tax: 0,
-          netAmount: item.netAmount,
-          totalAmount: item.totalAmount,
-          isReturn: item.isReturn,
-          originalInvoiceNumber: item.isReturn
-            ? (item.originalInvoiceNumber?.trim() ||
-                (id ? editingInvoiceNumber : '') ||
-                '')
-            : undefined
-        })),
-        payment: paymentInstallments.map(payment => ({
-          method: payment.method,
-          payDate: new Date(payment.date).toISOString(),
-          paid: payment.amount,
-          reference: payment.reference
-        }))
+        editingInvoiceNumber,
+        isEdit: Boolean(id),
       };
-      
+
+      const returnRows = allowPatientReturns
+        ? rowsToValidate.filter((r) => r.isReturn && (Number(r.returnQuantity) || 0) > 0)
+        : [];
+      const hasNewSaleRows = rowsToValidate.some((r) => !r.isReturn);
+
+      if (returnSourceInvoice) {
+        if (!returnRows.length) {
+          toast.error('Enter return quantity for at least one return item');
+          setIsSubmitting(false);
+          return;
+        }
+      } else if (returnRows.length > 0 && !returnSourceInvoice) {
+        toast.error('Load the original sale invoice above to process a return');
+        setIsSubmitting(false);
+        return;
+      } else if (
+        allowPatientReturns &&
+        returnRows.length > 0 &&
+        hasNewSaleRows &&
+        !returnSourceInvoice
+      ) {
+        toast.error(
+          'Process returns on a separate bill: use Return lines only (no new sales on the same bill).',
+        );
+        return;
+      }
+
+      const posPayload = buildPosPayloadFromRows(
+        rowsToValidate,
+        paymentInstallments,
+        {
+          ...payloadMeta,
+          allowPatientReturns,
+          preservedReturnByRowId: id ? preservedReturnByRowId.current : undefined,
+        },
+      );
+
       const response = id
         ? await axios.put(`${Base_url}/apis/pharmPos/update/${id}`, posPayload)
         : await axios.post(`${Base_url}/apis/pharmPos/create`, posPayload);
-      
-      // console.log('POS response:', response.data);
-      
+
       if (response.data.status === "ok" || response.data.status === "success") {
         const invoiceId = response.data.data?._id || id;
-        toast.success(id ? 'POS invoice updated successfully!' : `POS invoice created successfully! Invoice ID: ${String(invoiceId || '').slice(-8).toUpperCase()}`);
+        const isTodayReturnBill = Boolean(returnSourceInvoice) && returnRows.length > 0;
+        toast.success(
+          isTodayReturnBill
+            ? hasNewSaleRows
+              ? `Return + sale bill saved (original invoice unchanged).`
+              : `Return bill created for today (original sale invoice unchanged).`
+            : id
+              ? 'POS invoice updated successfully!'
+              : `POS invoice created successfully! Invoice ID: ${String(invoiceId || '').slice(-8).toUpperCase()}`,
+        );
         navigate(`/admin/pharmacy/invoices/receipt/${invoiceId}`);
       } else {
         throw new Error(response.data.message || 'Transaction failed');
@@ -1302,22 +2106,228 @@ export default function PharmacyPOS() {
     <div className="mx-auto max-w-[1800px] px-4 py-6">
       <Breadcrumb pageName="Pharmacy Point of Sale" />
     
-      {id && (
-        <div className="mb-4 bg-yellow-50 border border-yellow-200 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center sm:justify-between">
-          <div className="text-sm font-semibold text-yellow-800">
-            Editing existing invoice
-            {lockQtyOnEdit ? (
-              <span className="block mt-1 font-normal text-yellow-900">
-                Sold pack / piece quantities are read-only without the &quot;POS: change quantities on bills&quot;
-                permission. You can still enter <strong>return quantity</strong> and adjust payments for returns.
-              </span>
-            ) : null}
+      {allowPatientReturns && (
+        <div className="mb-6 bg-white rounded-xl shadow-md border border-gray-100 p-6 hover:shadow-lg transition-shadow">
+          <div className="flex items-center mb-4">
+            <div className="bg-amber-100 rounded-lg p-2 mr-3">
+              <svg className="w-5 h-5 text-amber-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+              </svg>
+            </div>
+            <div>
+              <h3 className="text-sm font-semibold text-gray-800">Patient return (previous sale)</h3>
+              <p className="text-xs text-gray-500 mt-0.5">Single bill loads automatically — multiple bills show a Load button</p>
+            </div>
           </div>
-          <div className="mt-2 sm:mt-0 text-xs text-yellow-700">
-            Items: <span className="font-bold">{posItems.length}</span> • Payments: <span className="font-bold">{paymentInstallments.length}</span>
+
+          <div className="flex flex-wrap gap-2 mb-4">
+            <button
+              type="button"
+              onClick={() => {
+                setReturnLookupMode('invoice');
+                setReturnInvoiceCandidates([]);
+                setReturnPatientMatches([]);
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                returnLookupMode === 'invoice'
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'bg-gray-50 border border-gray-200 text-gray-700 hover:bg-gray-100'
+              }`}
+            >
+              By invoice #
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setReturnLookupMode('patient');
+                setReturnInvoiceCandidates([]);
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                returnLookupMode === 'patient'
+                  ? 'bg-blue-600 text-white shadow-sm'
+                  : 'bg-gray-50 border border-gray-200 text-gray-700 hover:bg-gray-100'
+              }`}
+            >
+              By patient (MR / name / phone)
+            </button>
           </div>
+
+          {returnLookupMode === 'invoice' ? (
+            <div className="flex flex-col sm:flex-row gap-2">
+              <input
+                type="text"
+                className="flex-1 h-11 rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-800 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+                placeholder="Original sale invoice # e.g. INV-2026-000936"
+                value={returnLookupInput}
+                onChange={(e) => setReturnLookupInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    loadSaleInvoiceForReturn();
+                  }
+                }}
+                disabled={returnInvoiceLoading}
+              />
+              <button
+                type="button"
+                onClick={loadSaleInvoiceForReturn}
+                disabled={returnInvoiceLoading}
+                className="h-11 px-5 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50"
+              >
+                {returnInvoiceLoading ? 'Loading…' : 'Load invoice'}
+              </button>
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-2">
+                <div>
+                  <label className="text-xs font-medium text-gray-600 mb-1 block">
+                    Search patient
+                  </label>
+                  <AsyncPaginate
+                    value={
+                      returnPatientLookup
+                        ? {
+                            label: `${returnPatientLookup.name} (MR: ${returnPatientLookup.mr})`,
+                            value: returnPatientLookup._id,
+                            patientData: returnPatientLookup,
+                          }
+                        : null
+                    }
+                    onChange={(opt: PatientOption | null) => {
+                      const patient = opt?.patientData || null;
+                      setReturnPatientLookup(patient);
+                      setReturnPatientMatches([]);
+                      setReturnInvoiceCandidates([]);
+                      if (patient) void fetchPatientSaleBills(patient, true);
+                    }}
+                    loadOptions={loadPatientOptions}
+                    getOptionLabel={(o) => o.label}
+                    getOptionValue={(o) => o.value}
+                    placeholder="Name or MR #…"
+                    additional={{ page: 1 }}
+                    classNamePrefix="react-select"
+                    isDisabled={returnInvoiceLoading}
+                    styles={{
+                      control: (base) => ({
+                        ...base,
+                        minHeight: 44,
+                        borderColor: '#e5e7eb',
+                        borderRadius: '0.5rem',
+                        '&:hover': { borderColor: '#3b82f6' },
+                      }),
+                    }}
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-medium text-gray-600 mb-1 block">
+                    Or type MR / name / phone
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      className="flex-1 h-11 rounded-lg border border-gray-300 bg-white px-3 text-sm text-gray-800 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-200"
+                      placeholder="MR #, patient name, or phone"
+                      value={returnLookupInput}
+                      onChange={(e) => setReturnLookupInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          searchPatientBillsForReturn();
+                        }
+                      }}
+                      disabled={returnInvoiceLoading}
+                    />
+                    <button
+                      type="button"
+                      onClick={searchPatientBillsForReturn}
+                      disabled={returnInvoiceLoading}
+                      className="h-11 px-4 rounded-lg bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 disabled:opacity-50 whitespace-nowrap"
+                    >
+                      {returnInvoiceLoading ? '…' : 'Find bills'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {returnPatientMatches.length > 0 && (
+                <div className="rounded-lg border border-amber-300 bg-amber-50 p-2">
+                  <p className="text-xs font-semibold text-amber-900 mb-2">Multiple patients — select one:</p>
+                  <div className="flex flex-wrap gap-2">
+                    {returnPatientMatches.map((p) => (
+                      <button
+                        key={p._id}
+                        type="button"
+                        onClick={() => pickPatientForReturnSearch(p)}
+                        className="rounded-md bg-white border border-amber-400 px-3 py-1.5 text-xs font-medium text-amber-950 hover:bg-amber-100"
+                      >
+                        {p.name} {p.mr ? `(MR: ${p.mr})` : ''}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {returnInvoiceCandidates.length > 1 && (
+                <div className="rounded-lg border border-gray-200 bg-gray-50 max-h-56 overflow-y-auto">
+                  <p className="sticky top-0 bg-white px-3 py-2 text-xs font-semibold text-gray-700 border-b border-gray-200">
+                    {returnInvoiceCandidates.length} sale bills — click Load on the bill you need
+                  </p>
+                  <ul className="divide-y divide-gray-100">
+                    {returnInvoiceCandidates.map((bill) => (
+                      <li key={bill._id} className="flex items-center gap-2 px-3 py-2.5 hover:bg-white transition">
+                        <div className="flex-1 min-w-0 text-sm">
+                          <span className="font-semibold text-gray-900">{bill.invoiceNumber}</span>
+                          <span className="text-gray-600">
+                            {' '}
+                            · {bill.createdAt ? new Date(bill.createdAt).toLocaleDateString() : '—'}
+                            {' · '}
+                            {bill.itemCount} item(s) · Rs. {(bill.paid + bill.due).toLocaleString()}
+                          </span>
+                          <span className="block text-xs text-gray-500 truncate">{bill.patientLabel}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => loadSaleInvoiceFromRecord(bill.raw)}
+                          disabled={returnInvoiceLoading}
+                          className="shrink-0 h-8 px-3 rounded-md bg-blue-600 text-white text-xs font-semibold hover:bg-blue-700 disabled:opacity-50"
+                        >
+                          Load
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+
+          {(returnSourceInvoice || returnInvoiceCandidates.length > 0) && (
+            <button
+              type="button"
+              onClick={clearReturnLookup}
+              className="mt-4 h-9 px-4 rounded-lg border border-gray-300 bg-white text-gray-700 text-sm font-medium hover:bg-gray-50"
+            >
+              Clear return search
+            </button>
+          )}
+
+          {returnSourceInvoice && (
+            <div className="mt-4 rounded-lg border border-green-200 bg-green-50 px-3 py-2.5">
+              <p className="text-xs font-medium text-green-900">
+                Loaded: <strong>{returnSourceInvoice.invoiceNumber}</strong>
+                {returnSourceInvoice.createdAt
+                  ? ` · Sale date: ${new Date(returnSourceInvoice.createdAt).toLocaleDateString()}`
+                  : ''}
+                {' · '}
+                Enter <strong>return qty</strong> for each item below, then save.
+              </p>
+            </div>
+          )}
         </div>
       )}
+
+     
       
       {/* Patient and Doctor Selection */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
@@ -1460,8 +2470,24 @@ export default function PharmacyPOS() {
                 </svg>
               </div>
               <div>
-                <h2 className="text-lg font-bold text-gray-800">Sale Items</h2>
-                <p className="text-xs text-gray-500 mt-0.5">{posItems.length} item(s) added</p>
+                <h2 className="text-lg font-bold text-gray-800">
+                  {returnSourceInvoice ? 'Return & sale items' : 'Sale Items'}
+                </h2>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {returnSourceInvoice
+                    ? (() => {
+                        const returnLines = posItems.filter((i) => i.isReturn).length;
+                        const saleLines = posItems.filter((i) => !i.isReturn).length;
+                        const parts = [
+                          returnLines ? `${returnLines} return line(s) from ${returnSourceInvoice.invoiceNumber}` : null,
+                          saleLines ? `${saleLines} new sale line(s)` : null,
+                        ].filter(Boolean);
+                        return parts.length
+                          ? `${parts.join(' · ')} — enter return qty on return lines`
+                          : `Ref ${returnSourceInvoice.invoiceNumber}`;
+                      })()
+                    : `${posItems.length} item(s) added`}
+                </p>
               </div>
             </div>
             <div className="flex items-center gap-4">
@@ -1494,9 +2520,12 @@ export default function PharmacyPOS() {
         </div>
         <div className="p-4 space-y-4">
           {posItems.map((item, index) => {
+            const loadedReturnLine = Boolean(returnSourceInvoice && item.isReturn);
+            const lineIsReturn =
+              loadedReturnLine || (allowPatientReturns && item.isReturn);
             let profit = 0;
             const discountAmount = posGetDiscountAmount(item);
-            if (item.isReturn) {
+            if (lineIsReturn) {
               const Q = Math.max(0, Number(item.quantity) || 0);
               const R = Q > 0 ? Math.min(Math.max(0, Number(item.returnQuantity) || 0), Q) : Math.max(0, Number(item.returnQuantity) || 0);
               const kept = Math.max(0, Q - R);
@@ -1517,33 +2546,22 @@ export default function PharmacyPOS() {
                     Item #{index + 1}
                   </div>
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
-                    <label className="inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 w-4 h-4"
-                        checked={item.isReturn}
-                        onChange={(e) =>
-                          updatePosItem(item.id, 'isReturn', e.target.checked)
-                        }
-                      />
-                      <span className="ml-2 text-xs text-gray-600 font-medium">
-                        Return
+                    {!allowPatientReturns &&
+                      (preservedReturnByRowId.current.get(item.id)?.isReturn ||
+                        item.isReturn) && (
+                        <span className="rounded bg-red-100 px-2 py-1 text-xs font-medium text-red-800">
+                          Return line (read-only)
+                        </span>
+                      )}
+                    {loadedReturnLine && (
+                      <span className="rounded bg-red-100 px-2 py-1 text-xs font-medium text-red-800">
+                        Sold: {item.quantity} {item.unit} · Ref: {returnSourceInvoice?.invoiceNumber}
                       </span>
-                    </label>
-                    {item.isReturn && (
-                      <input
-                        type="text"
-                        className="w-full sm:w-56 rounded-lg border border-red-300 bg-red-50 h-11 px-3 text-sm text-gray-700 outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-200"
-                        placeholder="Original Invoice #"
-                        value={item.originalInvoiceNumber || ''}
-                        onChange={(e) =>
-                          updatePosItem(
-                            item.id,
-                            'originalInvoiceNumber',
-                            e.target.value
-                          )
-                        }
-                      />
+                    )}
+                    {!loadedReturnLine && returnSourceInvoice && (
+                      <span className="rounded bg-blue-100 px-2 py-1 text-xs font-medium text-blue-800">
+                        New sale
+                      </span>
                     )}
                     <button
                       onClick={() => removePosItem(item.id)}
@@ -1563,77 +2581,85 @@ export default function PharmacyPOS() {
                       Item <span className="text-red-500">*</span>
                     </div>
                     <div className="flex items-center gap-2">
-                      <AsyncPaginate
-                        value={
-                          item.pharmItemId
-                            ? { label: item.itemName, value: item.pharmItemId }
-                            : null
-                        }
-                        onChange={(selectedOption: any) => {
-                          const selected = selectedOption?.itemData as PharmItem | undefined;
-                          if (!selected) return;
-                          applySelectedPharmItem(item.id, selected);
-                        }}
-                        onInputChange={(newValue: string) => {
-                          setPosItemSearchInputByRowId((prev) => ({
-                            ...prev,
-                            [item.id]: newValue,
-                          }));
-                          return newValue;
-                        }}
-                        loadOptions={
-                          loadItemOptions as unknown as LoadOptions<
-                            any,
-                            never,
-                            { page: number }
-                          >
-                        }
-                        getOptionLabel={(option: any) =>
-                          option?.label || option?.itemData?.name || ''
-                        }
-                        getOptionValue={(option: any) => option?.value || ''}
-                        placeholder="Search by name, barcode or serial..."
-                        additional={{ page: 1 }}
-                        classNamePrefix="react-select"
-                        className="w-full"
-                        required
-                        menuPortalTarget={
-                          typeof window !== 'undefined' ? document.body : null
-                        }
-                        menuPosition="fixed"
-                        styles={{
-                          menuPortal: (base) => ({ ...base, zIndex: 9999 }),
-                          control: (base) => ({
-                            ...base,
-                            minHeight: 44,
-                            height: 44,
-                          }),
-                          singleValue: (base) => ({
-                            ...base,
-                            color: '#1f2937',
-                            fontWeight: '500',
-                          }),
-                        }}
-                        formatOptionLabel={(option: any) => (
-                          <div className="text-sm">
-                            <div className="font-medium text-gray-900">
-                              {option.itemData?.name || option.label}
-                            </div>
-                            {option.itemData?.barcode && (
-                              <div className="text-xs text-gray-500">
-                                Barcode: {option.itemData.barcode}
+                      {loadedReturnLine ? (
+                        <div className="flex h-11 w-full items-center rounded-lg border border-gray-300 bg-gray-50 px-3 text-sm font-medium text-gray-800">
+                          {item.itemName || '—'}
+                        </div>
+                      ) : (
+                        <>
+                          <AsyncPaginate
+                            value={
+                              item.pharmItemId
+                                ? { label: item.itemName, value: item.pharmItemId }
+                                : null
+                            }
+                            onChange={(selectedOption: any) => {
+                              const selected = selectedOption?.itemData as PharmItem | undefined;
+                              if (!selected) return;
+                              applySelectedPharmItem(item.id, selected);
+                            }}
+                            onInputChange={(newValue: string) => {
+                              setPosItemSearchInputByRowId((prev) => ({
+                                ...prev,
+                                [item.id]: newValue,
+                              }));
+                              return newValue;
+                            }}
+                            loadOptions={
+                              loadItemOptions as unknown as LoadOptions<
+                                any,
+                                never,
+                                { page: number }
+                              >
+                            }
+                            getOptionLabel={(option: any) =>
+                              option?.label || option?.itemData?.name || ''
+                            }
+                            getOptionValue={(option: any) => option?.value || ''}
+                            placeholder="Search by name, barcode or serial..."
+                            additional={{ page: 1 }}
+                            classNamePrefix="react-select"
+                            className="w-full"
+                            required
+                            menuPortalTarget={
+                              typeof window !== 'undefined' ? document.body : null
+                            }
+                            menuPosition="fixed"
+                            styles={{
+                              menuPortal: (base) => ({ ...base, zIndex: 9999 }),
+                              control: (base) => ({
+                                ...base,
+                                minHeight: 44,
+                                height: 44,
+                              }),
+                              singleValue: (base) => ({
+                                ...base,
+                                color: '#1f2937',
+                                fontWeight: '500',
+                              }),
+                            }}
+                            formatOptionLabel={(option: any) => (
+                              <div className="text-sm">
+                                <div className="font-medium text-gray-900">
+                                  {option.itemData?.name || option.label}
+                                </div>
+                                {option.itemData?.barcode && (
+                                  <div className="text-xs text-gray-500">
+                                    Barcode: {option.itemData.barcode}
+                                  </div>
+                                )}
                               </div>
                             )}
-                          </div>
-                        )}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => openProductSearch(item.id)}
-                        className="inline-flex h-11 items-center justify-center rounded-md border border-gray-300 bg-white px-3 text-xs font-medium text-gray-700 hover:bg-gray-100"
-                      >
-                        Search
-                      </button>
+                          />
+                          <button
+                            type="button"
+                            onClick={() => openProductSearch(item.id)}
+                            className="inline-flex h-11 items-center justify-center rounded-md border border-gray-300 bg-white px-3 text-xs font-medium text-gray-700 hover:bg-gray-100"
+                          >
+                            Search
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
 
@@ -1647,7 +2673,7 @@ export default function PharmacyPOS() {
                       onChange={(e) =>
                         updatePosItem(item.id, 'unit', e.target.value)
                       }
-                      disabled={!item.pharmItemId}
+                      disabled={!item.pharmItemId || loadedReturnLine}
                     >
                       <option value="pack">Pack</option>
                       <option value="unit">Unit</option>
@@ -1669,6 +2695,7 @@ export default function PharmacyPOS() {
                         updatePosItem(item.id, 'batchNumber', e.target.value)
                       }
                       disabled={
+                        loadedReturnLine ||
                         !item.pharmItemId ||
                         !itemsList.find((i) => i._id === item.pharmItemId)
                           ?.batches?.length
@@ -1717,6 +2744,7 @@ export default function PharmacyPOS() {
                       min="0"
                       step="0.01"
                       required
+                      disabled={loadedReturnLine}
                     />
                   </div>
 
@@ -1726,7 +2754,7 @@ export default function PharmacyPOS() {
                       const conv = selected?.conversionUnit || item.conversionUnit || 1;
                       const availableUnits = Number(selected?.availableQuantity || 0);
                       const requestedUnits = Number(item.unitQuantity || (item.quantity * conv));
-                      const exceeds = !item.isReturn && requestedUnits > availableUnits;
+                      const exceeds = !lineIsReturn && requestedUnits > availableUnits;
                       const availablePacks = Math.floor(availableUnits / conv);
                       const availableRem = availableUnits % conv;
                       const availableText = `Available: ${availablePacks} ${(selected?.unit || 'pack')}${availableRem ? ` + ${availableRem}` : ''} (${availableUnits} units)`;
@@ -1741,7 +2769,7 @@ export default function PharmacyPOS() {
                     <input
                       type="number"
                           className={packInputClass}
-                      value={item.isReturn ? netQty.packs : item.quantity}
+                      value={lineIsReturn ? netQty.packs : item.quantity}
                       onChange={(e) =>
                         updatePosItem(
                           item.id,
@@ -1750,8 +2778,8 @@ export default function PharmacyPOS() {
                         )
                       }
                       onWheel={(e) => e.currentTarget.blur()}
-                      min={item.isReturn ? 0 : 1}
-                      disabled={item.isReturn || lockQtyOnEdit}
+                      min={lineIsReturn ? 0 : 1}
+                      disabled={lineIsReturn || lockQtyOnEdit}
                       required
                     />
                         {selected && (
@@ -1762,7 +2790,7 @@ export default function PharmacyPOS() {
                         </>
                       );
                     })()}
-                    {item.isReturn && (
+                    {lineIsReturn && (
                       <input
                         type="text"
                         inputMode="numeric"
@@ -1790,7 +2818,7 @@ export default function PharmacyPOS() {
                         title="Return qty is always editable on an open bill (even when sold pack qty is locked)."
                       />
                     )}
-                    {item.isReturn && (() => {
+                    {lineIsReturn && (() => {
                       const selected = itemsList.find((i) => i._id === item.pharmItemId);
                       const conv = selected?.conversionUnit || item.conversionUnit || 1;
                       const availableUnits = Number(selected?.availableQuantity || 0);
@@ -1812,7 +2840,7 @@ export default function PharmacyPOS() {
                       const conv = selected?.conversionUnit || item.conversionUnit || 1;
                       const availableUnits = Number(selected?.availableQuantity || 0);
                       const requestedUnits = Number(item.unitQuantity || (item.quantity * conv));
-                      const exceeds = !item.isReturn && requestedUnits > availableUnits;
+                      const exceeds = !lineIsReturn && requestedUnits > availableUnits;
                       const unitInputClass = `w-full h-11 rounded-lg border px-3 text-sm outline-none transition ${exceeds ? 'border-red-500 bg-red-50 text-red-700 focus:border-red-500 focus:ring-2 focus:ring-red-200' : 'border-gray-300 bg-blue-50 text-gray-700 focus:border-blue-500 focus:ring-2 focus:ring-blue-200'}`;
                       const netQtyPieces = posGetNetQtyDisplay(item);
                       return (
@@ -1823,7 +2851,7 @@ export default function PharmacyPOS() {
                     <input
                       type="number"
                           className={unitInputClass}
-                      value={item.isReturn ? netQtyPieces.units : item.unitQuantity}
+                      value={lineIsReturn ? netQtyPieces.units : item.unitQuantity}
                       onChange={(e) =>
                         updatePosItem(
                           item.id,
@@ -1832,8 +2860,8 @@ export default function PharmacyPOS() {
                         )
                       }
                       onWheel={(e) => e.currentTarget.blur()}
-                      min={item.isReturn ? 0 : 1}
-                      disabled={item.isReturn || !item.pharmItemId || item.conversionUnit <= 1 || lockQtyOnEdit}
+                      min={lineIsReturn ? 0 : 1}
+                      disabled={lineIsReturn || !item.pharmItemId || item.conversionUnit <= 1 || lockQtyOnEdit}
                       title={`Conversion: 1 ${item.unit} = ${item.conversionUnit} units`}
                     />
                         </>
@@ -1869,7 +2897,7 @@ export default function PharmacyPOS() {
                         max={
                           item.discountMode === 'percentage'
                             ? 100
-                            : item.isReturn
+                            : lineIsReturn
                               ? Math.max(
                                   0,
                                   Math.abs(
@@ -1954,6 +2982,75 @@ export default function PharmacyPOS() {
             </button>
           </div>
         </div>
+
+        {returnSourceInvoice && originalSalePayments.length > 0 && (
+          <div className="mx-4 mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-950">
+            <p className="font-semibold mb-1.5">
+              Original sale payments — {returnSourceInvoice.invoiceNumber}
+            </p>
+            <ul className="space-y-1">
+              {originalSalePayments.map((p) => (
+                <li key={p.id} className="flex flex-wrap gap-x-2 text-amber-900">
+                  <span>{p.date}</span>
+                  <span>·</span>
+                  <span>{p.method}</span>
+                  <span>·</span>
+                  <span className="font-semibold">Rs. {p.amount.toFixed(2)}</span>
+                  {p.reference ? (
+                    <>
+                      <span>·</span>
+                      <span className="text-amber-800">{p.reference}</span>
+                    </>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+            {posItems.some((it) => !it.isReturn) ? (
+              <div className="mt-3 space-y-1 rounded-md border border-amber-300/60 bg-white/60 px-3 py-2 text-amber-950">
+                <p className="font-semibold">Today&apos;s net (auto)</p>
+                <p>
+                  New sale:{' '}
+                  <span className="font-semibold">
+                    Rs.{' '}
+                    {posItems
+                      .filter((it) => !it.isReturn)
+                      .reduce((s, it) => s + it.totalAmount, 0)
+                      .toFixed(2)}
+                  </span>
+                  {' · '}
+                  Return refund:{' '}
+                  <span className="font-semibold">
+                    Rs. {computeReturnRefundTotal(posItems).toFixed(2)}
+                  </span>
+                </p>
+                <p>
+                  {computeReturnExchangeNet(posItems) >= 0 ? 'Customer pays' : 'Refund to customer'}:{' '}
+                  <span
+                    className={`font-bold text-base ${
+                      computeReturnExchangeNet(posItems) < 0 ? 'text-red-700' : ''
+                    }`}
+                  >
+                    Rs. {computeReturnExchangeNet(posItems).toFixed(2)}
+                  </span>
+                </p>
+              
+              </div>
+            ) : (
+              <p className="mt-2 text-amber-800">
+                Original sale amount is pre-filled below. Enter return qty to update to today&apos;s
+                refund amount.
+              </p>
+            )}
+          </div>
+        )}
+        {returnSourceInvoice && originalSalePayments.length === 0 && (
+          <div className="mx-4 mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-950">
+            <p className="font-semibold">Original invoice — {returnSourceInvoice.invoiceNumber}</p>
+            <p className="mt-1 text-amber-800">
+              No payment rows found on the original sale; net amount uses Cash below.
+            </p>
+          </div>
+        )}
         
         <div className="overflow-x-auto p-4">
           <table className="min-w-full divide-y divide-gray-200">
@@ -1966,6 +3063,22 @@ export default function PharmacyPOS() {
               </tr>
             </thead>
             <tbody className="bg-white divide-y divide-gray-100">
+              {returnSourceInvoice && !posItems.some((it) => !it.isReturn) && (
+                <tr className="bg-red-50/60">
+                  <td colSpan={4} className="px-4 py-2 text-xs font-medium text-red-900">
+                    Refund payment (today) — for return bill
+                  </td>
+                </tr>
+              )}
+              {returnSourceInvoice && posItems.some((it) => !it.isReturn) && (
+                <tr className="bg-blue-50/60">
+                  <td colSpan={4} className="px-4 py-2 text-xs font-medium text-blue-900">
+                    {computeReturnExchangeNet(posItems) >= 0
+                      ? `Net payment (today) — customer pays Rs. ${computeReturnExchangeNet(posItems).toFixed(2)} (new sale − return)`
+                      : `Net refund (today) — Rs. ${computeReturnExchangeNet(posItems).toFixed(2)} to customer`}
+                  </td>
+                </tr>
+              )}
               {paymentInstallments.map((item) => (
                 <tr key={item.id} className="hover:bg-green-50 transition-colors">
                   <td className="px-4 py-3 whitespace-nowrap">
@@ -1997,11 +3110,22 @@ export default function PharmacyPOS() {
                       <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-500 text-sm font-medium">Rs.</span>
                       <input
                         type="number"
-                        className="w-full rounded-lg border border-gray-300 bg-white py-2.5 pl-12 pr-4 text-sm text-gray-700 font-semibold outline-none transition focus:border-green-500 focus:ring-2 focus:ring-green-200"
-                        value={item.amount}
-                        onChange={(e) => updatePaymentInstallment(item.id, 'amount', parseFloat(e.target.value))}
+                        className={`w-full rounded-lg border py-2.5 pl-12 pr-4 text-sm font-semibold outline-none transition focus:ring-2 ${
+                          item.amount < 0
+                            ? 'border-red-300 bg-red-50 text-red-700 focus:border-red-500 focus:ring-red-200'
+                            : 'border-gray-300 bg-white text-gray-700 focus:border-green-500 focus:ring-green-200'
+                        }`}
+                        value={Number.isFinite(item.amount) ? item.amount : 0}
+                        onChange={(e) => {
+                          const n = parseFloat(e.target.value);
+                          updatePaymentInstallment(
+                            item.id,
+                            'amount',
+                            Number.isFinite(n) ? n : 0,
+                          );
+                        }}
                         onWheel={(e) => e.currentTarget.blur()}
-                        min="0"
+                        min={returnSourceInvoice ? undefined : '0'}
                         step="0.01"
                         required
                       />
@@ -2059,17 +3183,76 @@ export default function PharmacyPOS() {
           <div className="p-6 space-y-3">
             <div className="flex justify-between items-center py-2 border-b border-blue-200">
               <span className="text-gray-700 font-medium">Gross Total:</span>
-              <span className="text-lg font-bold text-gray-800">Rs. {calculateSubTotal().toFixed(2)}</span>
+              <span className="text-lg font-bold text-gray-800">
+                Rs. {formatPosMoney(calculateSubTotal())}
+              </span>
             </div>
             <div className="flex justify-between items-center py-2 border-b border-blue-200">
               <span className="text-gray-700 font-medium">Discount:</span>
-              <span className="text-lg font-bold text-red-600">- Rs. {calculateTotalDiscount().toFixed(2)}</span>
+              <span className="text-lg font-bold text-red-600">
+                - Rs. {formatPosMoney(calculateTotalDiscount())}
+              </span>
             </div>
+            {isPureReturnBill() ? (
+              <>
+                {returnSourceInvoice ? (
+                  <div className="flex justify-between items-center py-2 border-b border-blue-200 text-sm">
+                    <span className="text-gray-600">Original invoice:</span>
+                    <span className="font-semibold text-gray-800">
+                      {returnSourceInvoice.invoiceNumber}
+                    </span>
+                  </div>
+                ) : null}
+                {originalSalePaidTotal() > 0 ? (
+                  <div className="flex justify-between items-center py-2 border-b border-blue-200 text-sm">
+                    <span className="text-gray-600">Original sale paid:</span>
+                    <span className="font-semibold text-gray-800">
+                      Rs. {formatPosMoney(originalSalePaidTotal())}
+                    </span>
+                  </div>
+                ) : null}
+                <div className="flex justify-between items-center py-2 border-b border-blue-200">
+                  <span className="text-gray-700 font-medium">Return amount (today):</span>
+                  <span className="text-lg font-bold text-red-600">
+                    - Rs. {formatPosMoney(returnRefundToday())}
+                  </span>
+                </div>
+              </>
+            ) : null}
+            {isExchangeReturnBill() && (
+              <>
+                <div className="flex justify-between items-center py-2 border-b border-blue-200 text-sm">
+                  <span className="text-gray-600">New sale total:</span>
+                  <span className="font-semibold text-gray-800">
+                    Rs.{' '}
+                    {formatPosMoney(
+                      posItems
+                        .filter((it) => !it.isReturn)
+                        .reduce((s, it) => s + it.totalAmount, 0),
+                    )}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center py-2 border-b border-blue-200 text-sm">
+                  <span className="text-gray-600">Return refund (old invoice):</span>
+                  <span className="font-semibold text-red-600">
+                    - Rs. {formatPosMoney(returnRefundToday())}
+                  </span>
+                </div>
+              </>
+            )}
             
             <div className="bg-gradient-to-r from-blue-600 to-indigo-600 rounded-lg px-4 py-3 mt-4">
               <div className="flex justify-between items-center">
-                <span className="text-white font-bold text-base">Net Total:</span>
-                <span className="text-white font-bold text-2xl">Rs. {calculateGrandTotal().toFixed(2)}</span>
+                <span className="text-white font-bold text-base">
+                  {isPureReturnBill()
+                    ? 'Refund total:'
+                    : isExchangeReturnBill()
+                      ? 'Net to pay / refund:'
+                      : 'Net Total:'}
+                </span>
+                <span className="text-white font-bold text-2xl">
+                  Rs. {calculateBillNet().toFixed(2)}
+                </span>
               </div>
             </div>
           </div>
@@ -2085,28 +3268,87 @@ export default function PharmacyPOS() {
             </div>
           </div>
           <div className="p-6 space-y-3">
+            {returnSourceInvoice && originalSalePaidTotal() > 0 ? (
+              <div className="flex justify-between items-center py-2 border-b border-green-200">
+                <span className="text-gray-700 font-medium">Original sale paid:</span>
+                <span className="font-semibold text-green-800">
+                  Rs. {formatPosMoney(originalSalePaidTotal())}
+                </span>
+              </div>
+            ) : null}
+           
+            {returnSourceInvoice ? (
+              <div className="flex justify-between items-center py-2 border-b border-green-200">
+                <span className="text-gray-700 font-medium">Remaining Paid Balance:</span>
+                <span className="text-lg font-bold text-gray-800">
+                  Rs. {formatPosMoney(calculateRemainingPaidBalance())}
+                </span>
+              </div>
+            ) : (
+              <div className="flex justify-between items-center py-2 border-b border-green-200">
+                <span className="text-gray-700 font-medium">Total Paid:</span>
+                <span className="text-lg font-bold text-green-600">
+                  Rs. {formatPosMoney(calculateTotalPaid())}
+                </span>
+              </div>
+            )}
+            {returnSourceInvoice ? (
+              <div className="flex justify-between items-center py-2 border-b border-green-200">
+                <span className="text-gray-700 font-medium">
+                  {isRefundNetBill() ? 'Refund to customer (today):' : 'Customer pays (today):'}
+                </span>
+                <span
+                  className={`text-lg font-bold ${
+                    isRefundNetBill() ? 'text-red-600' : 'text-green-600'
+                  }`}
+                >
+                  {isRefundNetBill() ? '-' : ''}Rs. {formatPosMoney(calculateTotalPaid())}
+                </span>
+              </div>
+            ) : null}
+           
             <div className="flex justify-between items-center py-2 border-b border-green-200">
-              <span className="text-gray-700 font-medium">Total Paid:</span>
-              <span className="text-lg font-bold text-green-600">Rs. {calculateTotalPaid().toFixed(2)}</span>
-            </div>
-            <div className="flex justify-between items-center py-2 border-b border-green-200">
-              <span className="text-gray-700 font-medium">{calculateDue() > 0 ? 'Due Amount:' : 'Change to Return:'}</span>
-              <span className={`text-lg font-bold ${calculateDue() > 0 ? 'text-red-600' : 'text-green-600'}`}>
-                Rs. {Math.abs(calculateDue()).toFixed(2)}
+              <span className="text-gray-700 font-medium">
+                {calculateDue() > 0.000001
+                  ? 'Due Amount:'
+                  : isRefundNetBill()
+                    ? 'Remaining refund:'
+                    : 'Change to Return:'}
+              </span>
+              <span
+                className={`text-lg font-bold ${
+                  calculateDue() > 0.000001 || (isRefundNetBill() && calculateDue() < -0.000001)
+                    ? 'text-red-600'
+                    : 'text-green-600'
+                }`}
+              >
+                Rs.{' '}
+                {isRefundNetBill() && calculateDue() < -0.000001
+                  ? `-${Math.abs(calculateDue()).toFixed(2)}`
+                  : Math.abs(calculateDue()).toFixed(2)}
               </span>
             </div>
-            {calculateDue() < 0 && (
-              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
-                <p className="text-sm text-yellow-800">
-                  <span className="font-bold">💰 Return Change:</span> Please return Rs. {Math.abs(calculateDue()).toFixed(2)} to the customer
+            {calculateDue() < -0.000001 && (
+              <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                <p className="text-sm text-red-800">
+                  <span className="font-bold">💰 Return Change:</span> Please return Rs.{' '}
+                  {Math.abs(calculateDue()).toFixed(2)} to the customer
                 </p>
               </div>
             )}
-            <div className={`rounded-lg px-4 py-3 mt-4 ${calculateDue() > 0 ? 'bg-gradient-to-r from-red-600 to-rose-600' : 'bg-gradient-to-r from-green-600 to-emerald-600'}`}>
+            <div className={`rounded-lg px-4 py-3 mt-4 ${calculateDue() > 0.000001 ? 'bg-gradient-to-r from-red-600 to-rose-600' : 'bg-gradient-to-r from-green-600 to-emerald-600'}`}>
               <div className="flex justify-between items-center">
                 <span className="text-white font-bold text-base">Payment Status:</span>
                 <span className="text-white font-bold text-xl">
-                  {calculateDue() === 0 ? '✓ Fully Paid' : calculateDue() > 0 ? '⚠ Pending' : '↑ Overpaid - Return Change'}
+                  {Math.abs(calculateDue()) < 0.005
+                    ? isRefundNetBill()
+                      ? '✓ Refund Complete'
+                      : '✓ Fully Paid'
+                    : calculateDue() > 0.000001
+                      ? '⚠ Pending'
+                      : isRefundNetBill()
+                        ? '⚠ Refund Pending'
+                        : '↑ Overpaid - Return Change'}
                 </span>
               </div>
             </div>

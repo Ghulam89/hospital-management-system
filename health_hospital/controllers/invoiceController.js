@@ -6,7 +6,7 @@ const { isBeforeStartOfTodayLocal } = require("../utils/posClosingAndBackdate");
 const {
   assignBranchIdForCreate,
   mergeBranchScopedQuery,
-  branchDocumentVisible,
+  branchDocumentVisible, branchDocumentDeletable,
   applyStrictBranchListFilter,
   getScopedPatientIds,
 } = require("../utils/branchScope");
@@ -161,13 +161,30 @@ function sanitizeInvoiceWritePayload(body) {
   return out;
 }
 
+function stampInvoiceAuditCreate(req, body) {
+  if (body && typeof body === "object") {
+    delete body.updatedById;
+    if (req.user?._id) body.createdById = req.user._id;
+  }
+  return body;
+}
+
+function stampInvoiceAuditUpdate(req, body) {
+  if (body && typeof body === "object") {
+    delete body.createdById;
+    if (req.user?._id) body.updatedById = req.user._id;
+  }
+  return body;
+}
+
 // 1. Create invoice
 const addinvoice = async (req, res) => {
   try {
 
-
-
-    const body = assignBranchIdForCreate(req, sanitizeInvoiceWritePayload({ ...req.body }));
+    const body = stampInvoiceAuditCreate(
+      req,
+      assignBranchIdForCreate(req, sanitizeInvoiceWritePayload({ ...req.body })),
+    );
     const datesToCheck = [];
     if (body.invoiceDate) datesToCheck.push(body.invoiceDate);
     if (Array.isArray(body.payment)) {
@@ -185,10 +202,6 @@ const addinvoice = async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 };
-
-
-
-
 
 // 2. Get all invoices
 const getinvoices = async (req, res) => {
@@ -252,12 +265,17 @@ const getinvoices = async (req, res) => {
       });
     }
 
-    // Basic filters
+    // Basic filters — match header doctor OR any line doctorShares doctor
     if (doctorId && doctorId.trim() !== '') {
-      // In aggregation pipeline, $match does NOT auto-cast strings to ObjectId.
-      // If we keep a string here, it will return zero results even when invoices exist.
-      query['doctorId'] = Types.ObjectId.isValid(doctorId) ? new Types.ObjectId(doctorId) : doctorId;
-      console.log('Doctor filter applied:', query['doctorId']);
+      const doctorOid = Types.ObjectId.isValid(doctorId) ? new Types.ObjectId(doctorId) : doctorId;
+      const doctorOr = [
+        { doctorId: doctorOid },
+        { 'item.doctorShares.doctorId': doctorOid },
+        { 'item.performedBy': doctorOid },
+      ];
+      query.$and = query.$and || [];
+      query.$and.push({ $or: doctorOr });
+      console.log('Doctor filter applied (header or shares):', doctorOid);
     }
     if (departmentId && departmentId.trim() !== '') {
       // Note: departmentId filter will be handled in aggregation pipeline
@@ -297,6 +315,44 @@ const getinvoices = async (req, res) => {
         });
       }
       query.patientId = { $in: filterPatientIds };
+    }
+
+    const directPatientIdRaw = String(req.query.patientId || "").trim();
+    if (directPatientIdRaw) {
+      const directPatientId = Types.ObjectId.isValid(directPatientIdRaw)
+        ? new Types.ObjectId(directPatientIdRaw)
+        : directPatientIdRaw;
+      if (hasPatientFieldFilters) {
+        const allowed = filterPatientIds.some(
+          (pid) => String(pid) === String(directPatientId),
+        );
+        if (!allowed) {
+          const emptySummary = {
+            totalSubTotal: 0,
+            totalDiscount: 0,
+            totalTax: 0,
+            grandTotal: 0,
+            totalDue: 0,
+            totalAdvance: 0,
+            totalPaid: 0,
+            totalRemaining: 0,
+            totalDoctorShare: 0,
+            totalHospitalShare: 0,
+          };
+          return res.status(200).json({
+            status: "ok",
+            data: [],
+            search,
+            page,
+            summary: emptySummary,
+            count: 0,
+            totalPages: 0,
+            currentPage: parseInt(page, 10) || 1,
+            limit,
+          });
+        }
+      }
+      query.patientId = directPatientId;
     }
 
     // Handle invoiceNo or invoiceNumber (both map to invoiceNo)
@@ -650,6 +706,10 @@ const getinvoices = async (req, res) => {
           path: 'item.procedureId',
           model: 'Procedure'
         })
+        .populate({ path: 'item.performedBy', select: 'name' })
+        .populate({ path: 'item.doctorShares.doctorId', select: 'name' })
+        .populate({ path: 'createdById', select: 'name' })
+        .populate({ path: 'updatedById', select: 'name' })
         .limit(limit)
         .skip((parseInt(page) - 1) * limit)
         .exec();
@@ -701,7 +761,6 @@ const getinvoices = async (req, res) => {
   totalHospitalShare: 0,
 };
 
-
 invoices.forEach(invoice => {
   summary.totalSubTotal += invoice.subTotalBill || 0;
   summary.totalDiscount += invoice.discountBill || 0;
@@ -723,7 +782,6 @@ invoices.forEach(invoice => {
 
  
 
-
     res.status(200).json({
       status: "ok",
       data: invoices,
@@ -739,8 +797,6 @@ invoices.forEach(invoice => {
     res.status(500).json({ error: err.message });
   }
 };
-
-
 
 // 3. Get invoice by id
 const getinvoiceById = async (req, res) => {
@@ -763,12 +819,14 @@ const getinvoiceById = async (req, res) => {
       data = await basePopulates()
         .populate({ path: "item.procedureId", model: "Procedure" })
         .populate({ path: "item.performedBy", select: "name" })
+        .populate({ path: "item.doctorShares.doctorId", select: "name sharePrice shareType" })
         .exec();
     } catch (popErr) {
       console.error("getinvoiceById nested populate failed:", popErr?.message || popErr);
       try {
         data = await basePopulates()
           .populate({ path: "item.procedureId", model: "Procedure" })
+          .populate({ path: "item.doctorShares.doctorId", select: "name sharePrice shareType" })
           .exec();
       } catch (popErr2) {
         console.error("getinvoiceById procedure populate failed:", popErr2?.message || popErr2);
@@ -809,7 +867,7 @@ const updateinvoice = async (req, res) => {
 
     const data = await Invoice.findByIdAndUpdate(
       id,
-      sanitizeInvoiceWritePayload({ ...req.body }),
+      stampInvoiceAuditUpdate(req, sanitizeInvoiceWritePayload({ ...req.body })),
       { new: true }
     );
     return res.status(200).json({ status: "ok", data: data });
@@ -856,6 +914,7 @@ const addInvoicePayments = async (req, res) => {
     const totalBill = Number(invoice.totalBill) || 0;
     invoice.totalPay = totalPaid;
     invoice.duePay = totalBill - totalPaid;
+    if (req.user?._id) invoice.updatedById = req.user._id;
 
     const updated = await invoice.save();
     return res.status(200).json({ status: "ok", data: updated });
@@ -904,6 +963,7 @@ const addInvoiceRefund = async (req, res) => {
     const totalBill = Number(invoice.totalBill) || 0;
     invoice.totalPay = totalPaid;
     invoice.duePay = totalBill - totalPaid;
+    if (req.user?._id) invoice.updatedById = req.user._id;
 
     const updated = await invoice.save();
     return res.status(200).json({ status: "ok", data: updated });
@@ -1063,6 +1123,7 @@ const addProcedureRefund = async (req, res) => {
     const rawDue = billTotals.clientBill - totalPaid;
     invoice.duePay = rawDue > 0 ? roundMoneyAmount(rawDue) : 0;
     invoice.advancePay = rawDue < 0 ? roundMoneyAmount(Math.abs(rawDue)) : 0;
+    if (req.user?._id) invoice.updatedById = req.user._id;
 
     const updated = await invoice.save();
     return res.status(200).json({
@@ -1081,7 +1142,7 @@ const deleteinvoice = async (req, res) => {
   try {
     const id = req.params.id;
     const row = await Invoice.findById(id);
-    if (!row || !(await branchDocumentVisible(req, row.branchId))) {
+    if (!row || !(await branchDocumentDeletable(req, row.branchId))) {
       return res.status(404).json({ status: "fail", message: "Invoice not found" });
     }
     await Invoice.findByIdAndDelete(id);
@@ -1141,9 +1202,17 @@ const getInvoiceSummary = async (req, res) => {
       }
     }
 
-    // Apply same filters as getinvoices
+    // Apply same filters as getinvoices — header or any line doctorShares
     if (doctorId && doctorId.trim() !== '') {
-      matchQuery['doctorId'] = Types.ObjectId.isValid(doctorId) ? new Types.ObjectId(doctorId) : doctorId;
+      const doctorOid = Types.ObjectId.isValid(doctorId) ? new Types.ObjectId(doctorId) : doctorId;
+      matchQuery.$and = matchQuery.$and || [];
+      matchQuery.$and.push({
+        $or: [
+          { doctorId: doctorOid },
+          { 'item.doctorShares.doctorId': doctorOid },
+          { 'item.performedBy': doctorOid },
+        ],
+      });
     }
     if (status && status.trim() !== '') {
       if (status === 'Paid') {
@@ -1243,20 +1312,50 @@ const getInvoiceSummary = async (req, res) => {
       );
     }
 
-    // Calculate summary statistics
+    // Calculate summary statistics.
+    // Do NOT $push all invoice items into one document — that blows the 16MB BSON limit
+    // when date filters are cleared / dataset is large.
     pipeline.push({
       $group: {
         _id: null,
         totalTransactions: { $sum: 1 },
-        totalRevenue: { $sum: '$totalBill' },
-        totalTax: { $sum: '$taxBill' },
-        totalDiscount: { $sum: '$discountBill' },
-        totalPaid: { $sum: '$totalPay' },
-        totalDue: { $sum: '$duePay' },
-        subTotal: { $sum: '$subTotalBill' },
-        // Doctor and Hospital share calculation
-        allItems: { $push: '$item' }
-      }
+        totalRevenue: { $sum: { $ifNull: ['$totalBill', 0] } },
+        totalTax: { $sum: { $ifNull: ['$taxBill', 0] } },
+        totalDiscount: { $sum: { $ifNull: ['$discountBill', 0] } },
+        totalPaid: { $sum: { $ifNull: ['$totalPay', 0] } },
+        totalDue: {
+          $sum: {
+            $cond: [
+              { $gt: [{ $ifNull: ['$duePay', 0] }, 0] },
+              { $ifNull: ['$duePay', 0] },
+              0,
+            ],
+          },
+        },
+        subTotal: { $sum: { $ifNull: ['$subTotalBill', 0] } },
+        totalDoctorShare: {
+          $sum: {
+            $reduce: {
+              input: { $ifNull: ['$item', []] },
+              initialValue: 0,
+              in: {
+                $add: ['$$value', { $ifNull: ['$$this.doctorAmount', 0] }],
+              },
+            },
+          },
+        },
+        totalHospitalShare: {
+          $sum: {
+            $reduce: {
+              input: { $ifNull: ['$item', []] },
+              initialValue: 0,
+              in: {
+                $add: ['$$value', { $ifNull: ['$$this.hospitalAmount', 0] }],
+              },
+            },
+          },
+        },
+      },
     });
 
     const result = await Invoice.aggregate(pipeline);
@@ -1275,22 +1374,6 @@ const getInvoiceSummary = async (req, res) => {
 
     if (result.length > 0) {
       const stats = result[0];
-      
-      // Calculate doctor and hospital shares
-      let doctorShare = 0;
-      let hospitalShare = 0;
-      
-      if (stats.allItems && Array.isArray(stats.allItems)) {
-        stats.allItems.forEach(itemArray => {
-          if (Array.isArray(itemArray)) {
-            itemArray.forEach(item => {
-              doctorShare += item.doctorAmount || 0;
-              hospitalShare += item.hospitalAmount || 0;
-            });
-          }
-        });
-      }
-
       summary = {
         totalTransactions: stats.totalTransactions || 0,
         totalRevenue: stats.totalRevenue || 0,
@@ -1299,8 +1382,8 @@ const getInvoiceSummary = async (req, res) => {
         totalPaid: stats.totalPaid || 0,
         totalDue: stats.totalDue || 0,
         subTotal: stats.subTotal || 0,
-        totalDoctorShare: doctorShare,
-        totalHospitalShare: hospitalShare
+        totalDoctorShare: stats.totalDoctorShare || 0,
+        totalHospitalShare: stats.totalHospitalShare || 0
       };
     }
 

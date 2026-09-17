@@ -4,6 +4,7 @@ const { optionalAuth } = require("../middleware/auth");
 const router = require("express").Router();
 
 router.get("/get", optionalAuth, storeClosingController.getStoreClosings);
+router.get("/prep", optionalAuth, storeClosingController.getStoreClosingPrep);
 router.post("/create", optionalAuth, storeClosingController.createStoreClosing);
 router.get("/get/:id", optionalAuth, storeClosingController.getStoreClosingById);
 router.put("/update/:id", optionalAuth, storeClosingController.updateStoreClosing);

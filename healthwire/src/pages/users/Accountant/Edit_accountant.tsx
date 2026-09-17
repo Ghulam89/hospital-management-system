@@ -6,6 +6,8 @@ import axios from 'axios';
 import { toast } from 'react-toastify';
 import { Base_url } from '../../../utils/Base_url';
 import BranchSelectField from '../../../components/BranchSelectField';
+import UserRoleSelectField from '../../../components/UserRoleSelectField';
+import { refreshStoredUserIfSelf } from '../../../utils/refreshStoredUser';
 
 const Edit_accountant = () => {
   const { id } = useParams();
@@ -70,19 +72,19 @@ const Edit_accountant = () => {
       email: safeText(state.email, user?.email),
       shift: safeText(state.shift, user?.shift),
       role: roleKey.trim().toLowerCase(),
-      tabs: Array.isArray(user?.tabs) ? user.tabs : [],
     };
     if (branchId) params.branchId = branchId;
 
     const password = String(state.password || '').trim();
     if (password) params.password = password;
 
-        axios.put(`${Base_url}/apis/user/update/${id}`,params).then((res)=>{
+        axios.put(`${Base_url}/apis/user/update/${id}`,params).then(async (res)=>{
 
           console.log(res.data);
 
 
           if(res.data.status==='ok'){
+            await refreshStoredUserIfSelf(id);
             toast.success("user update successfully!");
             navigate('/admin/users')
           }else{
@@ -233,6 +235,11 @@ const Edit_accountant = () => {
                   </div>
 
                   <BranchSelectField value={branchId} onChange={setBranchId} />
+                  <UserRoleSelectField
+                    screen="accountant"
+                    value={roleKey}
+                    onChange={setRoleKey}
+                  />
                 </div>
                 <div className="mt-4.5">
                   <button

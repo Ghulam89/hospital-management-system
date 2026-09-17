@@ -12,9 +12,11 @@ const departmentSchema = new mongoose.Schema({
     branchId: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Branch',
+        index: true,
     },
 },{timestamps:true});
 
+departmentSchema.index({ branchId: 1 });
 
 const Department = mongoose.model('Department', departmentSchema);
 

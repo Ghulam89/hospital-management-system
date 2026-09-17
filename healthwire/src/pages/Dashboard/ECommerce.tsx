@@ -1,7 +1,5 @@
-import React, { useCallback, useEffect } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import CardDataStats from '../../components/CardDataStats';
-import ChartOne from '../../components/Charts/ChartOne';
-import ChartThree from '../../components/Charts/ChartThree';
 
 import axios from 'axios';
 import { Base_url } from '../../utils/Base_url';
@@ -10,19 +8,36 @@ import { Link } from 'react-router-dom';
 import Breadcrumb from '../../components/Breadcrumbs/Breadcrumb';
 import { BRANCH_CHANGED_EVENT, buildAxiosBranchScopedParams } from '../../utils/branchScope';
 
+const emptyDashboard = {
+  totalAppointments: 0,
+  totalDoctor: 0,
+  totalPatient: 0,
+  totalTodayDoctors: 0,
+  todayAppointments: [],
+  totalTodayPatients: 0,
+  totalTodayCheckinVisits: 0,
+  count: 0,
+};
+
 const ECommerce: React.FC = () => {
+  const [dashboard, setDashboard] = useState(emptyDashboard);
+  const [loading, setLoading] = useState(true);
 
-const [todayAppointments, setTodayAppointments] = React.useState({});
-
-  const loadDashboard = useCallback(() => {
+  const loadDashboard = useCallback((opts?: { force?: boolean }) => {
+    setLoading(true);
+    const params = {
+      ...buildAxiosBranchScopedParams(),
+      ...(opts?.force ? { _ts: Date.now(), refresh: '1' } : {}),
+    };
     axios
-      .get(`${Base_url}/apis/appointment/dashboard`, { params: buildAxiosBranchScopedParams() })
+      .get(`${Base_url}/apis/appointment/dashboard`, { params })
       .then((response) => {
-        setTodayAppointments(response.data?.data || {});
+        setDashboard(response.data?.data || emptyDashboard);
       })
       .catch((error) => {
         console.error('Error fetching data:', error);
-      });
+      })
+      .finally(() => setLoading(false));
   }, []);
 
   useEffect(() => {
@@ -30,35 +45,34 @@ const [todayAppointments, setTodayAppointments] = React.useState({});
   }, [loadDashboard]);
 
   useEffect(() => {
-    const onBranchChange = () => loadDashboard();
+    const onBranchChange = () => loadDashboard({ force: true });
     window.addEventListener(BRANCH_CHANGED_EVENT, onBranchChange);
     return () => window.removeEventListener(BRANCH_CHANGED_EVENT, onBranchChange);
   }, [loadDashboard]);
-  
+
   return (
     <>
-        
-         <Breadcrumb pageName="Dashboard" />
+      <Breadcrumb pageName="Dashboard" />
       <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:gap-6 xl:grid-cols-4 2xl:gap-7.5">
-       <Link to={'/appointments'}>
-       <CardDataStats  title="Total Appointments" total={todayAppointments?.totalAppointments} >
-      <svg
-  className="fill-primary dark:fill-white"
-  width="22"
-  height="16"
-  viewBox="0 0 22 16"
-  fill="none"
-  xmlns="http://www.w3.org/2000/svg"
->
-  <path
-    d="M17 2H20C20.5523 2 21 2.44772 21 3V15C21 15.5523 20.5523 16 20 16H2C1.44772 16 1 15.5523 1 15V3C1 2.44772 1.44772 2 2 2H5V0H7V2H15V0H17V2ZM19 8H3V14H19V8ZM5 4H3V6H19V4H17V5H15V4H7V5H5V4Z"
-    fill=""
-  />
-</svg>
-        </CardDataStats>
-       </Link>  
-      
-        <CardDataStats title="Total Doctors" total={todayAppointments?.totalDoctor}>
+        <Link to={'/appointments'}>
+          <CardDataStats title="Total Appointments" total={dashboard?.totalAppointments}>
+            <svg
+              className="fill-primary dark:fill-white"
+              width="22"
+              height="16"
+              viewBox="0 0 22 16"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M17 2H20C20.5523 2 21 2.44772 21 3V15C21 15.5523 20.5523 16 20 16H2C1.44772 16 1 15.5523 1 15V3C1 2.44772 1.44772 2 2 2H5V0H7V2H15V0H17V2ZM19 8H3V14H19V8ZM5 4H3V6H19V4H17V5H15V4H7V5H5V4Z"
+                fill=""
+              />
+            </svg>
+          </CardDataStats>
+        </Link>
+
+        <CardDataStats title="Total Doctors" total={dashboard?.totalDoctor}>
           <svg
             className="fill-primary dark:fill-white"
             width="22"
@@ -81,31 +95,8 @@ const [todayAppointments, setTodayAppointments] = React.useState({});
             />
           </svg>
         </CardDataStats>
-        
-        <CardDataStats title="Total Patients" total={todayAppointments?.totalPatient} >
-        <svg
-            className="fill-primary dark:fill-white"
-            width="22"
-            height="18"
-            viewBox="0 0 22 18"
-            fill="none"
-            xmlns="http://www.w3.org/2000/svg"
-          >
-            <path
-              d="M7.18418 8.03751C9.31543 8.03751 11.0686 6.35313 11.0686 4.25626C11.0686 2.15938 9.31543 0.475006 7.18418 0.475006C5.05293 0.475006 3.2998 2.15938 3.2998 4.25626C3.2998 6.35313 5.05293 8.03751 7.18418 8.03751ZM7.18418 2.05626C8.45605 2.05626 9.52168 3.05313 9.52168 4.29063C9.52168 5.52813 8.49043 6.52501 7.18418 6.52501C5.87793 6.52501 4.84668 5.52813 4.84668 4.29063C4.84668 3.05313 5.9123 2.05626 7.18418 2.05626Z"
-              fill=""
-            />
-            <path
-              d="M15.8124 9.6875C17.6687 9.6875 19.1468 8.24375 19.1468 6.42188C19.1468 4.6 17.6343 3.15625 15.8124 3.15625C13.9905 3.15625 12.478 4.6 12.478 6.42188C12.478 8.24375 13.9905 9.6875 15.8124 9.6875ZM15.8124 4.7375C16.8093 4.7375 17.5999 5.49375 17.5999 6.45625C17.5999 7.41875 16.8093 8.175 15.8124 8.175C14.8155 8.175 14.0249 7.41875 14.0249 6.45625C14.0249 5.49375 14.8155 4.7375 15.8124 4.7375Z"
-              fill=""
-            />
-            <path
-              d="M15.9843 10.0313H15.6749C14.6437 10.0313 13.6468 10.3406 12.7874 10.8563C11.8593 9.61876 10.3812 8.79376 8.73115 8.79376H5.67178C2.85303 8.82814 0.618652 11.0625 0.618652 13.8469V16.3219C0.618652 16.975 1.13428 17.4906 1.7874 17.4906H20.2468C20.8999 17.4906 21.4499 16.9406 21.4499 16.2875V15.4625C21.4155 12.4719 18.9749 10.0313 15.9843 10.0313ZM2.16553 15.9438V13.8469C2.16553 11.9219 3.74678 10.3406 5.67178 10.3406H8.73115C10.6562 10.3406 12.2374 11.9219 12.2374 13.8469V15.9438H2.16553V15.9438ZM19.8687 15.9438H13.7499V13.8469C13.7499 13.2969 13.6468 12.7469 13.4749 12.2313C14.0937 11.7844 14.8499 11.5781 15.6405 11.5781H15.9499C18.0812 11.5781 19.8343 13.3313 19.8343 15.4625V15.9438H19.8687Z"
-              fill=""
-            />
-          </svg>
-        </CardDataStats>
-        <CardDataStats title="Today Doctors" total={todayAppointments?.totalTodayDoctors}>
+
+        <CardDataStats title="Total Patients" total={dashboard?.totalPatient}>
           <svg
             className="fill-primary dark:fill-white"
             width="22"
@@ -128,25 +119,8 @@ const [todayAppointments, setTodayAppointments] = React.useState({});
             />
           </svg>
         </CardDataStats>
-        <CardDataStats title="Today Appointments" total={todayAppointments?.todayAppointments?.length} >
-        <svg
-  className="fill-primary dark:fill-white"
-  width="30"
-  height="30"
-  viewBox="0 0 22 16"
-  fill="none"
-  xmlns="http://www.w3.org/2000/svg"
->
-  {/* <!-- Calendar body --> */}
-  <path d="M6 1V3H5C3.89543 3 3 3.89543 3 5V13C3 14.1046 3.89543 15 5 15H17C18.1046 15 19 14.1046 19 13V5C19 3.89543 18.1046 3 17 3H16V1H14V3H8V1H6Z" fill=""/>
-  {/* <!-- Today's date highlight --> */}
-  <rect x="10" y="8" width="4" height="4" rx="1" fill=""/>
-  {/* <!-- Clock for appointment time --> */}
-  <path d="M12 9V11H14" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
-</svg>
-        </CardDataStats>
-        <CardDataStats title="Today Patients" total={todayAppointments?.totalTodayPatients} >
-        <svg
+        <CardDataStats title="Today Doctors" total={dashboard?.totalTodayDoctors}>
+          <svg
             className="fill-primary dark:fill-white"
             width="22"
             height="18"
@@ -168,8 +142,45 @@ const [todayAppointments, setTodayAppointments] = React.useState({});
             />
           </svg>
         </CardDataStats>
-       
-        <CardDataStats title="Patients Visited Today" total={todayAppointments?.totalTodayCheckinVisits}>
+        <CardDataStats title="Today Appointments" total={dashboard?.count ?? dashboard?.todayAppointments?.length}>
+          <svg
+            className="fill-primary dark:fill-white"
+            width="30"
+            height="30"
+            viewBox="0 0 22 16"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path d="M6 1V3H5C3.89543 3 3 3.89543 3 5V13C3 14.1046 3.89543 15 5 15H17C18.1046 15 19 14.1046 19 13V5C19 3.89543 18.1046 3 17 3H16V1H14V3H8V1H6Z" fill="" />
+            <rect x="10" y="8" width="4" height="4" rx="1" fill="" />
+            <path d="M12 9V11H14" stroke="white" strokeWidth="1.5" strokeLinecap="round" />
+          </svg>
+        </CardDataStats>
+        <CardDataStats title="Today Patients" total={dashboard?.totalTodayPatients}>
+          <svg
+            className="fill-primary dark:fill-white"
+            width="22"
+            height="18"
+            viewBox="0 0 22 18"
+            fill="none"
+            xmlns="http://www.w3.org/2000/svg"
+          >
+            <path
+              d="M7.18418 8.03751C9.31543 8.03751 11.0686 6.35313 11.0686 4.25626C11.0686 2.15938 9.31543 0.475006 7.18418 0.475006C5.05293 0.475006 3.2998 2.15938 3.2998 4.25626C3.2998 6.35313 5.05293 8.03751 7.18418 8.03751ZM7.18418 2.05626C8.45605 2.05626 9.52168 3.05313 9.52168 4.29063C9.52168 5.52813 8.49043 6.52501 7.18418 6.52501C5.87793 6.52501 4.84668 5.52813 4.84668 4.29063C4.84668 3.05313 5.9123 2.05626 7.18418 2.05626Z"
+              fill=""
+            />
+            <path
+              d="M15.8124 9.6875C17.6687 9.6875 19.1468 8.24375 19.1468 6.42188C19.1468 4.6 17.6343 3.15625 15.8124 3.15625C13.9905 3.15625 12.478 4.6 12.478 6.42188C12.478 8.24375 13.9905 9.6875 15.8124 9.6875ZM15.8124 4.7375C16.8093 4.7375 17.5999 5.49375 17.5999 6.45625C17.5999 7.41875 16.8093 8.175 15.8124 8.175C14.8155 8.175 14.0249 7.41875 14.0249 6.45625C14.0249 5.49375 14.8155 4.7375 15.8124 4.7375Z"
+              fill=""
+            />
+            <path
+              d="M15.9843 10.0313H15.6749C14.6437 10.0313 13.6468 10.3406 12.7874 10.8563C11.8593 9.61876 10.3812 8.79376 8.73115 8.79376H5.67178C2.85303 8.82814 0.618652 11.0625 0.618652 13.8469V16.3219C0.618652 16.975 1.13428 17.4906 1.7874 17.4906H20.2468C20.8999 17.4906 21.4499 16.9406 21.4499 16.2875V15.4625C21.4155 12.4719 18.9749 10.0313 15.9843 10.0313ZM2.16553 15.9438V13.8469C2.16553 11.9219 3.74678 10.3406 5.67178 10.3406H8.73115C10.6562 10.3406 12.2374 11.9219 12.2374 13.8469V15.9438H2.16553V15.9438ZM19.8687 15.9438H13.7499V13.8469C13.7499 13.2969 13.6468 12.7469 13.4749 12.2313C14.0937 11.7844 14.8499 11.5781 15.6405 11.5781H15.9499C18.0812 11.5781 19.8343 13.3313 19.8343 15.4625V15.9438H19.8687Z"
+              fill=""
+            />
+          </svg>
+        </CardDataStats>
+
+        <CardDataStats title="Patients Visited Today" total={dashboard?.totalTodayCheckinVisits}>
           <svg
             className="fill-primary dark:fill-white"
             width="22"
@@ -188,19 +199,16 @@ const [todayAppointments, setTodayAppointments] = React.useState({});
             />
           </svg>
         </CardDataStats>
-      
-        
       </div>
 
       <div className="mt-4 grid grid-cols-12 gap-4 md:mt-6 md:gap-6 2xl:mt-7.5 2xl:gap-7.5">
-        {/* <ChartOne /> */}
-        {/* <ChartTwo /> */}
-        {/* <ChartThree /> */}
-        {/* <MapOne /> */}
         <div className="col-span-12 xl:col-span-12">
-          <TodayAppointments />
+          <TodayAppointments
+            appointments={dashboard?.todayAppointments || []}
+            loading={loading}
+            onRefresh={() => loadDashboard({ force: true })}
+          />
         </div>
-        {/* <ChatCard /> */}
       </div>
     </>
   );

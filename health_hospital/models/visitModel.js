@@ -60,6 +60,7 @@ const visitSchema = new mongoose.Schema(
 
 visitSchema.index({ patientId: 1, branchId: 1, createdAt: -1 });
 visitSchema.index({ branchId: 1, createdAt: -1 });
+visitSchema.index({ branchId: 1, patientId: 1 });
 
 const Visit = mongoose.model('Visit', visitSchema);
 

@@ -8,6 +8,8 @@ import dayjs, { Dayjs } from 'dayjs';
 import * as XLSX from 'xlsx';
 import Swal from 'sweetalert2';
 import { useNavigate } from 'react-router-dom';
+import TableColumnCustomize from '../../../components/TableColumnCustomize';
+import { useTableColumnPrefs } from '../../../hooks/useTableColumnPrefs';
 
 const { Search } = Input;
 const { RangePicker } = DatePicker;
@@ -450,13 +452,28 @@ const PharmacyReports: React.FC = () => {
     {
       title: 'Total Amount',
       key: 'totalAmount',
-      render: (_: any, record: POSTransaction) => (
-        <span className="font-semibold text-green-600">
-          Rs. {(record.paid + record.due).toLocaleString()}
-        </span>
-      ),
-      sorter: (a: POSTransaction, b: POSTransaction) => 
-        (a.paid + a.due) - (b.paid + b.due),
+      render: (_: any, record: POSTransaction) => {
+        const items = Array.isArray(record.allItem) ? record.allItem : [];
+        const total =
+          items.length > 0
+            ? items.reduce((s: number, it: any) => s + (Number(it?.totalAmount) || 0), 0)
+            : Number(record.paid || 0) + Number(record.due || 0) - Number((record as any).advance || 0);
+        return (
+          <span className="font-semibold text-green-600">
+            Rs. {total.toLocaleString()}
+          </span>
+        );
+      },
+      sorter: (a: POSTransaction, b: POSTransaction) => {
+        const tot = (r: POSTransaction) => {
+          const items = Array.isArray(r.allItem) ? r.allItem : [];
+          if (items.length > 0) {
+            return items.reduce((s: number, it: any) => s + (Number(it?.totalAmount) || 0), 0);
+          }
+          return Number(r.paid || 0) + Number(r.due || 0) - Number((r as any).advance || 0);
+        };
+        return tot(a) - tot(b);
+      },
     },
     {
       title: 'Paid',
@@ -612,6 +629,26 @@ const PharmacyReports: React.FC = () => {
       ),
     },
   ];
+
+  const {
+    visibleColumns: visiblePosColumns,
+    columnOptions: posColumnOptions,
+    setColumnVisible: setPosColumnVisible,
+    setAllVisible: setPosAllVisible,
+    resetColumns: resetPosColumns,
+  } = useTableColumnPrefs('pharmacy.reports.pos', posColumns, {
+    lockedKeys: ['actions'],
+  });
+
+  const {
+    visibleColumns: visibleStockColumns,
+    columnOptions: stockColumnOptions,
+    setColumnVisible: setStockColumnVisible,
+    setAllVisible: setStockAllVisible,
+    resetColumns: resetStockColumns,
+  } = useTableColumnPrefs('pharmacy.reports.stock', stockColumns, {
+    lockedKeys: ['actions'],
+  });
 
   const escapeHtmlSwal = (s: string) =>
     String(s ?? '')
@@ -1032,7 +1069,18 @@ const PharmacyReports: React.FC = () => {
           <h4 className="text-xl font-semibold text-black dark:text-white">
             Pharmacy Transaction History
           </h4>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <TableColumnCustomize
+              options={activeTab === 'pos-sales' ? posColumnOptions : stockColumnOptions}
+              onToggle={activeTab === 'pos-sales' ? setPosColumnVisible : setStockColumnVisible}
+              onShowAll={() =>
+                activeTab === 'pos-sales' ? setPosAllVisible(true) : setStockAllVisible(true)
+              }
+              onHideAll={() =>
+                activeTab === 'pos-sales' ? setPosAllVisible(false) : setStockAllVisible(false)
+              }
+              onReset={activeTab === 'pos-sales' ? resetPosColumns : resetStockColumns}
+            />
             <Button
               icon={<DownloadOutlined />}
               onClick={handleExcelExport}
@@ -1451,7 +1499,7 @@ const PharmacyReports: React.FC = () => {
           <div className="max-w-full overflow-x-auto">
             <Table
               rowSelection={rowSelection}
-              columns={posColumns}
+              columns={visiblePosColumns}
               dataSource={posTransactions}
               rowKey="_id"
               loading={loading}
@@ -1539,7 +1587,7 @@ const PharmacyReports: React.FC = () => {
           <div className="max-w-full overflow-x-auto">
             <Table
               rowSelection={rowSelection}
-              columns={stockColumns}
+              columns={visibleStockColumns}
               dataSource={stockTransactions}
               rowKey="_id"
               loading={loading}

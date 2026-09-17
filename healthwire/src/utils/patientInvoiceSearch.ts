@@ -47,8 +47,10 @@ export function buildPatientLookupParams(
   return params;
 }
 
-export function isPatientSelectableAtBranch(p: PatientLookupRow): boolean {
-  return !p.notInThisBranch;
+export function isPatientSelectableAtBranch(_p: PatientLookupRow): boolean {
+  // Invoice flow: hospital-wide MR — other-branch patients are selectable.
+  // Invoice history stays branch-scoped via invoice APIs.
+  return true;
 }
 
 export async function fetchPatientsForInvoiceLookup(
@@ -61,5 +63,10 @@ export async function fetchPatientsForInvoiceLookup(
     params: buildPatientLookupParams(term),
   });
   const list = Array.isArray(res?.data?.data) ? res.data.data : [];
-  return list.filter(isPatientSelectableAtBranch);
+  // Prefer in-branch rows first, then other-branch identity matches.
+  return [...list].sort((a, b) => {
+    const aOb = a.notInThisBranch ? 1 : 0;
+    const bOb = b.notInThisBranch ? 1 : 0;
+    return aOb - bOb;
+  });
 }

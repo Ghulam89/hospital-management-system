@@ -1,5 +1,5 @@
 const Room = require("../models/roomModel");
-const { getScopedDepartmentIds, idInList } = require("../utils/branchScope");
+const { getScopedDepartmentIds, idInList} = require("../utils/branchScope");
 
 // 1. Create room
 const addroom = async (req, res) => {
@@ -27,7 +27,7 @@ const addroom = async (req, res) => {
         return res.status(403).json({ status: "fail", message: "No departments for this branch" });
       }
 
-      const room = await Room.create({ ...req.body, });
+      const room = await Room.create({ ...req.body });
       return res.status(200).json({ status: "ok", data: room });
     }
   } catch (err) {
@@ -62,8 +62,7 @@ const getrooms = async (req, res) => {
     const query = {
       $or: [
         { name: { $regex: ".*" + search + ".*", $options: "i" } },
-      ],
-    };
+      ] };
     if (allowedDeptIds !== null) {
       query.departmentId = { $in: allowedDeptIds };
     }
@@ -174,6 +173,4 @@ module.exports = {
   getrooms,
   getroomById,
   updateroom,
-  deleteroom,
-
-};
+  deleteroom };

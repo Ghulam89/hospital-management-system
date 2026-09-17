@@ -9,7 +9,7 @@ const {
   patientVisibleForRequest,
   resolveBranchIdForNonSuperAdmin,
   applyStrictBranchListFilter,
-  branchDocumentVisible,
+  branchDocumentVisible, branchDocumentDeletable,
 } = require("../utils/branchScope");
 
 // 1. Create Detail
@@ -536,7 +536,7 @@ const deleteDetail = async (req, res) => {
     if (!row) {
       return res.status(404).json({ status: "fail", message: "Detail not found" });
     }
-    if (!(await branchDocumentVisible(req, row.branchId))) {
+    if (!(await branchDocumentDeletable(req, row.branchId))) {
       return res.status(404).json({ status: "fail", message: "Detail not found" });
     }
     if (row.patientId && !(await patientVisibleForRequest(req, row.patientId))) {

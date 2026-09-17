@@ -6,12 +6,14 @@ import axios from 'axios';
 import { toast } from 'react-toastify';
 import { Base_url } from '../../../utils/Base_url';
 import BranchSelectField from '../../../components/BranchSelectField';
+import UserRoleSelectField from '../../../components/UserRoleSelectField';
 
 const AddNurse = () => {
 
   const [gender, setGender] = useState('');
 const [loading, setLoading] = useState(false);
 const [branchId, setBranchId] = useState('');
+  const [roleKey, setRoleKey] = useState('nurse');
   
 
   const handleGenderChange = (gender) => {
@@ -60,7 +62,10 @@ const [branchId, setBranchId] = useState('');
         toast("Must enter shift!") 
       }
       else if(!branchId){
-        toast("Please select branch") 
+        toast("Please select branch")
+      }
+      else if(!roleKey){
+        toast("Please select role") 
       }
       
       else {
@@ -73,9 +78,8 @@ const [branchId, setBranchId] = useState('');
           email: state.email,
           password: state.password,
           shift: state.shift,
-          role: 'nurse',
+          role: roleKey.trim().toLowerCase(),
           branchId,
-          tabs: [],
         };
         axios.post(`${Base_url}/apis/user/create`, params).then((res)=>{
 
@@ -232,6 +236,12 @@ const [branchId, setBranchId] = useState('');
                   </div>
 
                   <BranchSelectField value={branchId} onChange={setBranchId} />
+                  <UserRoleSelectField
+                    screen="nurse"
+                    value={roleKey}
+                    onChange={setRoleKey}
+                    preferCustomDefault
+                  />
                 </div>
 
                 <div className="mt-4.5">

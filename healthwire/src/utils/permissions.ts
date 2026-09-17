@@ -103,6 +103,30 @@ function matchesPrefix(path: string, prefix: string): boolean {
   return path.startsWith(withSlash);
 }
 
+/** Patient detail sub-screens linked from `/details-patients/:id` (not under `/admin/patients` prefix). */
+function isPatientSatellitePath(path: string): boolean {
+  const prefixes = [
+    '/details-patients',
+    '/medical-history',
+    '/family-history',
+    '/medical-certificates',
+    '/bed-patient-history',
+  ];
+  return prefixes.some((prefix) => matchesPrefix(path, prefix));
+}
+
+const PATIENT_SATELLITE_LEGACY_ROLES = [
+  'doctor',
+  'nurse',
+  'staff',
+  'createUsers',
+  'editUsers',
+  'deletePatient',
+  'administrator',
+  'superadmin',
+  'admin',
+];
+
 const MENU_ROWS_SORTED = [...MENU_ROWS].sort((a, b) => b.pathPrefix.length - a.pathPrefix.length);
 
 export function menuRowForPath(pathname: string): MenuMatrixRow | null {
@@ -534,6 +558,19 @@ const PATH_RULES: { prefix: string; anyOf: string[] }[] = [
     ],
   },
   {
+    prefix: '/bed-room-transfer-history',
+    anyOf: [
+      'doctor',
+      'nurse',
+      'viewIPDReports',
+      'createUsers',
+      'editUsers',
+      'administrator',
+      'superadmin',
+      'admin',
+    ],
+  },
+  {
     prefix: '/Indoor-duty-roster',
     anyOf: [
       'doctor',
@@ -633,6 +670,12 @@ export function canAccessPath(user: StoredUser, pathname: string): boolean {
         tabs.has(menuPermissionKey(row.id, 'module')) || tabs.has(menuPermissionKey(row.id, 'read'))
       );
     }
+    if (isPatientSatellitePath(scoped)) {
+      return (
+        hasGranularMenuPermission(user, 'patients', 'module') ||
+        hasGranularMenuPermission(user, 'patients', 'read')
+      );
+    }
     return false;
   }
 
@@ -651,6 +694,10 @@ export function canAccessPath(user: StoredUser, pathname: string): boolean {
     if (matchesPrefix(path, rule.prefix)) {
       return satisfies(rule.anyOf);
     }
+  }
+
+  if (isPatientSatellitePath(path)) {
+    return satisfies(PATIENT_SATELLITE_LEGACY_ROLES);
   }
 
   /** Routes not matched above: keep legacy built-in roles permissive; deny unknown layouts for custom roles without mp.* tabs */

@@ -48,8 +48,30 @@ const AddPatients = ({
     patient?: { mr?: string; name?: string; _id?: string };
   } | null>(null);
   const [linkingToBranch, setLinkingToBranch] = useState(false);
+  const [allowDuplicatePhone, setAllowDuplicatePhone] = useState(false);
+  const [phoneDuplicateInfo, setPhoneDuplicateInfo] = useState<{
+    exists: boolean;
+    patients?: Array<{ mr?: string; name?: string; _id?: string }>;
+  } | null>(null);
+  const [phoneCheckLoading, setPhoneCheckLoading] = useState(false);
+  const [phoneError, setPhoneError] = useState('');
+  const [mrDuplicateInfo, setMrDuplicateInfo] = useState<{
+    exists: boolean;
+    patient?: { mr?: string; name?: string; phone?: string; _id?: string };
+  } | null>(null);
+  const [mrCheckLoading, setMrCheckLoading] = useState(false);
   const cnicCheckAbortRef = useRef<AbortController | null>(null);
   const cnicCheckGenRef = useRef(0);
+  const phoneCheckAbortRef = useRef<AbortController | null>(null);
+  const phoneCheckGenRef = useRef(0);
+  const mrCheckAbortRef = useRef<AbortController | null>(null);
+  const mrCheckGenRef = useRef(0);
+
+  const PHONE_DIGITS_LEN = 11;
+
+  const sanitizePhoneDigits = (value: string) => value.replace(/\D/g, '').slice(0, PHONE_DIGITS_LEN);
+
+  const sanitizeMrValue = (value: string) => value.replace(/\D/g, '').trim();
 
   useEffect(() => {
     if (isModalOpen) {
@@ -91,9 +113,110 @@ const AddPatients = ({
       });
   };
 
+  const runMrCheck = (mrValue: string) => {
+    const trimmed = sanitizeMrValue(mrValue);
+    if (!trimmed) {
+      setMrDuplicateInfo(null);
+      setMrCheckLoading(false);
+      return;
+    }
+    mrCheckAbortRef.current?.abort();
+    const ac = new AbortController();
+    mrCheckAbortRef.current = ac;
+    const gen = ++mrCheckGenRef.current;
+    setMrCheckLoading(true);
+    axios
+      .get(`${Base_url}/apis/patient/check-mr`, {
+        params: { mr: trimmed },
+        signal: ac.signal,
+      })
+      .then((r) => {
+        if (gen !== mrCheckGenRef.current) return;
+        const d = r.data;
+        if (d?.exists) setMrDuplicateInfo(d);
+        else setMrDuplicateInfo(null);
+      })
+      .catch((err) => {
+        if (err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError' || err?.name === 'AbortError') return;
+        if (gen !== mrCheckGenRef.current) return;
+        setMrDuplicateInfo(null);
+      })
+      .finally(() => {
+        if (gen === mrCheckGenRef.current) setMrCheckLoading(false);
+      });
+  };
+
+  const handleMrChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = sanitizeMrValue(e.target.value);
+    setMrNumber(value);
+    runMrCheck(value);
+  };
+
+  const runPhoneCheck = (phoneValue: string) => {
+    const cleaned = sanitizePhoneDigits(phoneValue);
+    if (cleaned.length !== PHONE_DIGITS_LEN) {
+      setPhoneDuplicateInfo(null);
+      setPhoneCheckLoading(false);
+      return;
+    }
+    phoneCheckAbortRef.current?.abort();
+    const ac = new AbortController();
+    phoneCheckAbortRef.current = ac;
+    const gen = ++phoneCheckGenRef.current;
+    setPhoneCheckLoading(true);
+    axios
+      .get(`${Base_url}/apis/patient/check-phone`, {
+        params: { phone: phoneValue },
+        signal: ac.signal,
+      })
+      .then((r) => {
+        if (gen !== phoneCheckGenRef.current) return;
+        const d = r.data;
+        if (d?.exists) setPhoneDuplicateInfo(d);
+        else setPhoneDuplicateInfo(null);
+      })
+      .catch((err) => {
+        if (err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError' || err?.name === 'AbortError') return;
+        if (gen !== phoneCheckGenRef.current) return;
+        setPhoneDuplicateInfo(null);
+      })
+      .finally(() => {
+        if (gen === phoneCheckGenRef.current) setPhoneCheckLoading(false);
+      });
+  };
+
+  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const digits = sanitizePhoneDigits(e.target.value);
+    setPhone(digits);
+    if (digits.length > 0 && digits.length !== PHONE_DIGITS_LEN) {
+      setPhoneError(`Phone must be exactly ${PHONE_DIGITS_LEN} digits`);
+    } else {
+      setPhoneError('');
+    }
+    if (allowDuplicatePhone) {
+      phoneCheckAbortRef.current?.abort();
+      setPhoneDuplicateInfo(null);
+      setPhoneCheckLoading(false);
+      return;
+    }
+    runPhoneCheck(digits);
+  };
+
+  const handleAllowDuplicatePhoneChange = (checked: boolean) => {
+    setAllowDuplicatePhone(checked);
+    if (checked) {
+      phoneCheckAbortRef.current?.abort();
+      setPhoneDuplicateInfo(null);
+      setPhoneCheckLoading(false);
+      return;
+    }
+    if (phone) runPhoneCheck(phone);
+  };
+
   const generateMrNumber = () => {
     const newMrNumber = Math.floor(Math.random() * 1000000).toString();
     setMrNumber(newMrNumber);
+    runMrCheck(newMrNumber);
   };
 
   const fetchDoctors = async () => {
@@ -233,43 +356,70 @@ const AddPatients = ({
   const handleSubmit = async (e) => {
     e.preventDefault();
 
+    const phoneDigits = sanitizePhoneDigits(phone);
+
     if (!name) {
       toast.error('Must enter name');
-    } else if (!phone) {
+    } else if (!mrNumber.trim()) {
+      toast.error('Must enter MR number');
+    } else if (mrDuplicateInfo?.exists) {
+      toast.error('This MR# is already registered. Use a different MR number.');
+    } else if (!phoneDigits) {
       toast.error('Must enter phone');
+    } else if (phoneDigits.length !== PHONE_DIGITS_LEN) {
+      setPhoneError(`Phone must be exactly ${PHONE_DIGITS_LEN} digits`);
+      toast.error(`Phone must be exactly ${PHONE_DIGITS_LEN} digits (e.g. 03001234567)`);
     } else if (!gender) {
       toast.error('Must checked gender');
-    } else if (!mrNumber) {
-      toast.error('Must enter MR number');
     } else {
       const cleanedCnic = cnic.replace(/\D/g, '');
-      if (cleanedCnic.length !== 13) {
-        setCnicError('CNIC is required and must be 13 digits (with or without dashes).');
-        toast.error('Enter a valid 13-digit CNIC before registering a patient.');
+      if (cleanedCnic.length > 0 && cleanedCnic.length !== 13) {
+        setCnicError('CNIC must be 13 digits (with or without dashes)');
+        toast.error('If CNIC is entered, it must be 13 digits.');
         return;
       }
-      if (!validateCNIC(cnic)) {
+      if (cleanedCnic.length === 13 && !validateCNIC(cnic)) {
         return;
       }
       try {
-        const cnicRes = await axios.get(`${Base_url}/apis/patient/check-cnic`, {
-          params: { cnic: cnic },
+        if (cleanedCnic.length === 13) {
+          const cnicRes = await axios.get(`${Base_url}/apis/patient/check-cnic`, {
+            params: { cnic: cnic },
+          });
+          const d = cnicRes.data;
+          if (d?.exists) {
+            toast.error(cnicDuplicateMessage(d) || 'This CNIC is already registered.');
+            return;
+          }
+        }
+
+        if (!allowDuplicatePhone && phoneDuplicateInfo?.exists) {
+          toast.error('This phone is already registered. Check the box below if it belongs to a family member.');
+          return;
+        }
+
+        const mrRes = await axios.get(`${Base_url}/apis/patient/check-mr`, {
+          params: { mr: mrNumber.trim() },
         });
-        const d = cnicRes.data;
-        if (d?.exists) {
-          toast.error(cnicDuplicateMessage(d) || 'This CNIC is already registered.');
+        if (mrRes.data?.exists) {
+          setMrDuplicateInfo(mrRes.data);
+          toast.error('This MR# is already registered. Use a different MR number.');
           return;
         }
 
         setIsLoading(true);
         const newPatient = new FormData();
-        newPatient.append('mr', mrNumber);
+        newPatient.append('mr', mrNumber.trim());
         newPatient.append('name', name);
-        newPatient.append('phone', phone);
+        newPatient.append('phone', phoneDigits);
+        newPatient.append('allowDuplicatePhone', allowDuplicatePhone ? 'true' : 'false');
+        newPatient.append('phoneOwner', allowDuplicatePhone ? 'Family' : 'Self');
         newPatient.append('gender', gender);
         newPatient.append('dob', dob);
         // newPatient.append('doctorId', doctor);
-        newPatient.append('cnic', cnic.replace(/\D/g, ''));
+        if (cleanedCnic.length === 13) {
+          newPatient.append('cnic', cleanedCnic);
+        }
         if (selectedImages) {
           newPatient.append('image', selectedImages);
         }
@@ -306,6 +456,14 @@ const AddPatients = ({
     setCnicError('');
     setCnicDuplicateInfo(null);
     cnicCheckAbortRef.current?.abort();
+    setAllowDuplicatePhone(false);
+    setPhoneDuplicateInfo(null);
+    setPhoneError('');
+    setMrDuplicateInfo(null);
+    phoneCheckAbortRef.current?.abort();
+    mrCheckAbortRef.current?.abort();
+    setPhoneCheckLoading(false);
+    setMrCheckLoading(false);
     setLinkingToBranch(false);
     setTimeout(() => {
       setSuccessMessage('');
@@ -328,16 +486,33 @@ const AddPatients = ({
             <form onSubmit={handleSubmit}>
               <div className="p-6.5">
                 <div className="flex justify-end">
-                  <div className="mb-4.5 flex items-center gap-2">
+                  <div className="mb-4.5 w-full max-w-xs">
                     <label className="mb-2.5 block text-black dark:text-white">
-                      MR#
+                      MR# <span className="text-red-500">*</span>
                     </label>
                     <input
                       type="text"
+                      inputMode="numeric"
                       value={mrNumber}
-                      onChange={(e) => setMrNumber(e.target.value)}
-                      className="rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
+                      onChange={handleMrChange}
+                      placeholder="Enter MR number"
+                      className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                     />
+                    {mrCheckLoading && (
+                      <p className="text-body dark:text-bodydark text-sm mt-1">Checking MR#…</p>
+                    )}
+                    {mrDuplicateInfo?.exists && (
+                      <div className="mt-2 rounded-md border border-red-200 bg-red-50 p-2.5 text-sm text-red-800 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-200">
+                        <p className="leading-snug">
+                          This MR# is already registered. Please use a different MR number.
+                        </p>
+                        {mrDuplicateInfo.patient && (
+                          <p className="mt-1 text-xs opacity-90">
+                            {mrDuplicateInfo.patient.name || '—'} · {mrDuplicateInfo.patient.phone || '—'}
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -391,15 +566,53 @@ const AddPatients = ({
                 </div>
                 <div className="mb-4.5">
                   <label className="mb-2.5 block text-black dark:text-white">
-                    Phone
+                    Phone <span className="text-red-500">*</span>
+                    <span className="ml-1 text-xs font-normal text-gray-500"></span>
                   </label>
                   <input
                     type="text"
+                    inputMode="numeric"
+                    maxLength={PHONE_DIGITS_LEN}
                     value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    placeholder=""
+                    onChange={handlePhoneChange}
+                    placeholder="03001234567"
                     className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                   />
+                  {phoneError && (
+                    <p className="text-red-500 text-sm mt-1">{phoneError}</p>
+                  )}
+                  {phoneCheckLoading && (
+                    <p className="text-body dark:text-bodydark text-sm mt-1">Checking phone…</p>
+                  )}
+                  {!allowDuplicatePhone && phoneDuplicateInfo?.exists && (
+                    <div className="mt-2 rounded-md border border-red-200 bg-red-50 p-2.5 text-sm text-red-800 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-200">
+                      <p className="leading-snug">
+                        This phone is already registered on another MR#. Check the box below if this
+                        patient is using a family member&apos;s number.
+                      </p>
+                      {(phoneDuplicateInfo.patients || []).map((p) => (
+                        <p key={p._id || `${p.mr}-${p.name}`} className="mt-1 text-xs opacity-90">
+                          MR# {p.mr || '—'} · {p.name || '—'}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                  <label className="mt-3 flex cursor-pointer items-start gap-2.5">
+                    <input
+                      type="checkbox"
+                      checked={allowDuplicatePhone}
+                      onChange={(e) => handleAllowDuplicatePhoneChange(e.target.checked)}
+                      className="mt-1 h-4 w-4 rounded border-stroke text-primary focus:ring-primary"
+                    />
+                    <span className="text-sm text-black dark:text-white leading-snug">
+                      Phone belongs to another family member (allow same phone on a new MR#)
+                    </span>
+                  </label>
+                  {allowDuplicatePhone && (
+                    <p className="mt-1 text-xs text-amber-700 dark:text-amber-200">
+                      Duplicate phone will be allowed for this patient.
+                    </p>
+                  )}
                 </div>
 
                 <div>
@@ -490,7 +703,8 @@ const AddPatients = ({
 
                 <div className="mb-4.5">
                   <label className="mb-2.5 block text-black dark:text-white">
-                    CNIC <span className="text-red-500">*</span>
+                    CNIC
+                    <span className="ml-1 text-xs font-normal text-gray-500">(optional)</span>
                   </label>
                   <input
                     type="text"
@@ -550,7 +764,12 @@ const AddPatients = ({
                     disabled={
                       isLoading ||
                       !!(cnicDuplicateInfo && cnicDuplicateInfo.exists) ||
-                      cnic.replace(/\D/g, '').length !== 13
+                      !!(mrDuplicateInfo && mrDuplicateInfo.exists) ||
+                      (!allowDuplicatePhone && !!(phoneDuplicateInfo && phoneDuplicateInfo.exists)) ||
+                      sanitizePhoneDigits(phone).length !== PHONE_DIGITS_LEN ||
+                      !mrNumber.trim() ||
+                      (cnic.replace(/\D/g, '').length > 0 &&
+                        cnic.replace(/\D/g, '').length !== 13)
                     }
                   >
                     {isLoading ? (

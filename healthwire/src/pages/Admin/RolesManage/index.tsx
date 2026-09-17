@@ -352,11 +352,7 @@ const RolesManage = () => {
       <section className="mb-5 flex flex-col gap-3 rounded-sm border border-stroke bg-white px-4 py-4 shadow-default sm:flex-row sm:items-center sm:justify-between dark:border-strokedark dark:bg-boxdark sm:px-6">
         <div className="max-w-3xl space-y-2 text-sm text-bodydark2">
           <p>
-            <span className="font-medium text-bodydark1 dark:text-white">Super Admin</span> sees roles for all branches.
-            <span className="font-medium text-bodydark1 dark:text-white"> Branch admins</span> see{' '}
-            <span className="font-medium text-bodydark1 dark:text-white">their own branch roles</span> (roles created on
-            that branch account) plus global system defaults — roles Super Admin wires up for your branch stay on the Super Admin
-            side only for listing and edits.
+           
           </p>
         </div>
         <div className="flex flex-wrap gap-3">

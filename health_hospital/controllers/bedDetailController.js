@@ -1,5 +1,5 @@
 const BedDetail = require("../models/bedDetailModel");
-const { getScopedWardIds, idInList } = require("../utils/branchScope");
+const { getScopedWardIds, idInList} = require("../utils/branchScope");
 
 // 1. Create bedDetail
 const addbedDetail = async (req, res) => {
@@ -23,7 +23,7 @@ const addbedDetail = async (req, res) => {
         return res.status(403).json({ status: "fail", message: "Ward not allowed for this branch" });
       }
 
-      const bedDetail = await BedDetail.create({ ...req.body, });
+      const bedDetail = await BedDetail.create({ ...req.body });
       return res.status(200).json({ status: "ok", data: bedDetail });
     }
   } catch (err) {
@@ -196,6 +196,4 @@ module.exports = {
   getbedDetails,
   getbedDetailById,
   updatebedDetail,
-  deletebedDetail,
-
-};
+  deletebedDetail };

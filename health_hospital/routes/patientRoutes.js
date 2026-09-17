@@ -7,6 +7,8 @@ const router = require("express").Router();
 
 router.get("/search", auth, patientController.searchPatients);
 router.get("/check-cnic", auth, patientController.checkCnicForBranch);
+router.get("/check-mr", auth, patientController.checkMrForBranch);
+router.get("/check-phone", auth, patientController.checkPhoneForBranch);
 router.get("/:id/full-history", auth, patientController.getPatientFullHistory);
 
 router.get("/get", auth, patientController.getpatients);

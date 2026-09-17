@@ -3,7 +3,7 @@ const DischargePatient = require("../models/dischargePatientModel");
 const AdmitPatient = require("../models/admitPatientModel");
 const BedDetail = require("../models/bedDetailModel");
 const RoomDetail = require("../models/roomDetailModel");
-const { getScopedAdmitPatientIds, patientVisibleForRequest } = require("../utils/branchScope");
+const { getScopedAdmitPatientIds, patientVisibleForRequest} = require("../utils/branchScope");
 
 // 1. Create dischargePatient
 const adddischargePatient = async (req, res) => {
@@ -93,8 +93,7 @@ const getdischargePatients = async (req, res) => {
       if (req.query.patientId) {
         const rows = await AdmitPatient.find({
           _id: { $in: scopedAdmitIds },
-          patientId: req.query.patientId,
-        })
+          patientId: req.query.patientId })
           .select("_id")
           .lean();
         if (rows.length === 0) {
@@ -216,6 +215,4 @@ module.exports = {
   getdischargePatients,
   getdischargePatientById,
   updatedischargePatient,
-  deletedischargePatient,
-
-};
+  deletedischargePatient };

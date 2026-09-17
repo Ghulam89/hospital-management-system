@@ -1,5 +1,5 @@
 const PharmRack = require("../models/pharmRackModel");
-const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible } = require("../utils/branchScope");
+const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible, branchDocumentDeletable } = require("../utils/branchScope");
 
 // 1. Create pharmRack
 const addpharmRack = async (req, res) => {
@@ -84,7 +84,7 @@ const deletepharmRack = async (req, res) => {
   try {
     const id = req.params.id;
     const row = await PharmRack.findById(id);
-    if (!row || !(await branchDocumentVisible(req, row.branchId))) {
+    if (!row || !(await branchDocumentDeletable(req, row.branchId))) {
       return res.status(404).json({ status: "fail", message: "Pharmacy rack not found" });
     }
     await PharmRack.findByIdAndDelete(id);

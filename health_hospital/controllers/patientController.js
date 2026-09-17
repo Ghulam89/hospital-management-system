@@ -13,16 +13,18 @@ const {
   cnicQueryVariants,
   phoneQueryVariants,
 } = require("../utils/patientIdentity");
-const {
-  mergePatientListBranchFilter,
-  mergeBranchScopedQuery,
-  patientVisibleForRequest,
-  resolveBranchIdForNonSuperAdmin,
-  getScopedPatientIds,
-} = require("../utils/branchScope");
+const { mergePatientListBranchFilter, mergeBranchScopedQuery, patientVisibleForRequest, resolveBranchIdForNonSuperAdmin, getScopedPatientIds } = require("../utils/branchScope");
 
 function escapeRegex(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function truthyRequestFlag(value) {
+  return value === true || value === "true" || value === "1" || value === 1;
+}
+
+function allowDuplicatePhoneRequested(body) {
+  return body && truthyRequestFlag(body.allowDuplicatePhone);
 }
 
 /** Order patient ids: latest Visit at branch first, then patients with no visit at branch (by Patient.createdAt). */
@@ -204,23 +206,48 @@ const addpatient = async (req, res) => {
     const cnicNorm = normalizeCnic(req.body.cnic);
     const phoneNorm = normalizePhone(req.body.phone);
 
-    if (!cnicNorm || cnicNorm.length !== 13) {
+    const mrTrim = String(req.body.mr || "").trim();
+    if (!mrTrim) {
       return res.status(400).json({
         status: "fail",
-        message: "CNIC is required and must be 13 digits.",
+        message: "MR number is required.",
       });
     }
 
-    const checkcnic = await Patient.findOne({ cnicNormalized: cnicNorm });
-    if (checkcnic) {
+    if (!phoneNorm || phoneNorm.length !== 11) {
+      return res.status(400).json({
+        status: "fail",
+        message: "Phone must be exactly 11 digits.",
+      });
+    }
+
+    const checkMr = await Patient.findOne({ mr: mrTrim });
+    if (checkMr) {
       return res.status(409).json({
         status: "fail",
-        message: "CNIC already registered. Search the patient and start a visit instead of creating a duplicate.",
-        data: { existingPatientId: checkcnic._id },
+        message: "This MR# is already registered.",
+        data: { existingPatientId: checkMr._id },
       });
     }
 
-    if (phoneNorm) {
+    if (cnicNorm) {
+      if (cnicNorm.length !== 13) {
+        return res.status(400).json({
+          status: "fail",
+          message: "CNIC must be 13 digits when provided.",
+        });
+      }
+      const checkcnic = await Patient.findOne({ cnicNormalized: cnicNorm });
+      if (checkcnic) {
+        return res.status(409).json({
+          status: "fail",
+          message: "CNIC already registered. Search the patient and start a visit instead of creating a duplicate.",
+          data: { existingPatientId: checkcnic._id },
+        });
+      }
+    }
+
+    if (phoneNorm && !allowDuplicatePhoneRequested(req.body)) {
       const checkPhone = await Patient.findOne({ phoneNormalized: phoneNorm });
       if (checkPhone) {
         return res.status(409).json({
@@ -236,10 +263,18 @@ const addpatient = async (req, res) => {
         ? req.files.image[0].filename
         : "";
 
-    let payload = { ...req.body, image };
+    let payload = { ...req.body, image, mr: mrTrim };
     delete payload.branchId;
     delete payload.branchHistory;
     delete payload.allowDuplicatePhone;
+    if (!cnicNorm) {
+      payload.cnic = "";
+    }
+    payload.phoneOwner = allowDuplicatePhoneRequested(req.body)
+      ? "Family"
+      : payload.phoneOwner || "Self";
+    const statusRaw = String(payload.status || "").trim().toLowerCase();
+    payload.status = statusRaw === "inactive" ? "inactive" : "active";
 
     const patient = await Patient.create(payload);
     await maybeOpenRegistrationVisit(req, patient._id);
@@ -335,8 +370,22 @@ const getpatients = async (req, res) => {
       query._id = { $ne: excludeId };
     }
 
-    if (status && status.trim() !== '') {
-      query.status = status;
+    // Soft lifecycle: default active (+ legacy/missing). Pass status=all|inactive to override.
+    const statusRaw = String(status ?? "active").trim().toLowerCase();
+    if (statusRaw === "inactive") {
+      query.status = "inactive";
+    } else if (statusRaw !== "all") {
+      query.$and = [
+        ...(Array.isArray(query.$and) ? query.$and : []),
+        {
+          $or: [
+            { status: "active" },
+            { status: { $exists: false } },
+            { status: null },
+            { status: "" },
+          ],
+        },
+      ];
     }
 
     // Date range filter for createdAt (timestamps)
@@ -490,12 +539,17 @@ const getpatients = async (req, res) => {
     const pnQ = phone ? normalizePhone(phone) : "";
     const mrTrim =
       mr && String(mr).trim() !== "" ? String(mr).trim() : "";
+    const nameTerm = String(req.query.name || req.query.search || "").trim();
 
-    if (includeIdentity && (cnQ.length >= 5 || pnQ || mrTrim)) {
+    if (includeIdentity && (cnQ.length >= 5 || pnQ || mrTrim || nameTerm)) {
       const orGlob = [];
       if (cnQ.length >= 5) orGlob.push({ cnicNormalized: cnQ });
       if (pnQ) orGlob.push({ phoneNormalized: pnQ });
       if (mrTrim) orGlob.push({ mr: mrTrim });
+      if (nameTerm) {
+        orGlob.push({ name: { $regex: nameTerm, $options: "i" } });
+        // Avoid huge hospital-wide name sweeps — keep identity extras small.
+      }
       const extras = await Patient.find({ $or: orGlob })
         .limit(12)
         .populate(["doctorId"])
@@ -570,6 +624,79 @@ const getpatients = async (req, res) => {
 /**
  * For registration: check if CNIC already exists, and if that patient is on-file at the current branch scope.
  */
+const checkMrForBranch = async (req, res) => {
+  try {
+    const mr = String(req.query.mr || "").trim();
+    if (!mr) {
+      return res.status(400).json({ status: "fail", message: "mr is required" });
+    }
+    const excludeId = String(req.query.excludeId || "").trim();
+    const query = { mr };
+    if (excludeId && mongoose.Types.ObjectId.isValid(excludeId)) {
+      query._id = { $ne: excludeId };
+    }
+    const p = await Patient.findOne(query)
+      .select("mr name phone cnic _id")
+      .lean();
+    if (!p) {
+      return res.status(200).json({ status: "ok", exists: false });
+    }
+    return res.status(200).json({
+      status: "ok",
+      exists: true,
+      patient: {
+        _id: p._id,
+        mr: p.mr,
+        name: p.name,
+        phone: p.phone,
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ status: "fail", error: err.message });
+  }
+};
+
+const checkPhoneForBranch = async (req, res) => {
+  try {
+    const raw = String(req.query.phone || "").trim();
+    if (!raw) {
+      return res.status(400).json({ status: "fail", message: "phone is required" });
+    }
+    const pn = normalizePhone(raw);
+    if (pn.length !== 11) {
+      return res.status(200).json({
+        status: "ok",
+        exists: false,
+        patients: [],
+        reason: "incomplete",
+      });
+    }
+    const query = { phoneNormalized: pn };
+    const excludeId = String(req.query.excludeId || "").trim();
+    if (excludeId && mongoose.Types.ObjectId.isValid(excludeId)) {
+      query._id = { $ne: excludeId };
+    }
+    const patients = await Patient.find(query)
+      .select("mr name phone _id")
+      .sort({ createdAt: -1 })
+      .limit(10)
+      .lean();
+
+    return res.status(200).json({
+      status: "ok",
+      exists: patients.length > 0,
+      patients: patients.map((p) => ({
+        _id: p._id,
+        mr: p.mr,
+        name: p.name,
+        phone: p.phone,
+      })),
+    });
+  } catch (err) {
+    res.status(500).json({ status: "fail", error: err.message });
+  }
+};
+
 const checkCnicForBranch = async (req, res) => {
   try {
     const raw = String(req.query.cnic || "").trim();
@@ -618,14 +745,27 @@ const checkCnicForBranch = async (req, res) => {
 };
 
 // 3. Get patient by id
+// MR identity is hospital-wide: any authenticated staff may load demographics for invoicing.
+// Activity endpoints (history / ledger) stay branch-scoped separately.
 const getpatientById = async (req, res) => {
   try {
     const id = req.params.id;
-    if (!(await patientVisibleForRequest(req, id))) {
-      return res.status(404).json({ status: "fail", message: "Patient not found" });
+    if (!req.user) {
+      return res.status(401).json({ status: "fail", message: "Unauthorized" });
+    }
+    if (!mongoose.Types.ObjectId.isValid(String(id))) {
+      return res.status(400).json({ status: "fail", message: "Invalid patient id" });
     }
     const patient = await Patient.findById(id).populate(['doctorId']);
-    return res.status(200).json({ status: "ok", data: patient });
+    if (!patient) {
+      return res.status(404).json({ status: "fail", message: "Patient not found" });
+    }
+    const visibleHere = await patientVisibleForRequest(req, id);
+    return res.status(200).json({
+      status: "ok",
+      data: patient,
+      notInThisBranch: !visibleHere,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -697,15 +837,16 @@ const searchPatients = async (req, res) => {
 /**
  * Unified timeline for a patient. Branch users see only their branch slice;
  * superadmin without ?branchId sees all branches.
+ * Patient demographics are hospital-wide (same MR); activity is branch-filtered.
  */
 const getPatientFullHistory = async (req, res) => {
   try {
     const id = req.params.id;
+    if (!req.user) {
+      return res.status(401).json({ status: "fail", message: "Unauthorized" });
+    }
     if (!mongoose.Types.ObjectId.isValid(String(id))) {
       return res.status(400).json({ status: "fail", message: "Invalid patient id" });
-    }
-    if (!(await patientVisibleForRequest(req, id))) {
-      return res.status(404).json({ status: "fail", message: "Patient not found" });
     }
 
     const patient = await Patient.findById(id).populate("doctorId").lean();
@@ -769,7 +910,7 @@ const updatepatient = async (req, res) => {
       return res.status(404).json({ status: "fail", message: "Patient not found" });
     }
     const phoneNorm = normalizePhone(req.body.phone);
-    if (phoneNorm) {
+    if (phoneNorm && !allowDuplicatePhoneRequested(req.body)) {
       const dupPhone = await Patient.findOne({
         phoneNormalized: phoneNorm,
         _id: { $ne: id },
@@ -791,8 +932,17 @@ const updatepatient = async (req, res) => {
     const patch = { ...req.body, image };
     delete patch.branchHistory;
     delete patch.allowDuplicatePhone;
+    if (req.body.phone != null) {
+      patch.phoneOwner = allowDuplicatePhoneRequested(req.body)
+        ? "Family"
+        : req.body.phoneOwner || "Self";
+    }
 
     delete patch.branchId;
+    if (patch.status !== undefined) {
+      const s = String(patch.status || "").trim().toLowerCase();
+      patch.status = s === "inactive" ? "inactive" : "active";
+    }
     const updatedpatient = await Patient.findByIdAndUpdate(
       id,
       patch,
@@ -811,6 +961,7 @@ const deletepatient = async (req, res) => {
     if (!(await patientVisibleForRequest(req, id))) {
       return res.status(404).json({ status: "fail", message: "Patient not found" });
     }
+    const existing = await Patient.findById(id).select("name mr").lean();
     await Patient.findByIdAndDelete(id);
     return res
       .status(200)
@@ -834,13 +985,22 @@ const getCustomerLedger = async (req, res) => {
       console.log(`[getCustomerLedger] Patient not found: ${patientId}`);
       return res.status(404).json({ status: "error", message: "Patient not found" });
     }
-    if (!(await patientVisibleForRequest(req, patientId))) {
-      return res.status(404).json({ status: "error", message: "Patient not found" });
+    if (!req.user) {
+      return res.status(401).json({ status: "error", message: "Unauthorized" });
     }
 
     const entries = [];
 
-    const invoices = await Invoice.find({ patientId })
+    const mergeQ = await mergePatientListBranchFilter(req);
+    const branchId = mergeQ && mergeQ.branchId;
+    const posQ = { patientId };
+    const invQ = { patientId };
+    if (branchId) {
+      posQ.branchId = branchId;
+      invQ.branchId = branchId;
+    }
+
+    const invoices = await Invoice.find(invQ)
       .sort({ createdAt: 1 })
       .lean();
     
@@ -1282,6 +1442,8 @@ module.exports = {
   getpatientById,
   searchPatients,
   checkCnicForBranch,
+  checkMrForBranch,
+  checkPhoneForBranch,
   getPatientFullHistory,
   getCustomerLedger,
   addCustomerLedgerPayment,

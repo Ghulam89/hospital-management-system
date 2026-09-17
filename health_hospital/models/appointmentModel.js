@@ -18,6 +18,7 @@ const appointmentSchema = new mongoose.Schema({
   appointmentDate: {
     type: Date,
     required: true,
+    index: true,
   },
   startTime: {
     type: String,
@@ -60,5 +61,12 @@ const appointmentSchema = new mongoose.Schema({
     index: true,
   },
 }, { timestamps: true });
+
+appointmentSchema.index({ branchId: 1, appointmentDate: 1 });
+appointmentSchema.index({ appointmentDate: 1, appointmentStatus: 1 });
+appointmentSchema.index({ branchId: 1, patientId: 1 });
+appointmentSchema.index({ branchId: 1, doctorId: 1 });
+appointmentSchema.index({ doctorId: 1, appointmentDate: 1 });
+appointmentSchema.index({ patientId: 1, appointmentDate: 1 });
 
 module.exports = mongoose.model('Appointment', appointmentSchema);

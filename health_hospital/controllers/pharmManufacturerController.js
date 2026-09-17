@@ -1,5 +1,5 @@
 const PharmManufacturer = require("../models/pharmManufacturerModel");
-const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible, mergeCatalogPreferenceFilter } = require("../utils/branchScope");
+const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible, branchDocumentDeletable, mergeCatalogPreferenceFilter } = require("../utils/branchScope");
 
 // 1. Create pharmManufacturer
 const addpharmManufacturer = async (req, res) => {
@@ -86,7 +86,7 @@ const deletepharmManufacturer = async (req, res) => {
   try {
     const id = req.params.id;
     const row = await PharmManufacturer.findById(id);
-    if (!row || !(await branchDocumentVisible(req, row.branchId))) {
+    if (!row || !(await branchDocumentDeletable(req, row.branchId))) {
       return res.status(404).json({ status: "fail", message: "Pharmacy manufacturer not found" });
     }
     await PharmManufacturer.findByIdAndDelete(id);

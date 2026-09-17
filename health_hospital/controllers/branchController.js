@@ -1,7 +1,7 @@
 const Branch = require('../models/branchModel');
 const User = require('../models/userModel');
 const { normalizeRole } = require('../middleware/auth');
-const { resolveBranchIdForNonSuperAdmin } = require('../utils/branchScope');
+const { resolveBranchIdForNonSuperAdmin } = require("../utils/branchScope");
 
 const createBranch = async (req, res) => {
   try {

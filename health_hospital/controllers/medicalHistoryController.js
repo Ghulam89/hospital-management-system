@@ -1,10 +1,10 @@
 const MedicalHistory = require("../models/medicalHistoryModel");
-const { applyPatientIdScopeToQuery } = require("../utils/branchScope");
+const { applyPatientIdScopeToQuery} = require("../utils/branchScope");
 
 // 1. Create Detail
 const addDetail = async (req, res) => {
   try {
-      const Detail = await MedicalHistory.create({ ...req.body, });
+      const Detail = await MedicalHistory.create({ ...req.body });
       return res.status(200).json({ status: "ok", data: Detail });
     
   } catch (err) {
@@ -134,5 +134,4 @@ module.exports = {
   getDetails,
   getDetailById,
   updateDetail,
-  deleteDetail,
-};
+  deleteDetail };

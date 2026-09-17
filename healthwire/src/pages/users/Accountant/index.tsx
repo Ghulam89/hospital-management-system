@@ -9,7 +9,6 @@ import { Base_url } from '../../../utils/Base_url';
 import { RiDeleteBin5Line } from 'react-icons/ri';
 import Swal from 'sweetalert2';
 import { canCreateUsers, canDeleteUsers, canEditUsers, getStoredUserForPermissions } from '../../../utils/permissions';
-import { accountantRoleKeyQueryList } from '../utils/assignableRoles';
 import { useBranchScopeEpoch } from '../../../context/BranchScopeEpochContext';
 import { buildAxiosBranchScopedParams } from '../../../utils/branchScope';
 
@@ -55,7 +54,6 @@ const Accountant = () => {
   const [users, setUsers] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
-  const [accountantRoleKeys, setAccountantRoleKeys] = useState(['accountant']);
   const navigate = useNavigate();
   const userData = getStoredUserForPermissions();
   const allowCreate = canCreateUsers(userData);
@@ -94,27 +92,14 @@ const Accountant = () => {
     ],
   };
 
-  useEffect(() => {
-    axios
-      .get(`${Base_url}/apis/role/get`, { headers: authHeaders() })
-      .then((res) => {
-        const roleRows = Array.isArray(res.data?.data) ? res.data.data : [];
-        setAccountantRoleKeys(accountantRoleKeyQueryList(roleRows));
-      })
-      .catch(() => {
-        setAccountantRoleKeys(['accountant']);
-      });
-  }, []);
-
   const fetchUsersData = async (page) => {
-    const keys = accountantRoleKeys.length ? accountantRoleKeys : ['accountant'];
     try {
       const res = await axios.get(`${Base_url}/apis/user/get`, {
-        params: { page, roles: keys.join(','), ...buildAxiosBranchScopedParams() },
+        params: { page, role: 'accountant', ...buildAxiosBranchScopedParams() },
+        headers: authHeaders(),
       });
       const rows = Array.isArray(res.data?.data) ? res.data.data : [];
-      const lowered = keys.map((k) => String(k).toLowerCase());
-      setUsers(rows.filter((u) => lowered.includes(String(u?.role || '').toLowerCase())));
+      setUsers(rows);
       setTotalPages(res.data?.totalPages ?? 1);
     } catch {
       setUsers([]);
@@ -125,7 +110,7 @@ const Accountant = () => {
   useEffect(() => {
     fetchUsersData(currentPage);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentPage, accountantRoleKeys, branchEpoch]);
+  }, [currentPage, branchEpoch]);
 
   const handleTableChange = (pagination) => {
     setCurrentPage(pagination.current);

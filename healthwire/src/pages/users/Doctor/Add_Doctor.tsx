@@ -6,7 +6,8 @@ import React, { useCallback, useEffect, useState } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 import { Base_url } from '../../../utils/Base_url';
-import BranchSelectField from '../../../components/BranchSelectField';
+import BranchMultiSelectField from '../../../components/BranchMultiSelectField';
+import UserRoleSelectField from '../../../components/UserRoleSelectField';
 
 const AddDoctor = () => {
   // Form state management
@@ -15,7 +16,8 @@ const AddDoctor = () => {
   const [departmentId, setDepartmentId] = useState('');
   const [allDepartment, setAllDepartment] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [branchId, setBranchId] = useState('');
+  const [branchIds, setBranchIds] = useState<string[]>([]);
+  const [roleKey, setRoleKey] = useState('doctor');
   // Main form state
   const [state, setState] = useState({
     name: "",
@@ -242,8 +244,8 @@ const AddDoctor = () => {
     } else if (!state.shift) {
       toast.error("Must select shift!");
       return;
-    } else if (!branchId) {
-      toast.error("Please select branch");
+    } else if (!branchIds.length) {
+      toast.error("Please select at least one branch");
       return;
     }
 
@@ -280,9 +282,10 @@ const AddDoctor = () => {
       password: state.password,
       shift: state.shift,
       departmentId: departmentId,
-      role: 'doctor',
-      branchId,
-      tabs: [],
+      role: roleKey.trim().toLowerCase() || 'doctor',
+      branchIds,
+      branchIdsCsv: branchIds.join(','),
+      branchId: branchIds[0],
       consultationFee: state.consultationFee,
     followUpCharges: state.followUpCharges,
     sharePrice: state.sharePrice,
@@ -307,7 +310,12 @@ const AddDoctor = () => {
       const res = await axios.post(`${Base_url}/apis/user/create`, params);
       if (res.data.status === 'ok') {
         setIsSubmitting(false);
-        toast.success("Doctor registered successfully!");
+        const count = res.data?.branchCount || branchIds.length;
+        toast.success(
+          count > 1
+            ? `Doctor registered in ${count} branches`
+            : 'Doctor registered successfully!',
+        );
         navigate('/admin/users');
       } else {
         setIsSubmitting(false);
@@ -496,7 +504,13 @@ const AddDoctor = () => {
                       </select>
                     </div>
 
-                    <BranchSelectField value={branchId} onChange={setBranchId} />
+                    <BranchMultiSelectField value={branchIds} onChange={setBranchIds} />
+                    <UserRoleSelectField
+                      screen="doctor"
+                      value={roleKey}
+                      onChange={setRoleKey}
+                      preferCustomDefault
+                    />
 
                     {/* Professional Information */}
                     <div>

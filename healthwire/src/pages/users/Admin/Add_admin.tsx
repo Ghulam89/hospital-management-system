@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 import { Base_url } from '../../../utils/Base_url';
+import UserRoleSelectField from '../../../components/UserRoleSelectField';
 
 const AddAdmin = () => {
   const [gender, setGender] = useState('');
@@ -12,6 +13,7 @@ const AddAdmin = () => {
   const [loading, setLoading] = useState(false);
   const [branches, setBranches] = useState<any[]>([]);
   const [branchId, setBranchId] = useState('');
+  const [roleKey, setRoleKey] = useState('administrator');
 
   const currentUser = useMemo(() => {
     try {
@@ -95,6 +97,9 @@ const AddAdmin = () => {
       else if(!branchId){
         toast("Please select branch") 
       }
+      else if(!roleKey){
+        toast("Please select role")
+      }
       
       else {
 
@@ -106,9 +111,8 @@ const AddAdmin = () => {
           email:state.email,
           password:state.password,
           shift:state.shift,
-          role: 'administrator',
+          role: roleKey.trim().toLowerCase(),
           branchId,
-          tabs: [],
     
     
         }
@@ -284,6 +288,13 @@ const AddAdmin = () => {
                       ))}
                     </select>
                   </div>
+
+                  <UserRoleSelectField
+                    screen="administrator"
+                    value={roleKey}
+                    onChange={setRoleKey}
+                    preferCustomDefault
+                  />
 
                 </div>
 

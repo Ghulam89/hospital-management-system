@@ -3,6 +3,7 @@ import { MdClose } from 'react-icons/md';
 import axios from 'axios';
 import { toast } from 'react-toastify';
 import Modal from '../../../components/modal';
+import { Base_url } from '../../../utils/Base_url';
 
 const AddMedicalHistory = ({
   isModalOpen,
@@ -51,18 +52,21 @@ const AddMedicalHistory = ({
       const payload = {
         message: formData.message,
         alert: formData.alert,
-        patientId: patientId?._id,
+        patientId:
+          typeof patientId === 'object' && patientId !== null
+            ? patientId._id
+            : patientId,
       };
 
       if (editData) {
         response = await axios.put(
-          `https://api.holisticare.pk/apis/medicalHistory/update/${editData._id}`,
+          `${Base_url}/apis/medicalHistory/update/${editData._id}`,
           payload,
         );
         toast.success('Medical history updated successfully!');
       } else {
         response = await axios.post(
-          'https://api.holisticare.pk/apis/medicalHistory/create',
+          `${Base_url}/apis/medicalHistory/create`,
           payload,
         );
         toast.success('Medical history added successfully!');

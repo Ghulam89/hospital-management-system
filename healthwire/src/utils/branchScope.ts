@@ -97,10 +97,21 @@ function pathnameFromRequestUrl(url: string): string | null {
   }
 }
 
-/** Branch catalogue must stay hospital-wide so the picker can search/select any branch. */
-function omitSuperadminBranchFilter(url: string): boolean {
+/** Branch catalogue + doctors-grouped "all branches" must stay hospital-wide for superadmin. */
+function omitSuperadminBranchFilter(url: string, params?: unknown): boolean {
   const path = pathnameFromRequestUrl(String(url || ''));
-  return path === '/apis/branch/get';
+  if (path === '/apis/branch/get') return true;
+  if (path === '/apis/user/doctors-grouped') {
+    const p = params;
+    if (p instanceof URLSearchParams) {
+      return p.get('allBranches') === '1' || p.get('allBranches') === 'true';
+    }
+    if (p && typeof p === 'object' && !Array.isArray(p)) {
+      const flag = String((p as Record<string, unknown>).allBranches ?? '').trim();
+      return flag === '1' || flag.toLowerCase() === 'true';
+    }
+  }
+  return false;
 }
 
 /**
@@ -114,7 +125,7 @@ export function mergeBranchIdIntoAxiosParams(
   const url = String(config.url || '');
   if (!url.includes('/apis/')) return;
   if (url.includes('/apis/login/')) return;
-  if (omitSuperadminBranchFilter(url)) return;
+  if (omitSuperadminBranchFilter(url, config.params)) return;
 
   const p = config.params;
   if (p instanceof URLSearchParams) {

@@ -9,6 +9,8 @@ const {
   mergeBranchScopedQuery,
   assignBranchIdForCreate,
   resolveWriteBranchOid,
+  branchDocumentDeletable,
+  patientVisibleForRequest,
 } = require("../utils/branchScope");
 const { hasCapabilityKey } = require("../middleware/auth");
 const {
@@ -16,7 +18,9 @@ const {
   isPharmPosDayClosedForBranch,
   isBeforeStartOfTodayLocal,
   posAllItemQtyOrLinesChanged,
+  posReturnDataChanged,
 } = require("../utils/posClosingAndBackdate");
+const { trustedNow } = require("../utils/trustedNow");
 
 const escapeRegex = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -231,7 +235,14 @@ const buildPharmPosQuery = async (req) => {
 const addpharmPos = async (req, res) => {
   try {
     console.log('Creating POS invoice with data:', req.body);
-    
+
+    const createItems = Array.isArray(req.body.allItem) ? req.body.allItem : [];
+    const createReturnOnly =
+      createItems.length > 0 &&
+      createItems.every(
+        (it) => it && (it.isReturn === true || Number(it.returnQuantity) > 0),
+      );
+
     // Auto-generate invoice number with atomic yearly counter if not provided
     if (!req.body.invoiceNumber) {
       const year = new Date().getFullYear();
@@ -258,7 +269,9 @@ const addpharmPos = async (req, res) => {
         }
         try {
           const payload = assignBranchIdForCreate(req, { ...req.body, invoiceNumber });
-          if (!payload.createdAt) {
+          if (createReturnOnly) {
+            payload.createdAt = trustedNow();
+          } else if (!payload.createdAt) {
             if (Array.isArray(payload.payment) && payload.payment.length > 0 && payload.payment[0].payDate) {
               payload.createdAt = new Date(payload.payment[0].payDate);
             }
@@ -290,7 +303,9 @@ const addpharmPos = async (req, res) => {
     } else {
       // If invoiceNumber provided, still attempt create directly and let unique index enforce
       const dataPayload = assignBranchIdForCreate(req, { ...req.body });
-      if (!dataPayload.createdAt) {
+      if (createReturnOnly) {
+        dataPayload.createdAt = trustedNow();
+      } else if (!dataPayload.createdAt) {
         if (Array.isArray(dataPayload.payment) && dataPayload.payment.length > 0 && dataPayload.payment[0].payDate) {
           dataPayload.createdAt = new Date(dataPayload.payment[0].payDate);
         }
@@ -459,19 +474,19 @@ const updatepharmPos = async (req, res) => {
         }
       }
     }
-    // If this update includes any return items and no explicit createdAt provided,
-    // set createdAt to "now" so the return impacts today's closing/reporting.
-    if (!cleanedBody.createdAt) {
-      const items = Array.isArray(cleanedBody.allItem)
-        ? cleanedBody.allItem
-        : Array.isArray(req.body?.allItem)
-          ? req.body.allItem
-          : [];
-      const hasReturn = items.some((it) => it && (it.isReturn === true || Number(it.returnQuantity) > 0));
-      if (hasReturn) {
-        cleanedBody.createdAt = new Date();
-      }
+    const incomingItems = Array.isArray(cleanedBody.allItem)
+      ? cleanedBody.allItem
+      : Array.isArray(req.body?.allItem)
+        ? req.body.allItem
+        : null;
+    if (incomingItems && posReturnDataChanged(existing.allItem, incomingItems)) {
+      return res.status(400).json({
+        status: "error",
+        message:
+          "Patient returns cannot be changed on Update Invoice. Use POS → Patient Return to create a new return bill for today (original sale invoice stays unchanged).",
+      });
     }
+
     if (!cleanedBody.createdAt && Array.isArray(cleanedBody.payment) && cleanedBody.payment.length > 0 && cleanedBody.payment[0].payDate) {
       cleanedBody.createdAt = new Date(cleanedBody.payment[0].payDate);
     }
@@ -520,6 +535,13 @@ const deletepharmPos = async (req, res) => {
     const id = req.params.id;
     const pos = await PharmPos.findById(id);
     if (!pos) {
+      return res.status(404).json({
+        status: "error",
+        message: "POS transaction not found",
+      });
+    }
+
+    if (!(await branchDocumentDeletable(req, pos.branchId))) {
       return res.status(404).json({
         status: "error",
         message: "POS transaction not found",
@@ -623,11 +645,16 @@ const getpharmPosSummary = async (req, res) => {
       altQuery = filtered.length > 0 ? { $and: filtered } : {};
     }
 
-    // Extract date range (if any) to apply specialized rules:
-    // - Normal sales follow createdAt range
-    // - Returns follow updatedAt range (so today's returns affect today's closing)
     const from = req.query.from ? new Date(req.query.from) : null;
     const toPlus1 = req.query.to ? (() => { const d = new Date(req.query.to); d.setDate(d.getDate() + 1); return d; })() : null;
+
+    const createdAtLineWindow = [];
+    if (from || toPlus1) {
+      const createdAt = {};
+      if (from) createdAt.$gte = from;
+      if (toPlus1) createdAt.$lt = toPlus1;
+      createdAtLineWindow.push({ $match: { createdAt } });
+    }
 
     console.log('📊 Calculating POS summary with filters:', baseQuery, 'alt(no-date):', altQuery);
 
@@ -832,36 +859,11 @@ const getpharmPosSummary = async (req, res) => {
               },
             },
           ],
-          // Line-level totals with special date handling for returns
+          // Line-level totals: all lines use parent bill createdAt (returns stay on sale date).
           lineTotals: [
             { $match: altQuery },
+            ...createdAtLineWindow,
             { $unwind: '$allItem' },
-            ...(from || toPlus1
-              ? [{
-                  $match: {
-                    $expr: {
-                      $or: [
-                        // Non-return lines: use createdAt window
-                        {
-                          $and: [
-                            { $ne: [{ $ifNull: ['$allItem.isReturn', false] }, true] },
-                            ...(from ? [{ $gte: ['$createdAt', from] }] : []),
-                            ...(toPlus1 ? [{ $lt: ['$createdAt', toPlus1] }] : []),
-                          ]
-                        },
-                        // Return lines: use updatedAt window
-                        {
-                          $and: [
-                            { $eq: [{ $ifNull: ['$allItem.isReturn', false] }, true] },
-                            ...(from ? [{ $gte: ['$updatedAt', from] }] : []),
-                            ...(toPlus1 ? [{ $lt: ['$updatedAt', toPlus1] }] : []),
-                          ]
-                        }
-                      ]
-                    }
-                  }
-                }]
-              : []),
             {
               $group: {
                 _id: null,
@@ -958,7 +960,7 @@ const addPatientPosLedgerPayment = async (req, res) => {
     const cleanedPayments = incoming
       .map((p) => ({
         method: p?.method || "",
-        payDate: p?.payDate ? new Date(p.payDate) : new Date(),
+        payDate: p?.payDate ? new Date(p.payDate) : trustedNow(),
         paid: Number(p?.paid) || 0,
         reference: p?.reference || "",
         chequeNo: p?.chequeNo || "",
@@ -1174,6 +1176,13 @@ const deletePatientPosLedgerPayment = async (req, res) => {
       return res.status(404).json({ status: "error", message: "POS invoice not found" });
     }
 
+    if (!(await branchDocumentDeletable(req, pos.branchId))) {
+      return res.status(404).json({ status: "error", message: "POS invoice not found" });
+    }
+    if (!(await patientVisibleForRequest(req, patientId))) {
+      return res.status(404).json({ status: "error", message: "POS invoice not found" });
+    }
+
     if (!(await assertExistingPosDayUnlocked(req, res, pos))) {
       return;
     }
@@ -1220,7 +1229,7 @@ const addPatientPosInvoicePayment = async (req, res) => {
     const cleanedPayments = incoming
       .map((p) => ({
         method: p?.method || "",
-        payDate: p?.payDate ? new Date(p.payDate) : new Date(),
+        payDate: p?.payDate ? new Date(p.payDate) : trustedNow(),
         paid: Number(p?.paid) || 0,
         reference: p?.reference || "",
         chequeNo: p?.chequeNo || "",

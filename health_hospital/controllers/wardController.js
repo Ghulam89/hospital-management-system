@@ -1,5 +1,5 @@
 const Ward = require("../models/wardModel");
-const { getScopedDepartmentIds, idInList } = require("../utils/branchScope");
+const { getScopedDepartmentIds, idInList} = require("../utils/branchScope");
 
 // 1. Create ward
 const addward = async (req, res) => {
@@ -27,7 +27,7 @@ const addward = async (req, res) => {
         return res.status(403).json({ status: "fail", message: "No departments for this branch" });
       }
 
-      const ward = await Ward.create({ ...req.body, });
+      const ward = await Ward.create({ ...req.body });
       return res.status(200).json({ status: "ok", data: ward });
     }
   } catch (err) {
@@ -64,8 +64,7 @@ const getwards = async (req, res) => {
         { name: { $regex: ".*" + search + ".*", $options: "i" } },
         { phone: { $regex: ".*" + search + ".*", $options: "i" } },
         { cnic: { $regex: ".*" + search + ".*", $options: "i" } },
-      ],
-    };
+      ] };
     if (allowedDeptIds !== null) {
       query.departmentId = { $in: allowedDeptIds };
     }
@@ -176,6 +175,4 @@ module.exports = {
   getwards,
   getwardById,
   updateward,
-  deleteward,
-
-};
+  deleteward };

@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Modal from '../../components/modal';
 import { MdClose } from 'react-icons/md';
 import axios from 'axios';
@@ -24,10 +24,17 @@ const UpdatePatient = ({
   const [doctors, setDoctors] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [cnicError, setCnicError] = useState('');
+  const [allowDuplicatePhone, setAllowDuplicatePhone] = useState(false);
+  const [phoneDuplicateInfo, setPhoneDuplicateInfo] = useState<{
+    exists: boolean;
+    patients?: Array<{ mr?: string; name?: string; _id?: string }>;
+  } | null>(null);
+  const [phoneCheckLoading, setPhoneCheckLoading] = useState(false);
   // Update selectedImage type to handle string | File | null
   const [selectedImage, setSelectedImage] = useState<string | File | null>(null);
   const [selectedImages, setSelectedImages] = useState(null);
-console.log(selectedImage);
+  const phoneCheckAbortRef = useRef<AbortController | null>(null);
+  const phoneCheckGenRef = useRef(0);
 
   useEffect(() => {
     if (isModalOpen && patientData) {
@@ -40,10 +47,69 @@ console.log(selectedImage);
       setDoctor(patientData.doctorId || '');
       setCnic(patientData.cnic || '');
       setSelectedImage(patientData.image || null);
-      console.log('selectedImage after fetch:', patientData.image, typeof patientData.image);
+      setAllowDuplicatePhone(String(patientData.phoneOwner || '').toLowerCase() === 'family');
+      setPhoneDuplicateInfo(null);
+      phoneCheckAbortRef.current?.abort();
+      setPhoneCheckLoading(false);
       fetchDoctors();
     }
   }, [isModalOpen, patientData]);
+
+  const runPhoneCheck = (phoneValue: string, excludeId?: string) => {
+    const cleaned = phoneValue.replace(/\D/g, '');
+    if (cleaned.length < 10) {
+      setPhoneDuplicateInfo(null);
+      setPhoneCheckLoading(false);
+      return;
+    }
+    phoneCheckAbortRef.current?.abort();
+    const ac = new AbortController();
+    phoneCheckAbortRef.current = ac;
+    const gen = ++phoneCheckGenRef.current;
+    setPhoneCheckLoading(true);
+    axios
+      .get(`${Base_url}/apis/patient/check-phone`, {
+        params: { phone: phoneValue, ...(excludeId ? { excludeId } : {}) },
+        signal: ac.signal,
+      })
+      .then((r) => {
+        if (gen !== phoneCheckGenRef.current) return;
+        const d = r.data;
+        if (d?.exists) setPhoneDuplicateInfo(d);
+        else setPhoneDuplicateInfo(null);
+      })
+      .catch((err) => {
+        if (err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError' || err?.name === 'AbortError') return;
+        if (gen !== phoneCheckGenRef.current) return;
+        setPhoneDuplicateInfo(null);
+      })
+      .finally(() => {
+        if (gen === phoneCheckGenRef.current) setPhoneCheckLoading(false);
+      });
+  };
+
+  const handlePhoneChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value;
+    setPhone(value);
+    if (allowDuplicatePhone) {
+      phoneCheckAbortRef.current?.abort();
+      setPhoneDuplicateInfo(null);
+      setPhoneCheckLoading(false);
+      return;
+    }
+    runPhoneCheck(value, patientData?._id);
+  };
+
+  const handleAllowDuplicatePhoneChange = (checked: boolean) => {
+    setAllowDuplicatePhone(checked);
+    if (checked) {
+      phoneCheckAbortRef.current?.abort();
+      setPhoneDuplicateInfo(null);
+      setPhoneCheckLoading(false);
+      return;
+    }
+    if (phone) runPhoneCheck(phone, patientData?._id);
+  };
 
   const fetchDoctors = async () => {
     try {
@@ -124,6 +190,10 @@ console.log(selectedImage);
   } else if (cnic && !validateCNIC(cnic)) {
     return;
   } else {
+    if (!allowDuplicatePhone && phoneDuplicateInfo?.exists) {
+      toast.error('This phone is already registered. Check the box below if it belongs to a family member.');
+      return;
+    }
     try {
     setIsLoading(true);
     const updatedPatient = new FormData();
@@ -132,6 +202,8 @@ console.log(selectedImage);
     updatedPatient.append('mr', mrNumber);
     updatedPatient.append('name', name);
     updatedPatient.append('phone', phone);
+    updatedPatient.append('allowDuplicatePhone', allowDuplicatePhone ? 'true' : 'false');
+    updatedPatient.append('phoneOwner', allowDuplicatePhone ? 'Family' : 'Self');
     updatedPatient.append('gender', gender);
     if (dob) updatedPatient.append('dob', dob);
     // if (doctor) updatedPatient.append('doctorId', doctor);
@@ -271,10 +343,37 @@ console.log(selectedImage);
                   <input
                     type="text"
                     value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
+                    onChange={handlePhoneChange}
                     placeholder=""
                     className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                   />
+                  {phoneCheckLoading && (
+                    <p className="text-body dark:text-bodydark text-sm mt-1">Checking phone…</p>
+                  )}
+                  {!allowDuplicatePhone && phoneDuplicateInfo?.exists && (
+                    <div className="mt-2 rounded-md border border-red-200 bg-red-50 p-2.5 text-sm text-red-800 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-200">
+                      <p className="leading-snug">
+                        This phone is already registered on another MR#. Check the box below if this
+                        patient is using a family member&apos;s number.
+                      </p>
+                      {(phoneDuplicateInfo.patients || []).map((p) => (
+                        <p key={p._id || `${p.mr}-${p.name}`} className="mt-1 text-xs opacity-90">
+                          MR# {p.mr || '—'} · {p.name || '—'}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+                  <label className="mt-3 flex cursor-pointer items-start gap-2.5">
+                    <input
+                      type="checkbox"
+                      checked={allowDuplicatePhone}
+                      onChange={(e) => handleAllowDuplicatePhoneChange(e.target.checked)}
+                      className="mt-1 h-4 w-4 rounded border-stroke text-primary focus:ring-primary"
+                    />
+                    <span className="text-sm text-black dark:text-white leading-snug">
+                      Phone belongs to another family member (allow same phone on a new MR#)
+                    </span>
+                  </label>
                 </div>
 
                 <div>
@@ -388,7 +487,10 @@ console.log(selectedImage);
                   <button
                     type="submit"
                     className="flex justify-center rounded bg-primary py-2 px-6 font-medium text-gray"
-                    disabled={isLoading}
+                    disabled={
+                      isLoading ||
+                      (!allowDuplicatePhone && !!(phoneDuplicateInfo && phoneDuplicateInfo.exists))
+                    }
                   >
                     {isLoading ? (
                       <div className="flex items-center gap-2">

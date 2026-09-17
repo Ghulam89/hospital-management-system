@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const StoreClosing = require("../models/storeClosingModel");
+const { trustedNow } = require("./trustedNow");
 
 function startOfLocalDay(d) {
   const x = new Date(d);
@@ -13,12 +14,12 @@ function addOneLocalDay(d) {
   return x;
 }
 
-/** True when `value` is strictly before today's calendar start (local). */
+/** True when `value` is strictly before today's calendar start (local), using internet time. */
 function isBeforeStartOfTodayLocal(value) {
   if (value == null || value === "") return false;
   const dt = new Date(value);
   if (Number.isNaN(dt.getTime())) return false;
-  return dt < startOfLocalDay(new Date());
+  return dt < startOfLocalDay(trustedNow());
 }
 
 /**
@@ -57,7 +58,7 @@ function getEffectivePosTimestamp(body, existingDoc) {
     return new Date(body.payment[0].payDate);
   }
   if (existingDoc && existingDoc.createdAt) return new Date(existingDoc.createdAt);
-  return new Date();
+  return trustedNow();
 }
 
 function normPharmItemId(line) {
@@ -81,10 +82,28 @@ function posAllItemQtyOrLinesChanged(oldItems, newItems) {
   return false;
 }
 
+function returnLineSignature(line) {
+  const it = line || {};
+  return `${normPharmItemId(it)}|${Number(it.returnQuantity) || 0}|${it.isReturn === true}`;
+}
+
+/** True when return flags / return qty on lines differ (past bills must not be edited for returns). */
+function posReturnDataChanged(oldItems, newItems) {
+  if (!Array.isArray(newItems)) return false;
+  const oldSig = (Array.isArray(oldItems) ? oldItems : [])
+    .map(returnLineSignature)
+    .sort()
+    .join(";");
+  const newSig = newItems.map(returnLineSignature).sort().join(";");
+  return oldSig !== newSig;
+}
+
 module.exports = {
   startOfLocalDay,
+  addOneLocalDay,
   isBeforeStartOfTodayLocal,
   isPharmPosDayClosedForBranch,
   getEffectivePosTimestamp,
   posAllItemQtyOrLinesChanged,
+  posReturnDataChanged,
 };

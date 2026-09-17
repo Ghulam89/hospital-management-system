@@ -3,7 +3,7 @@ const Role = require('../models/roleModel');
 const permissionCatalog = require('../utils/permissionCatalog');
 const menuPermissionCatalog = require('../utils/menuPermissionCatalog');
 const { normalizeRole } = require('../middleware/auth');
-const { resolveBranchIdForNonSuperAdmin } = require('../utils/branchScope');
+const { resolveBranchIdForNonSuperAdmin} = require("../utils/branchScope");
 const { isBranchAdmin } = require('../middleware/rbac');
 const { propagateTabsToUsersMatchingRole } = require('../utils/syncUserTabsFromRole');
 
@@ -95,8 +95,7 @@ async function rolesFilterForUser(req) {
     $or: [
       { branchId: bid, createdBySuperAdmin: { $ne: true } },
       { isSystem: true, branchId: null },
-    ],
-  };
+    ] };
 }
 
 async function assertBranchRoleRead(req, roleDoc, res) {
@@ -115,8 +114,7 @@ async function assertBranchRoleRead(req, roleDoc, res) {
   if (roleDoc.createdBySuperAdmin === true) {
     res.status(403).json({
       status: 'fail',
-      message: 'This role is managed by Super Admin and is not available to branch users',
-    });
+      message: 'This role is managed by Super Admin and is not available to branch users' });
     return false;
   }
   return true;
@@ -137,15 +135,13 @@ async function assertBranchRoleMutate(req, roleDoc, res) {
   if (!roleDoc.branchId || String(roleDoc.branchId) !== String(bid)) {
     res.status(403).json({
       status: 'fail',
-      message: 'You can only manage roles created for your branch',
-    });
+      message: 'You can only manage roles created for your branch' });
     return false;
   }
   if (roleDoc.createdBySuperAdmin === true) {
     res.status(403).json({
       status: 'fail',
-      message: 'Only Super Admin can change roles created for your branch at HQ',
-    });
+      message: 'Only Super Admin can change roles created for your branch at HQ' });
     return false;
   }
   return true;
@@ -204,8 +200,7 @@ const createRole = async (req, res) => {
     if (!isSuperAdmin(req.user) && isElevatedRoleHiddenFromBranchViewer({ key, name })) {
       return res.status(403).json({
         status: 'fail',
-        message: 'This role name or key is reserved for super admin only',
-      });
+        message: 'This role name or key is reserved for super admin only' });
     }
 
     if (!key || !/^[a-z0-9_-]+$/.test(key)) {
@@ -222,8 +217,7 @@ const createRole = async (req, res) => {
       if (!branchId) {
         return res.status(400).json({
           status: 'fail',
-          message: 'Branch not assigned — only Super Admin can create global roles',
-        });
+          message: 'Branch not assigned — only Super Admin can create global roles' });
       }
     }
 
@@ -237,8 +231,7 @@ const createRole = async (req, res) => {
       permissions,
       isSystem: false,
       branchId,
-      createdBySuperAdmin,
-    });
+      createdBySuperAdmin });
 
     await propagateTabsToUsersMatchingRole(created);
 
@@ -304,8 +297,7 @@ const deleteRole = async (req, res) => {
     if (!isSuperAdmin(req.user)) {
       return res.status(403).json({
         status: 'fail',
-        message: 'Only Super Admin can delete roles. Branch admins may create and edit branch roles only.',
-      });
+        message: 'Only Super Admin can delete roles. Branch admins may create and edit branch roles only.' });
     }
     const role = await Role.findById(req.params.id);
     if (!role) {
@@ -328,5 +320,4 @@ module.exports = {
   getRoleById,
   createRole,
   updateRole,
-  deleteRole,
-};
+  deleteRole };

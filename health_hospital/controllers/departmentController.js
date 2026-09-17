@@ -1,5 +1,5 @@
 const Department = require("../models/departmentModel");
-const { getScopedDepartmentIds, idInList } = require("../utils/branchScope");
+const { getScopedDepartmentIds, idInList} = require("../utils/branchScope");
 
 // 1. Create department
 const adddepartment = async (req, res) => {
@@ -48,8 +48,7 @@ const getdepartments = async (req, res) => {
 
     return res.status(200).json({
       status: "ok",
-      data: departments,
-    });
+      data: departments });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -113,6 +112,4 @@ module.exports = {
   getdepartments,
   getdepartmentById,
   updatedepartment,
-  deletedepartment,
-
-};
+  deletedepartment };

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Table, Button, message, DatePicker, Modal } from 'antd';
+import { Table, Button, message, DatePicker, Modal, Space } from 'antd';
 import { Link, useParams } from 'react-router-dom';
 import axios from 'axios';
 import { RiDeleteBin5Line, RiFile2Line, RiEdit2Line } from 'react-icons/ri';
@@ -82,7 +82,7 @@ const MedicalHistory = () => {
       
       const res = await axios.get(`${Base_url}/apis/medicalHistory/get`, { params });
       
-      const formattedData = res.data.data.map(item => ({
+      const formattedData = (res.data.data || []).map(item => ({
         ...item,
         key: item._id,
       }));
@@ -190,7 +190,7 @@ const MedicalHistory = () => {
           setIsModalOpen(false);
           setEditData(null);
         }}
-        patientId={patientData}
+        patientId={patientData?._id || id}
         fetchMedicalHistories={fetchFamilyHistory}
         
         editData={editData}

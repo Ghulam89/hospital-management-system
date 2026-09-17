@@ -1,12 +1,12 @@
 const DeathCertificate = require("../models/deathCertificateModel");
-const { getScopedPatientIds } = require("../utils/branchScope");
+const { getScopedPatientIds} = require("../utils/branchScope");
 
 // 1. Create deathCertificate
 const adddeathCertificate = async (req, res) => {
   try {
 
 
-      const deathCertificate = await DeathCertificate.create({ ...req.body, });
+      const deathCertificate = await DeathCertificate.create({ ...req.body });
       return res.status(200).json({ status: "ok", data: deathCertificate });
     
   } catch (err) {
@@ -120,6 +120,4 @@ module.exports = {
   getdeathCertificates,
   getdeathCertificateById,
   updatedeathCertificate,
-  deletedeathCertificate,
-
-};
+  deletedeathCertificate };

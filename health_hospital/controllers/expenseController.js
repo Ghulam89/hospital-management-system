@@ -1,5 +1,5 @@
 const Expense = require("../models/expenseModel");
-const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible } = require("../utils/branchScope");
+const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible, branchDocumentDeletable } = require("../utils/branchScope");
 
 const startOfDay = (value) => {
   const d = new Date(value);
@@ -158,7 +158,7 @@ const deleteexpense = async (req, res) => {
   try {
     const id = req.params.id;
     const ex = await Expense.findById(id);
-    if (!ex || !(await branchDocumentVisible(req, ex.branchId))) {
+    if (!ex || !(await branchDocumentDeletable(req, ex.branchId))) {
       return res.status(404).json({ status: "fail", message: "Expense not found" });
     }
     await Expense.findByIdAndDelete(id);

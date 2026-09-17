@@ -21,13 +21,20 @@ function calculateNetAmount(item: any): number {
 
 function calculateDoctorGrossShareFromRows(item: any, gross: number): number | null {
   const rows = Array.isArray(item?.doctorShares) ? item.doctorShares : [];
-  const validRows = rows.filter((row) => {
-    const doctorId = row?.doctorId?._id || row?.doctorId || row?.userId || row?.doctor?._id || row?.doctor;
-    const shareValue = toNumber(row?.shareValue ?? row?.share ?? row?.amount);
-    return !!doctorId && shareValue > 0;
+  const configuredRows = rows.filter((row) => {
+    const doctorId =
+      row?.doctorId?._id || row?.doctorId || row?.userId || row?.doctor?._id || row?.doctor;
+    return !!doctorId;
   });
-  if (validRows.length === 0) return null;
-  const total = validRows.reduce((sum, row) => {
+  if (configuredRows.length === 0) return null;
+
+  const positiveRows = configuredRows.filter((row) => {
+    const shareValue = toNumber(row?.shareValue ?? row?.share ?? row?.amount);
+    return shareValue > 0;
+  });
+  if (positiveRows.length === 0) return 0;
+
+  const total = positiveRows.reduce((sum, row) => {
     const shareValue = toNumber(row?.shareValue ?? row?.share ?? row?.amount);
     const shareType = normalizedShareType(row?.shareType);
     return sum + (shareType === 'percentage' ? gross * (shareValue / 100) : shareValue);

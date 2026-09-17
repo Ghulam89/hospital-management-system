@@ -250,6 +250,7 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                 'indoor_duty_roster',
                 'birth_reports',
                 'death_reports',
+                'bed_room_transfer_history',
               ]) && (
               <li>
               <SidebarLinkGroup
@@ -261,7 +262,8 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                   pathname.includes('/discharge-patients') ||
                   pathname.includes('/birth-reports') ||
                   pathname.includes('/death-reports') ||
-                  pathname.includes('/Indoor-duty-roster')
+                  pathname.includes('/Indoor-duty-roster') ||
+                  pathname.includes('/bed-room-transfer-history')
                 }
               >
                 {(handleClick, open) => {
@@ -276,7 +278,9 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                           pathname.includes('/room-details') ||
                           pathname.includes('/discharge-patients') ||
                           pathname.includes('/death-reports') ||
-                          pathname.includes('/birth-reports')) &&
+                          pathname.includes('/birth-reports') ||
+                          pathname.includes('/Indoor-duty-roster') ||
+                          pathname.includes('/bed-room-transfer-history')) &&
                           'bg-graydark dark:bg-meta-4'
                         }`}
                         onClick={(e) => {
@@ -478,16 +482,16 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                           )}
 
 
-                          {!usesGranularMenuTabs(permUser) && (
+                          {canSeeSidebarMenu(permUser, 'bed_room_transfer_history') && (
                           <li>
                             <NavLink
-                              to="#"
+                              to="/bed-room-transfer-history"
                               className={({ isActive }) =>
                                 'group relative flex items-center gap-2.5 rounded-md px-4 font-medium text-bodydark2 duration-300 ease-in-out hover:text-white ' +
                                 (isActive && '!text-white')
                               }
                             >
-                              Bed/Room Transfer History 
+                              Bed/Room Transfer History
                             </NavLink>
                           </li>
                           )}
@@ -823,6 +827,8 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                 'pharm_store_close',
                 'pharm_suppliers',
                 'pharm_pos',
+                'pharm_cust_ledger',
+                'pharm_supp_ledger',
                 'pharm_categories',
                 'pharm_manufacturers',
                 'pharm_reports_menu',
@@ -1054,7 +1060,33 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                           </li>
                           )}
 
+                          {canSeeSidebarMenu(permUser, 'pharm_cust_ledger') && (
+                          <li>
+                            <NavLink
+                              to="/admin/pharmacy/customer-ledger"
+                              className={({ isActive }) =>
+                                'group relative flex items-center gap-2.5 rounded-md px-4 font-medium text-bodydark2 duration-300 ease-in-out hover:text-white ' +
+                                (isActive && '!text-white')
+                              }
+                            >
+                               Customer Ledger
+                             </NavLink>
+                          </li>
+                          )}
 
+                          {canSeeSidebarMenu(permUser, 'pharm_supp_ledger') && (
+                          <li>
+                            <NavLink
+                              to="/admin/pharmacy/supplier-ledger"
+                              className={({ isActive }) =>
+                                'group relative flex items-center gap-2.5 rounded-md px-4 font-medium text-bodydark2 duration-300 ease-in-out hover:text-white ' +
+                                (isActive && '!text-white')
+                              }
+                            >
+                               Supplier Ledger
+                             </NavLink>
+                          </li>
+                          )}
 
                           {/* <li>
                             <NavLink

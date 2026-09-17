@@ -1,12 +1,12 @@
 const BirthCertificate = require("../models/birthCertificateModel");
-const { getScopedPatientIds } = require("../utils/branchScope");
+const { getScopedPatientIds} = require("../utils/branchScope");
 
 // 1. Create birthCertificate
 const addbirthCertificate = async (req, res) => {
   try {
 
 
-      const birthCertificate = await BirthCertificate.create({ ...req.body, });
+      const birthCertificate = await BirthCertificate.create({ ...req.body });
       return res.status(200).json({ status: "ok", data: birthCertificate });
     
   } catch (err) {
@@ -120,6 +120,4 @@ module.exports = {
   getbirthCertificates,
   getbirthCertificateById,
   updatebirthCertificate,
-  deletebirthCertificate,
-
-};
+  deletebirthCertificate };

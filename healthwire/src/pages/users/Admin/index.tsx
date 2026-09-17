@@ -93,8 +93,7 @@ const Admin = () => {
       })
       .then((res) => {
         const rows = Array.isArray(res.data?.data) ? res.data.data : [];
-        const administrators = rows.filter((user) => user.role === 'administrator');
-        setUsers(administrators);
+        setUsers(rows);
         setTotalPages(res.data?.totalPages ?? 1);
       })
       .catch(() => {

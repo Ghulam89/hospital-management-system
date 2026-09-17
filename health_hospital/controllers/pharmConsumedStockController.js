@@ -1,5 +1,5 @@
 const PharmConsumedStock = require("../models/pharmConsumedStockModel");
-const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible } = require("../utils/branchScope");
+const { mergeBranchScopedQuery, assignBranchIdForCreate, branchDocumentVisible, branchDocumentDeletable } = require("../utils/branchScope");
 
 // 1. Create Consumed Stock
 const addConsumedStock = async (req, res) => {
@@ -188,7 +188,7 @@ const deleteConsumedStock = async (req, res) => {
   try {
     const id = req.params.id;
     const row = await PharmConsumedStock.findById(id);
-    if (!row || !(await branchDocumentVisible(req, row.branchId))) {
+    if (!row || !(await branchDocumentDeletable(req, row.branchId))) {
       return res.status(404).json({ status: "error", message: "Consumed stock not found" });
     }
     await PharmConsumedStock.findByIdAndDelete(id);

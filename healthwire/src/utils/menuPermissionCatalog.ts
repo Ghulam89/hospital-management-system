@@ -32,6 +32,7 @@ export const MENU_ROWS: MenuMatrixRow[] = [
   { id: 'indoor_duty_roster', label: 'Indoor Duty Roster', group: 'Indoor Management', parentLabel: 'Indoor Management', pathPrefix: '/Indoor-duty-roster', cells: { module: true, create: true, read: true, update: true, delete: false } },
   { id: 'birth_reports', label: 'Birth Certificates', group: 'Indoor Management', parentLabel: 'Indoor Management', pathPrefix: '/birth-reports', cells: { module: true, create: true, read: true, update: true, delete: false } },
   { id: 'death_reports', label: 'Death Certificates', group: 'Indoor Management', parentLabel: 'Indoor Management', pathPrefix: '/death-reports', cells: { module: true, create: true, read: true, update: true, delete: false } },
+  { id: 'bed_room_transfer_history', label: 'Bed/Room Transfer History', group: 'Indoor Management', parentLabel: 'Indoor Management', pathPrefix: '/bed-room-transfer-history', cells: { module: true, create: false, read: true, update: false, delete: false } },
 
   { id: 'admitted_patients', label: 'Admitted Patients', group: 'Indoor Patients', parentLabel: 'Indoor Patients', pathPrefix: '/admin/beds', cells: { module: true, create: true, read: true, update: true, delete: false } },
   { id: 'bed_allocation', label: 'Bed Allocation', group: 'Indoor Patients', parentLabel: 'Indoor Patients', pathPrefix: '/bed-allocation', cells: { module: true, create: true, read: true, update: true, delete: false } },
