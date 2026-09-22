@@ -21,7 +21,7 @@ const {
 } = require("../utils/invoiceProcedureRefund");
 const { computeClientBillFromItems } = require("../utils/invoiceBillTotals");
 
-/** Past invoice/payment dates are allowed for all authenticated invoice editors (data-entry). */
+/** Historical patient invoice/payment dates are allowed for old-data imports. */
 function assertInvoiceBackdatesAllowed(req, res, dates) {
   return true;
 }
