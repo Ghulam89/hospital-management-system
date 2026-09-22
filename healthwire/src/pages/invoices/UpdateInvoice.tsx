@@ -284,8 +284,6 @@ export default function InvoiceUpdate() {
   const [paymentStatus, setPaymentStatus] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  /** Past invoice dates allowed for all editors (matches backend — no separate backdate lock). */
-  const invoiceDateMin = undefined;
   
   // Refund modal state
   const [refundModalOpen, setRefundModalOpen] = useState(false);
@@ -2106,7 +2104,6 @@ export default function InvoiceUpdate() {
                 type="date"
                 className="rounded border-[1.5px] border-stroke bg-transparent py-2 px-3 w-56 text-black outline-none transition focus:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                 value={invoiceEditDate}
-                min={invoiceDateMin}
                 onChange={(e) => {
                   const v = e.target.value;
                   const prevTop = invoiceEditDate;
@@ -2541,7 +2538,6 @@ export default function InvoiceUpdate() {
                         disabled={rowLocked}
                         className="w-full rounded border-[1.5px] border-stroke bg-transparent py-2 px-3 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary disabled:opacity-70"
                         value={item.date}
-                        min={invoiceDateMin}
                         onChange={(e) => updatePaymentInstallment(item.id, 'date', e.target.value)}
                       />
                     </td>
@@ -2834,7 +2830,6 @@ export default function InvoiceUpdate() {
                       type="date"
                       className="w-full rounded border border-stroke bg-transparent px-3 py-2 text-black outline-none transition focus:border-primary dark:border-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                       value={refundForm.payDate}
-                      min={invoiceDateMin}
                       onChange={(e) => setRefundForm({ ...refundForm, payDate: e.target.value })}
                     />
                   </div>
