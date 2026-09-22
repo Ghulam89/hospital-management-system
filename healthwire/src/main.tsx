@@ -41,13 +41,6 @@ import {Provider} from "react-redux";
 import Store from "./store"
 import { ToastContainer} from 'react-toastify';
 import "react-toastify/dist/ReactToastify.css"
-import { syncTrustedTime } from './utils/trustedNow';
-
-// Sync wall-clock from internet (via API) before / while the app boots.
-void syncTrustedTime(true);
-window.setInterval(() => {
-  void syncTrustedTime(true);
-}, 5 * 60 * 1000);
 
 ReactDOM.createRoot(document.getElementById('root') as HTMLElement).render(
   <React.StrictMode>

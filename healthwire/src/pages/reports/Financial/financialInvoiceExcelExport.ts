@@ -28,6 +28,7 @@ const TEXT_STYLE = {
 const SHEET_HEADERS = [
   'Sr No',
   'Invoice No',
+  'HCloud Invoice No',
   'Invoice Date',
   'Payment Date',
   'Created At',
@@ -58,16 +59,17 @@ const SHEET_HEADERS = [
 ];
 
 /** Invoice-level columns before procedure columns. */
-const INVOICE_COL_COUNT = 20;
+const INVOICE_COL_COUNT = 21;
 
-/** 0-based money column indices in the combined sheet. */
-const MONEY_COLS = [11, 12, 13, 14, 15, 16, 17, 18, 19, 23, 26, 27];
+/** 0-based money column indices in the combined sheet (includes Sr No). */
+const MONEY_COLS = [12, 13, 14, 15, 16, 17, 18, 19, 20, 24, 27, 28];
 
 const PROCEDURE_COL_COUNT = 8;
 
 const SUMMARY_HEADERS = [
   'Sr No',
   'Invoice No',
+  'HCloud Invoice No',
   'Invoice Date',
   'Payment Date',
   'Created At',
@@ -91,7 +93,7 @@ const SUMMARY_HEADERS = [
 ];
 
 /** 0-based money column indices in the summary sheet. */
-const SUMMARY_MONEY_COLS = [12, 13, 14, 15, 16, 17, 18, 19, 20];
+const SUMMARY_MONEY_COLS = [13, 14, 15, 16, 17, 18, 19, 20, 21];
 
 function invoiceCreatedByName(invoice: any): string {
   return (
@@ -240,25 +242,26 @@ function invoiceMetaCells(invoice: any, effectiveInvoiceDate: (invoice: any) => 
   const cells: (string | number)[] = new Array(INVOICE_COL_COUNT).fill('');
 
   cells[0] = invoice.invoiceNo || '';
-  cells[1] = formatDateTime(effectiveInvoiceDate(invoice));
-  cells[2] = invoicePaymentDateLabel(invoice);
-  cells[3] = formatDateTime(invoice.createdAt);
-  cells[4] = formatDateTime(invoice.updatedAt || invoice.createdAt);
-  cells[5] = invoiceCreatedByName(invoice);
-  cells[6] = invoiceUpdatedByName(invoice);
-  cells[7] = invoice.patientId?.name || 'N/A';
-  cells[8] = invoice.doctorId?.name || 'N/A';
-  cells[9] = invoiceDepartmentName(invoice);
-  cells[10] = Number(invoice.subTotalBill) || 0;
-  cells[11] = Number(invoice.discountBill) || 0;
-  cells[12] = Number(invoice.taxBill) || 0;
-  cells[13] = getInvoiceListGrandTotal(invoice);
-  cells[14] = Number(invoice.totalPay) || 0;
-  cells[15] = invoiceDueAmount(invoice);
-  cells[16] = invoiceAdvanceAmount(invoice);
-  cells[17] = Number(doctorShare.toFixed(2));
-  cells[18] = Number(hospitalShare.toFixed(2));
-  cells[19] = invoicePaymentStatus(invoice);
+  cells[1] = String(invoice.hcloudInvoiceNo || '').trim();
+  cells[2] = formatDateTime(effectiveInvoiceDate(invoice));
+  cells[3] = invoicePaymentDateLabel(invoice);
+  cells[4] = formatDateTime(invoice.createdAt);
+  cells[5] = formatDateTime(invoice.updatedAt || invoice.createdAt);
+  cells[6] = invoiceCreatedByName(invoice);
+  cells[7] = invoiceUpdatedByName(invoice);
+  cells[8] = invoice.patientId?.name || 'N/A';
+  cells[9] = invoice.doctorId?.name || 'N/A';
+  cells[10] = invoiceDepartmentName(invoice);
+  cells[11] = Number(invoice.subTotalBill) || 0;
+  cells[12] = Number(invoice.discountBill) || 0;
+  cells[13] = Number(invoice.taxBill) || 0;
+  cells[14] = getInvoiceListGrandTotal(invoice);
+  cells[15] = Number(invoice.totalPay) || 0;
+  cells[16] = invoiceDueAmount(invoice);
+  cells[17] = invoiceAdvanceAmount(invoice);
+  cells[18] = Number(doctorShare.toFixed(2));
+  cells[19] = Number(hospitalShare.toFixed(2));
+  cells[20] = invoicePaymentStatus(invoice);
 
   return cells;
 }
@@ -278,6 +281,7 @@ function summaryInvoiceRow(
   return [
     srNo,
     invoice.invoiceNo || '',
+    String(invoice.hcloudInvoiceNo || '').trim(),
     formatDateTime(effectiveInvoiceDate(invoice)),
     invoicePaymentDateLabel(invoice),
     formatDateTime(invoice.createdAt),
@@ -331,15 +335,15 @@ function summaryTotalsRow(invoices: any[]): (string | number)[] {
 
   const row: (string | number)[] = new Array(SUMMARY_HEADERS.length).fill('');
   row[1] = 'TOTAL';
-  row[12] = Number(totals.subTotal.toFixed(2));
-  row[13] = Number(totals.discount.toFixed(2));
-  row[14] = Number(totals.tax.toFixed(2));
-  row[15] = Number(totals.total.toFixed(2));
-  row[16] = Number(totals.paid.toFixed(2));
-  row[17] = Number(totals.due.toFixed(2));
-  row[18] = Number(totals.advance.toFixed(2));
-  row[19] = Number(totals.doctorShare.toFixed(2));
-  row[20] = Number(totals.hospitalShare.toFixed(2));
+  row[13] = Number(totals.subTotal.toFixed(2));
+  row[14] = Number(totals.discount.toFixed(2));
+  row[15] = Number(totals.tax.toFixed(2));
+  row[16] = Number(totals.total.toFixed(2));
+  row[17] = Number(totals.paid.toFixed(2));
+  row[18] = Number(totals.due.toFixed(2));
+  row[19] = Number(totals.advance.toFixed(2));
+  row[20] = Number(totals.doctorShare.toFixed(2));
+  row[21] = Number(totals.hospitalShare.toFixed(2));
   return row;
 }
 

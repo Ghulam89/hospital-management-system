@@ -47,7 +47,8 @@ const Admin = () => {
   const [selectedRowKeys, setSelectedRowKeys] = useState([]);
   const [users, setUsers] = useState([]);
   const [currentPage, setCurrentPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
+  const [totalCount, setTotalCount] = useState(0);
+  const pageSize = 10;
   const navigate = useNavigate();
   const userData = getStoredUserForPermissions();
   const allowCreate = canCreateUsers(userData);
@@ -89,16 +90,21 @@ const Admin = () => {
   const fetchUsersData = (page) => {
     axios
       .get(`${Base_url}/apis/user/get`, {
-        params: { page, role: 'administrator', ...buildAxiosBranchScopedParams() },
+        params: {
+          page,
+          limit: pageSize,
+          role: 'administrator',
+          ...buildAxiosBranchScopedParams(),
+        },
       })
       .then((res) => {
         const rows = Array.isArray(res.data?.data) ? res.data.data : [];
         setUsers(rows);
-        setTotalPages(res.data?.totalPages ?? 1);
+        setTotalCount(Number(res.data?.count) || 0);
       })
       .catch(() => {
         setUsers([]);
-        setTotalPages(1);
+        setTotalCount(0);
       });
   };
 
@@ -107,7 +113,8 @@ const Admin = () => {
   }, [currentPage, branchEpoch]);
 
   const handleTableChange = (pagination) => {
-    setCurrentPage(pagination.current);
+    const next = pagination?.current;
+    setCurrentPage(typeof next === 'number' && !Number.isNaN(next) ? next : 1);
   };
 
   const handleEdit = (record) => {
@@ -175,7 +182,8 @@ const Admin = () => {
         rowSelection={rowSelection}
         columns={columns(handleDelete, handleEdit, allowEdit, allowDelete)}
         dataSource={users}
-        pagination={{ current: currentPage, pageSize: 10, total: totalPages * 10 }}
+        rowKey="_id"
+        pagination={{ current: currentPage, pageSize, total: totalCount }}
         onChange={handleTableChange}
       />
     </div>

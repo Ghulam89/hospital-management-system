@@ -20,7 +20,6 @@ const {
   posAllItemQtyOrLinesChanged,
   posReturnDataChanged,
 } = require("../utils/posClosingAndBackdate");
-const { trustedNow } = require("../utils/trustedNow");
 
 const escapeRegex = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -270,7 +269,7 @@ const addpharmPos = async (req, res) => {
         try {
           const payload = assignBranchIdForCreate(req, { ...req.body, invoiceNumber });
           if (createReturnOnly) {
-            payload.createdAt = trustedNow();
+            payload.createdAt = new Date();
           } else if (!payload.createdAt) {
             if (Array.isArray(payload.payment) && payload.payment.length > 0 && payload.payment[0].payDate) {
               payload.createdAt = new Date(payload.payment[0].payDate);
@@ -304,7 +303,7 @@ const addpharmPos = async (req, res) => {
       // If invoiceNumber provided, still attempt create directly and let unique index enforce
       const dataPayload = assignBranchIdForCreate(req, { ...req.body });
       if (createReturnOnly) {
-        dataPayload.createdAt = trustedNow();
+        dataPayload.createdAt = new Date();
       } else if (!dataPayload.createdAt) {
         if (Array.isArray(dataPayload.payment) && dataPayload.payment.length > 0 && dataPayload.payment[0].payDate) {
           dataPayload.createdAt = new Date(dataPayload.payment[0].payDate);
@@ -960,7 +959,7 @@ const addPatientPosLedgerPayment = async (req, res) => {
     const cleanedPayments = incoming
       .map((p) => ({
         method: p?.method || "",
-        payDate: p?.payDate ? new Date(p.payDate) : trustedNow(),
+        payDate: p?.payDate ? new Date(p.payDate) : new Date(),
         paid: Number(p?.paid) || 0,
         reference: p?.reference || "",
         chequeNo: p?.chequeNo || "",
@@ -1229,7 +1228,7 @@ const addPatientPosInvoicePayment = async (req, res) => {
     const cleanedPayments = incoming
       .map((p) => ({
         method: p?.method || "",
-        payDate: p?.payDate ? new Date(p.payDate) : trustedNow(),
+        payDate: p?.payDate ? new Date(p.payDate) : new Date(),
         paid: Number(p?.paid) || 0,
         reference: p?.reference || "",
         chequeNo: p?.chequeNo || "",

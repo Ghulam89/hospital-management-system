@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 import axios from 'axios';
 import { Base_url } from '../../utils/Base_url';
@@ -27,7 +27,6 @@ import {
   InstallmentAmount,
   parseInstallmentAmountInput,
 } from './paymentInstallmentUtils';
-import { getStoredUserForPermissions, hasAnyPermission } from '../../utils/permissions';
 import {
   formatProcedureRefundMoney,
   hasProcedureRefundOnLine,
@@ -261,12 +260,6 @@ type InvoiceData = {
   status: string;
 };
 
-function localTodayYmd(): string {
-  const d = new Date();
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
-}
-
 export default function InvoiceUpdate() {
   const { id, patientId } = useParams();
   const navigate = useNavigate();
@@ -291,9 +284,8 @@ export default function InvoiceUpdate() {
   const [paymentStatus, setPaymentStatus] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const permUser = useMemo(() => getStoredUserForPermissions(), []);
-  const canInvoiceBackdate = hasAnyPermission(permUser, 'invoiceBackdate');
-  const invoiceDateMin = canInvoiceBackdate ? undefined : localTodayYmd();
+  /** Past invoice dates allowed for all editors (matches backend — no separate backdate lock). */
+  const invoiceDateMin = undefined;
   
   // Refund modal state
   const [refundModalOpen, setRefundModalOpen] = useState(false);

@@ -238,6 +238,7 @@ const Edit_accountant = () => {
                   <BranchSelectField value={branchId} onChange={setBranchId} />
                   <UserRoleSelectField
                     screen="staff"
+                    branchId={branchId}
                     value={roleKey}
                     onChange={setRoleKey}
                   />

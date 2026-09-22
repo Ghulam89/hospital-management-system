@@ -68,7 +68,7 @@ export function getUserRoleSlug(user: StoredUser): string {
   return normalizeRole(user);
 }
 
-/** Legacy branch login slugs that may manage standard staff user lists (not Admin list unless superadmin). */
+/** Legacy / custom branch admin slugs that may manage standard staff user lists. */
 export function isBranchStaffAdminSlug(user: StoredUser): boolean {
   if (!user) return false;
   const r = normalizeRole(user);
@@ -76,14 +76,21 @@ export function isBranchStaffAdminSlug(user: StoredUser): boolean {
     r === 'admin' ||
     r === 'administrator' ||
     r === 'branchadmin' ||
-    r === 'branch_admin'
+    r === 'branch_admin' ||
+    r.startsWith('administrator_') ||
+    r.startsWith('admin_')
   );
 }
 
-/** Only superadmin may open the Users → Admin tab (branch `admin` / others must not manage admin accounts here). */
+/** Superadmin + branch admins may open Users → Admin (branch users only see their branch’s admins). */
 export function canSeeUsersAdminSubtab(user: StoredUser): boolean {
   if (!user) return false;
-  return normalizeRole(user) === 'superadmin';
+  const r = normalizeRole(user);
+  if (r === 'superadmin') return true;
+  if (isBranchStaffAdminSlug(user)) return true;
+  /** Custom HQ-style keys scoped to a branch, e.g. administrator_dha */
+  if (r.startsWith('administrator_') || r.startsWith('admin_')) return true;
+  return false;
 }
 
 /**

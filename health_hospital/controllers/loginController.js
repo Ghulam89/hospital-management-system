@@ -1,6 +1,5 @@
 const User = require('../models/userModel');
 const { refreshUserTabsFromRole } = require('../utils/syncUserTabsFromRole');
-const { trustedNow } = require('../utils/trustedNow');
 const jwt = require('jsonwebtoken');
 
 const loginuser = async (req, res) => {
@@ -17,7 +16,7 @@ const loginuser = async (req, res) => {
       if (req.body.password === userData.password) {
         const prevCount = parseInt(String(userData?.loginCount ?? '0'), 10);
         const count = Number.isFinite(prevCount) ? prevCount + 1 : 1;
-        const now = trustedNow();
+        const now = new Date();
 
         const updateduser = await User.findByIdAndUpdate(
           userData?._id,

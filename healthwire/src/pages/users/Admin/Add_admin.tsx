@@ -27,6 +27,14 @@ const AddAdmin = () => {
   const currentRole = String(currentUser?.role || '')
     .toLowerCase()
     .replace(/\s+/g, '');
+  const isSuperAdmin = currentRole === 'superadmin';
+  const isBranchAdmin =
+    currentRole === 'administrator' ||
+    currentRole === 'admin' ||
+    currentRole === 'branchadmin' ||
+    currentRole === 'branch_admin' ||
+    currentRole.startsWith('administrator_') ||
+    currentRole.startsWith('admin_');
 
   useEffect(() => {
     const existingBranchId = currentUser?.branchId?._id || currentUser?.branchId;
@@ -34,7 +42,7 @@ const AddAdmin = () => {
       setBranchId(String(existingBranchId));
     }
 
-    if (currentRole !== 'superadmin') return;
+    if (!isSuperAdmin) return;
 
     const token = localStorage.getItem('userToken') || '';
     axios
@@ -43,7 +51,7 @@ const AddAdmin = () => {
       })
       .then((res) => setBranches(res.data?.data || []))
       .catch(() => setBranches([]));
-  }, [currentRole, currentUser]);
+  }, [isSuperAdmin, currentUser]);
 
   const handleGenderChange = (gender) => {
     setGender(gender);
@@ -91,8 +99,8 @@ const AddAdmin = () => {
       else if(!state.shift){
         toast("Must enter shift!") 
       }
-      else if(currentRole !== 'superadmin'){
-        toast.error("Only Super Admin can create admin")
+      else if(!isSuperAdmin && !isBranchAdmin){
+        toast.error("Only Super Admin or Branch Admin can create admin")
       }
       else if(!branchId){
         toast("Please select branch") 
@@ -278,19 +286,30 @@ const AddAdmin = () => {
                       value={branchId}
                       onChange={(e) => setBranchId(e.target.value)}
                       className="w-full rounded border-[1.5px] border-stroke bg-transparent py-3 px-5 text-black outline-none transition focus:border-primary active:border-primary disabled:cursor-default disabled:bg-whiter dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
-                      disabled={currentRole !== 'superadmin'}
+                      disabled={!isSuperAdmin}
                     >
                       <option value="">Select Branch</option>
+                      {!isSuperAdmin && branchId ? (
+                        <option value={branchId}>
+                          {currentUser?.branchId?.name || 'Your branch'}
+                        </option>
+                      ) : null}
                       {branches.map((b) => (
                         <option key={b._id} value={b._id}>
                           {b.name}
                         </option>
                       ))}
                     </select>
+                    {!isSuperAdmin ? (
+                      <p className="mt-1 text-xs text-bodydark2">
+                        Branch admins can only create admins for their own branch.
+                      </p>
+                    ) : null}
                   </div>
 
                   <UserRoleSelectField
                     screen="administrator"
+                    branchId={branchId}
                     value={roleKey}
                     onChange={setRoleKey}
                     preferCustomDefault

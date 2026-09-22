@@ -10,6 +10,7 @@ import Swal from 'sweetalert2';
 import { useNavigate } from 'react-router-dom';
 import TableColumnCustomize from '../../../components/TableColumnCustomize';
 import { useTableColumnPrefs } from '../../../hooks/useTableColumnPrefs';
+import { useBranchScopeEpoch } from '../../../context/BranchScopeEpochContext';
 
 const { Search } = Input;
 const { RangePicker } = DatePicker;
@@ -87,6 +88,7 @@ interface StockTransaction {
 
 const PharmacyReports: React.FC = () => {
   const navigate = useNavigate();
+  const branchEpoch = useBranchScopeEpoch();
   const [activeTab, setActiveTab] = useState('pos-sales');
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -195,6 +197,7 @@ const PharmacyReports: React.FC = () => {
     posMinAmount,
     posMaxAmount,
     posDiscountPercent,
+    branchEpoch,
   ]);
 
   // Fetch transactions when filters/pagination change
@@ -204,7 +207,7 @@ const PharmacyReports: React.FC = () => {
     } else if (activeTab === 'stock-purchases') {
       fetchStockTransactions();
     }
-  }, [activeTab, currentPage, searchTerm, dateRange, paymentDateRange, posPaymentMethod, posStatus, posPatientName, posPatientMr, posDoctorName, posMinAmount, posMaxAmount, posDiscountPercent]);
+  }, [activeTab, currentPage, searchTerm, dateRange, paymentDateRange, posPaymentMethod, posStatus, posPatientName, posPatientMr, posDoctorName, posMinAmount, posMaxAmount, posDiscountPercent, branchEpoch]);
 
   const buildPOSListFilterParams = () => {
     const params: Record<string, string> = {};

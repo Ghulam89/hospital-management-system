@@ -84,18 +84,17 @@ function filterRolesHiddenFromBranchAdmin(req, rows) {
   return rows.filter((r) => !isElevatedRoleHiddenFromBranchViewer(r));
 }
 
-/** Branch users: branch-owned roles only (`createdBySuperAdmin !== true`) plus global system rows.
- *  HQ-authored branch templates (`createdBySuperAdmin: true`) are Super Admin-only in list/API.
- */
+/** Branch users: every role for their branch (incl. Super Admin–authored templates) + global system rows. */
 async function rolesFilterForUser(req) {
   if (isSuperAdmin(req.user)) return {};
   const bid = await resolveBranchIdForNonSuperAdmin(req);
   if (!bid) return { branchId: null };
   return {
     $or: [
-      { branchId: bid, createdBySuperAdmin: { $ne: true } },
+      { branchId: bid },
       { isSystem: true, branchId: null },
-    ] };
+    ],
+  };
 }
 
 async function assertBranchRoleRead(req, roleDoc, res) {
@@ -109,12 +108,6 @@ async function assertBranchRoleRead(req, roleDoc, res) {
   }
   if (!roleDoc.branchId || String(roleDoc.branchId) !== String(bid)) {
     res.status(403).json({ status: 'fail', message: 'Forbidden' });
-    return false;
-  }
-  if (roleDoc.createdBySuperAdmin === true) {
-    res.status(403).json({
-      status: 'fail',
-      message: 'This role is managed by Super Admin and is not available to branch users' });
     return false;
   }
   return true;
@@ -136,12 +129,6 @@ async function assertBranchRoleMutate(req, roleDoc, res) {
     res.status(403).json({
       status: 'fail',
       message: 'You can only manage roles created for your branch' });
-    return false;
-  }
-  if (roleDoc.createdBySuperAdmin === true) {
-    res.status(403).json({
-      status: 'fail',
-      message: 'Only Super Admin can change roles created for your branch at HQ' });
     return false;
   }
   return true;

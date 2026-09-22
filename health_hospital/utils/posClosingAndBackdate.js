@@ -1,6 +1,5 @@
 const mongoose = require("mongoose");
 const StoreClosing = require("../models/storeClosingModel");
-const { trustedNow } = require("./trustedNow");
 
 function startOfLocalDay(d) {
   const x = new Date(d);
@@ -14,12 +13,12 @@ function addOneLocalDay(d) {
   return x;
 }
 
-/** True when `value` is strictly before today's calendar start (local), using internet time. */
+/** True when `value` is strictly before today's calendar start (local). */
 function isBeforeStartOfTodayLocal(value) {
   if (value == null || value === "") return false;
   const dt = new Date(value);
   if (Number.isNaN(dt.getTime())) return false;
-  return dt < startOfLocalDay(trustedNow());
+  return dt < startOfLocalDay(new Date());
 }
 
 /**
@@ -58,7 +57,7 @@ function getEffectivePosTimestamp(body, existingDoc) {
     return new Date(body.payment[0].payDate);
   }
   if (existingDoc && existingDoc.createdAt) return new Date(existingDoc.createdAt);
-  return trustedNow();
+  return new Date();
 }
 
 function normPharmItemId(line) {

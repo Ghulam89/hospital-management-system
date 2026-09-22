@@ -113,6 +113,7 @@ interface Payment {
 interface RawTransaction {
   _id: string;
   invoiceNo: string;
+  hcloudInvoiceNo?: string;
   createdAt: string;
   updatedAt?: string;
   invoiceDate?: string;
@@ -135,6 +136,7 @@ interface TransformedTransaction {
   key: string;
   _id: string;
   invoiceNo: string;
+  hcloudInvoiceNo: string;
   date: string;
   patientId: Patient;
   patientMR: string;
@@ -989,6 +991,7 @@ const [filters, setFilters] = useState<Filters>({
           key: transaction._id,
           _id: transaction._id,
           invoiceNo: transaction.invoiceNo,
+          hcloudInvoiceNo: String(transaction.hcloudInvoiceNo || '').trim(),
           date: effectiveInvoiceDate(transaction),
           patientId: transaction.patientId,
           patientMR: transaction.patientId?.mr || 'N/A',
@@ -1744,6 +1747,16 @@ const generatePdf = async (invoice) => {
       width: 120,
       fixed: 'left',
       sorter: (a, b) => String(a.invoiceNo || '').localeCompare(String(b.invoiceNo || '')),
+      sortDirections: ['ascend', 'descend'],
+    },
+    {
+      title: 'HCLOUD INVOICE NO',
+      dataIndex: 'hcloudInvoiceNo',
+      key: 'hcloudInvoiceNo',
+      width: 150,
+      render: (text: string) => text || '—',
+      sorter: (a, b) =>
+        String(a.hcloudInvoiceNo || '').localeCompare(String(b.hcloudInvoiceNo || '')),
       sortDirections: ['ascend', 'descend'],
     },
     {

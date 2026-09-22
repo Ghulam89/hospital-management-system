@@ -8,6 +8,22 @@ const {
 } = require("../utils/syncUserTabsFromRole");
 const { loadBranchIdFromUserDoc, pickValidBranchOidString } = require("../utils/branchScope");
 
+function toBranchOid(raw) {
+  if (raw == null || raw === "") return null;
+  if (raw instanceof mongoose.Types.ObjectId) return raw;
+  /** Populated branch doc — not BSON ObjectId (ObjectId._id === self in mongoose 8). */
+  if (
+    typeof raw === "object" &&
+    raw._id != null &&
+    !(raw instanceof mongoose.Types.ObjectId) &&
+    raw._bsontype !== "ObjectId"
+  ) {
+    raw = raw._id;
+  }
+  const s = pickValidBranchOidString(raw);
+  return s ? new mongoose.Types.ObjectId(s) : null;
+}
+
 const isSuperAdminRole = (role) => normalizeRole(role) === "superadmin";
 const isBranchAdminRole = (role) => {
   const r = normalizeRole(role);
@@ -193,10 +209,21 @@ async function buildScopedDoctorQuery(req) {
       String(req.query.allBranches || "").toLowerCase() === "true";
     const bidStr = allBranches ? null : pickValidBranchOidString(req.query.branchId);
     if (bidStr) {
-      andParts.push({ branchId: bidStr });
+      const oid = toBranchOid(bidStr);
+      andParts.push(oid ? { $or: [{ branchId: oid }, { branchId: bidStr }] } : { branchId: bidStr });
     }
   } else if (actorBranchId) {
-    andParts.push({ branchId: actorBranchId });
+    const oid = toBranchOid(actorBranchId);
+    const bidStr = pickValidBranchOidString(actorBranchId);
+    if (oid && bidStr) {
+      andParts.push({ $or: [{ branchId: oid }, { branchId: bidStr }] });
+    } else if (oid) {
+      andParts.push({ branchId: oid });
+    } else if (bidStr) {
+      andParts.push({ branchId: bidStr });
+    } else {
+      andParts.push({ branchId: actorBranchId });
+    }
   } else if (!isSuperAdminRole(actorRole)) {
     return null;
   }
@@ -222,6 +249,9 @@ async function buildScopedDoctorQuery(req) {
 const isWithinActorBranch = (actor, targetBranchId) => {
   if (!actor) return false;
   if (isSuperAdminRole(actor.role)) return true;
+  const a = toBranchOid(actor.branchId);
+  const t = toBranchOid(targetBranchId);
+  if (a && t) return String(a) === String(t);
   return String(actor.branchId || "") === String(targetBranchId || "");
 };
 
@@ -472,7 +502,9 @@ const getusers = async (req, res) => {
         if (rl === "nurse") {
           andParts.push({ role: /^nurse(_.*)?$/i });
         } else if (rl === "pharmacist") {
-          andParts.push({ role: /^pharmacist(_.*)?$/i });
+          andParts.push({
+            role: /^(pharmacist|sale|sales|pos)(_.*)?$/i,
+          });
         } else if (rl === "quality_control_manager") {
           andParts.push({ role: /^quality_control_manager(_.*)?$/i });
         } else if (rl === "accountant") {
@@ -499,16 +531,27 @@ const getusers = async (req, res) => {
     if (isSuperAdminRole(actorRole)) {
       const bidStr = pickValidBranchOidString(req.query.branchId);
       if (bidStr) {
+        const oid = toBranchOid(bidStr);
         andParts.push({
           $or: [
-            { branchId: bidStr },
+            ...(oid ? [{ branchId: oid }, { branchId: bidStr }] : [{ branchId: bidStr }]),
             { branchId: null },
             { branchId: { $exists: false } },
           ],
         });
       }
     } else if (actorBranchId) {
-      andParts.push({ branchId: actorBranchId });
+      const oid = toBranchOid(actorBranchId);
+      const bidStr = pickValidBranchOidString(actorBranchId);
+      if (oid && bidStr) {
+        andParts.push({ $or: [{ branchId: oid }, { branchId: bidStr }] });
+      } else if (oid) {
+        andParts.push({ branchId: oid });
+      } else if (bidStr) {
+        andParts.push({ branchId: bidStr });
+      } else {
+        andParts.push({ branchId: actorBranchId });
+      }
     } else if (!isSuperAdminRole(actorRole)) {
       return res.status(200).json({
         status: "ok",

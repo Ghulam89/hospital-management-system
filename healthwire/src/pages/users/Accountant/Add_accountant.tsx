@@ -240,6 +240,7 @@ const [roleKey, setRoleKey] = useState('accountant');
                   <BranchSelectField value={branchId} onChange={setBranchId} />
                   <UserRoleSelectField
                     screen="accountant"
+                    branchId={branchId}
                     value={roleKey}
                     onChange={setRoleKey}
                     preferCustomDefault

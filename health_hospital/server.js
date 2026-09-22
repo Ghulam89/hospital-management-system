@@ -100,7 +100,6 @@ app.use("/apis/login", loginRouter);
 app.use("/apis/storeClosing", storeClosingRouter);
 app.use("/apis/branch", branchRouter);
 app.use("/apis/role", roleRouter);
-app.use("/apis/time", require("./routes/timeRoutes.js"));
 
 
 

@@ -101,7 +101,7 @@ const Users = () => {
       ].filter((tab) => {
     if (canAccessAllUsersRoleTabs(userData)) return true;
 
-    /** HQ Admin accounts tab — superadmin only */
+    /** Admin accounts — superadmin (all) / branch admin (own branch via API) */
     if (tab.title === 'Admin') {
       return canSeeUsersAdminSubtab(userData);
     }

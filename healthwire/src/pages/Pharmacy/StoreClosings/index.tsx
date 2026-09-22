@@ -6,6 +6,7 @@ import axios from 'axios';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 import Swal from 'sweetalert2';
 import dayjs, { Dayjs } from 'dayjs';
+import { useBranchScopeEpoch } from '../../../context/BranchScopeEpochContext';
 
 const { Search } = Input;
 const { RangePicker } = DatePicker;
@@ -78,6 +79,7 @@ function getCurrentUserId(): string | null {
 }
 
 const StoreClosings = () => {
+  const branchEpoch = useBranchScopeEpoch();
   const [storeClosings, setStoreClosings] = useState<StoreClosing[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -100,7 +102,7 @@ const StoreClosings = () => {
 
   useEffect(() => {
     fetchStoreClosings();
-  }, [searchTerm, dateRange, currentPage]);
+  }, [searchTerm, dateRange, currentPage, branchEpoch]);
 
   const fetchStoreClosings = async () => {
     try {

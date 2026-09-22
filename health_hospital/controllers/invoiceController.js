@@ -1,8 +1,6 @@
 const { Types } = require("mongoose");
 const Invoice = require("../models/invoiceModel");
 const moment = require("moment");
-const { hasCapabilityKey } = require("../middleware/auth");
-const { isBeforeStartOfTodayLocal } = require("../utils/posClosingAndBackdate");
 const {
   assignBranchIdForCreate,
   mergeBranchScopedQuery,
@@ -23,19 +21,8 @@ const {
 } = require("../utils/invoiceProcedureRefund");
 const { computeClientBillFromItems } = require("../utils/invoiceBillTotals");
 
+/** Past invoice/payment dates are allowed for all authenticated invoice editors (data-entry). */
 function assertInvoiceBackdatesAllowed(req, res, dates) {
-  if (!req.user) return true;
-  const list = Array.isArray(dates) ? dates : [];
-  for (const dt of list) {
-    if (dt == null || dt === "") continue;
-    if (isBeforeStartOfTodayLocal(dt) && !hasCapabilityKey(req.user, "invoiceBackdate")) {
-      res.status(403).json({
-        status: "error",
-        message: "Backdating patient invoices requires the 'Backdate patient invoices' permission.",
-      });
-      return false;
-    }
-  }
   return true;
 }
 

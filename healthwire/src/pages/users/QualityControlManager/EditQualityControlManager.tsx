@@ -203,6 +203,7 @@ const EditQualityControlManager = () => {
                   <BranchSelectField value={branchId} onChange={setBranchId} />
                   <UserRoleSelectField
                     screen="quality_control_manager"
+                    branchId={branchId}
                     value={roleKey}
                     onChange={setRoleKey}
                   />

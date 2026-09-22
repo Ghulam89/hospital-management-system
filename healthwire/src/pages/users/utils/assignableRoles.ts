@@ -36,7 +36,17 @@ export function roleMatchesScreen(key: string, screen: UserRoleScreen): boolean 
     case 'nurse':
       return k === 'nurse' || k.startsWith('nurse_');
     case 'pharmacist':
-      return k === 'pharmacist' || k.startsWith('pharmacist_');
+      // Pharmacy POS / “sale” custom roles are assigned on the Pharmacist user screen
+      return (
+        k === 'pharmacist' ||
+        k.startsWith('pharmacist_') ||
+        k === 'sale' ||
+        k === 'sales' ||
+        k.startsWith('sale_') ||
+        k.startsWith('sales_') ||
+        k === 'pos' ||
+        k.startsWith('pos_')
+      );
     case 'quality_control_manager':
       return (
         k === 'quality_control_manager' || k.startsWith('quality_control_manager_')

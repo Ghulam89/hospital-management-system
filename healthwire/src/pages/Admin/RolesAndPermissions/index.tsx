@@ -97,7 +97,6 @@ const RolesAndPermissions = () => {
     if (isSuperAdmin) return roles;
     return roles.filter((r) => {
       if (r.isSystem) return false;
-      if (r.createdBySuperAdmin === true) return false;
       return !isElevatedRoleHiddenFromBranchClient(r);
     });
   }, [roles, isSuperAdmin]);
@@ -107,7 +106,7 @@ const RolesAndPermissions = () => {
     return roles.find((x) => x._id === sidebarRoleId);
   }, [sidebarRoleId, roles]);
 
-  /** Branch picker only lists branch-owned roles; Super Admin picks system/non-system excluding read-only elevated. */
+  /** Branch: own-branch roles editable (incl. HQ-seeded); system templates stay read-only. */
   const sidebarMatrixReadOnly = useMemo(() => {
     if (isSuperAdmin) return !!selectedSidebarRole?.isSystem;
     if (!selectedSidebarRole || selectedSidebarRole.isSystem) return true;
@@ -278,7 +277,7 @@ const RolesAndPermissions = () => {
               {!isSuperAdmin ? (
                 <p className="mt-1 text-xs text-bodydark2">
                   {
-                    'Only roles your branch added appear in the picker. The Administration row "Menu permissions & roles list" is Super Admin only. Sidebar access Super Admin assigns to HQ-only branch roles is changed from the Super Admin account.'
+                    'You can edit permissions for every role on your branch (including ones Super Admin created for this branch). The Administration row "Menu permissions & roles list" stays Super Admin only.'
                   }
                 </p>
               ) : null}

@@ -300,6 +300,7 @@ const Edit_admin = () => {
 
                   <UserRoleSelectField
                     screen="administrator"
+                    branchId={branchId}
                     value={roleKey}
                     onChange={setRoleKey}
                   />

@@ -507,6 +507,7 @@ const AddDoctor = () => {
                     <BranchMultiSelectField value={branchIds} onChange={setBranchIds} />
                     <UserRoleSelectField
                       screen="doctor"
+                    branchId={branchIds[0] || ''}
                       value={roleKey}
                       onChange={setRoleKey}
                       preferCustomDefault

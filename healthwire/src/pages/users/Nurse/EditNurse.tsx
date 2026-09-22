@@ -238,6 +238,7 @@ const EditNurse = () => {
                   <BranchSelectField value={branchId} onChange={setBranchId} />
                   <UserRoleSelectField
                     screen="nurse"
+                    branchId={branchId}
                     value={roleKey}
                     onChange={setRoleKey}
                   />

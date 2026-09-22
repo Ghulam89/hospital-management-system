@@ -1243,6 +1243,7 @@ const Invoice = () => {
           
           _id: invoice._id,
           invoiceNo: invoice.invoiceNo,
+          hcloudInvoiceNo: String(invoice.hcloudInvoiceNo || '').trim(),
           date: invoice.invoiceDate || invoice.createdAt,
           invoiceDate: invoice.invoiceDate || null,
           createdAt: invoice.createdAt,
@@ -1517,6 +1518,16 @@ const Invoice = () => {
       width: 120,
       fixed: 'left',
       sorter: (a, b) => String(a.invoiceNo || '').localeCompare(String(b.invoiceNo || '')),
+      sortDirections: ['ascend', 'descend'],
+    },
+    {
+      title: 'HCLOUD INVOICE NO',
+      dataIndex: 'hcloudInvoiceNo',
+      key: 'hcloudInvoiceNo',
+      width: 150,
+      render: (text: string) => text || '—',
+      sorter: (a, b) =>
+        String(a.hcloudInvoiceNo || '').localeCompare(String(b.hcloudInvoiceNo || '')),
       sortDirections: ['ascend', 'descend'],
     },
     {
@@ -1803,6 +1814,7 @@ const Invoice = () => {
       return [
         'srNo',
         'invoiceNo',
+        'hcloudInvoiceNo',
         'invoiceEffectiveDate',
         'patientMR',
         'patientName',

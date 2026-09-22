@@ -9,6 +9,7 @@ import { useNavigate } from 'react-router-dom';
 import { canMenuAction, getStoredUserForPermissions } from '../../../utils/permissions';
 import TableColumnCustomize from '../../../components/TableColumnCustomize';
 import { useTableColumnPrefs } from '../../../hooks/useTableColumnPrefs';
+import { useBranchScopeEpoch } from '../../../context/BranchScopeEpochContext';
 
 type PosInvoice = {
   _id: string;
@@ -60,6 +61,7 @@ const formatDate = (iso?: string) => {
 
 export default function BillsList() {
   const navigate = useNavigate();
+  const branchEpoch = useBranchScopeEpoch();
   const permUser = getStoredUserForPermissions();
   const canPosUpdate = canMenuAction(permUser, 'pharm_pos', 'update');
   const canPosDelete = canMenuAction(permUser, 'pharm_pos', 'delete');
@@ -212,11 +214,11 @@ export default function BillsList() {
 
   useEffect(() => {
     fetchList();
-  }, [params]);
+  }, [params, branchEpoch]);
 
   useEffect(() => {
     fetchSummary();
-  }, [summaryParams]);
+  }, [summaryParams, branchEpoch]);
 
   const openEdit = (inv: PosInvoice) => {
     setEditInvoice(inv);

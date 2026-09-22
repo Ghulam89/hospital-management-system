@@ -78,6 +78,13 @@ async function getScopedWardIds(req) {
 /** First valid Mongo ObjectId from duplicated query (`branchId=a&branchId=b`), comma string, or `{ _id }`. */
 function pickValidBranchOidString(raw) {
   if (raw == null || raw === '') return null;
+  /** Mongoose/BSON ObjectId exposes `_id` as itself — must not recurse into it. */
+  if (raw instanceof mongoose.Types.ObjectId) {
+    return String(raw);
+  }
+  if (typeof raw === 'object' && raw._bsontype === 'ObjectId') {
+    return String(raw);
+  }
   if (Array.isArray(raw)) {
     for (const item of raw) {
       const inner = pickValidBranchOidString(item);
@@ -186,12 +193,13 @@ async function mergeBranchScopedQuery(req) {
 
   const role = normalizeRole(req.user.role);
   if (role === 'superadmin' || role === 'super admin') {
-    const q = {};
     const bidStr = pickValidBranchOidString(req.query.branchId);
     if (bidStr) {
-      q.branchId = bidStr;
+      // Must be ObjectId — aggregates do not cast strings the way Model.find does.
+      const oid = toObjectIdMaybe(bidStr);
+      return oid ? { branchId: oid } : null;
     }
-    return Object.keys(q).length ? q : null;
+    return null;
   }
 
   const branchId = await resolveBranchIdForNonSuperAdmin(req);

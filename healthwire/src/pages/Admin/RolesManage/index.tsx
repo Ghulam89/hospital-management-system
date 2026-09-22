@@ -303,15 +303,17 @@ const RolesManage = () => {
       title: 'Actions',
       key: 'actions',
       width: isSuperAdmin ? 100 : 64,
-      render: (_, r) => (
+      render: (_, r) => {
+        const editDisabled = !!r.isSystem;
+        return (
         <div className="flex items-center gap-3">
           <button
             type="button"
-            title="Edit role"
-            disabled={!!r.isSystem}
+            title={editDisabled ? 'System role — cannot edit' : 'Edit role'}
+            disabled={editDisabled}
             onClick={() => openEdit(r)}
             className={`inline-flex rounded p-1 transition ${
-              r.isSystem
+              editDisabled
                 ? 'cursor-not-allowed opacity-35'
                 : 'cursor-pointer text-primary hover:bg-primary/10 dark:hover:bg-primary/15'
             }`}
@@ -334,7 +336,8 @@ const RolesManage = () => {
             </button>
           ) : null}
         </div>
-      ),
+        );
+      },
     },
   ];
 
@@ -435,11 +438,17 @@ const RolesManage = () => {
                 className={`${INPUT_CLASS} font-mono text-sm`}
                 value={createForm.key}
                 onChange={(e) => setCreateForm((f) => ({ ...f, key: e.target.value }))}
-                placeholder="e.g. senior_pharmacist"
+                placeholder="e.g. pharmacist_sale"
               />
               <p className="mt-1.5 text-xs text-bodydark2">
-                Lowercase letters, numbers, underscore (<span className="font-mono">_</span>), or hyphen (
-                <span className="font-mono">-</span>).
+                Lowercase key used when assigning users. Prefix by user type so it appears on
+                that screen:{' '}
+                <span className="font-mono">pharmacist_sale</span>,{' '}
+                <span className="font-mono">nurse_opd</span>,{' '}
+                <span className="font-mono">staff_reception</span>,{' '}
+                <span className="font-mono">accountant_billing</span>. Pharmacy sale roles also
+                accept keys <span className="font-mono">sale</span> /{' '}
+                <span className="font-mono">sales</span> under Users → Pharmacist.
               </p>
             </div>
             <div className="w-full sm:col-span-2">

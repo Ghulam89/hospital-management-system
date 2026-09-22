@@ -203,6 +203,7 @@ const EditPharmacist = () => {
                   <BranchSelectField value={branchId} onChange={setBranchId} />
                   <UserRoleSelectField
                     screen="pharmacist"
+                    branchId={branchId}
                     value={roleKey}
                     onChange={setRoleKey}
                   />
