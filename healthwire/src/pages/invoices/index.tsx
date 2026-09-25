@@ -924,7 +924,7 @@ const Invoice = () => {
     const payments = paymentRows
       .map((p) => ({
         method: p.method,
-        paid: Number(p.paid) || 0,
+        paid: Number(p.paid),
         payDate: (() => {
           const v = p.payDate;
           if (!v) return v;
@@ -946,10 +946,11 @@ const Invoice = () => {
         chequeDate: p.chequeDate || undefined,
         notes: p.notes,
       }))
-      .filter((p) => p.paid > 0);
+      // Allow 0 amount entries for data entry (reject only negative / invalid).
+      .filter((p) => Number.isFinite(p.paid) && p.paid >= 0);
 
     if (payments.length === 0) {
-      message.error('Enter at least one payment amount');
+      message.error('Enter at least one payment row (0 amount allowed)');
       return;
     }
 

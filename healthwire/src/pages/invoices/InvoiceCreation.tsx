@@ -1017,10 +1017,10 @@ export default function InvoiceCreation() {
 
   const calculateInvoiceLevelDiscount = () => 0;
 
+  /** Split total invoice discount across all selected procedure rows (dated bill + undated advance). */
   const applyTotalDiscountToProcedureLines = (discountVal: number, discountType: number) => {
     const eligible = procedures.filter(
       (p) =>
-        isProcDated(p) &&
         String(p.procedureId || '').trim() &&
         !isProcedureLineEffectivelyFree(p, getBundleForProcedureRow(p.id)),
     );
@@ -1749,13 +1749,15 @@ export default function InvoiceCreation() {
                         type="number"
                         className="min-w-[80px] rounded border-[1.5px] border-stroke bg-transparent py-2 px-1 w-20 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                         value={item.rate}
-                        onChange={(e) =>
+                        placeholder="0"
+                        onChange={(e) => {
+                          const raw = e.target.value;
                           updateProcedure(
                             item.id,
                             'rate',
-                            parseFloat(e.target.value),
-                          )
-                        }
+                            raw === '' ? 0 : Number.isFinite(parseFloat(raw)) ? parseFloat(raw) : 0,
+                          );
+                        }}
                         onWheel={handleNumberInputWheel}
                         step="0.01"
                         min="0"
@@ -1764,16 +1766,18 @@ export default function InvoiceCreation() {
                     <td className="px-1 py-3 whitespace-nowrap">
                       <input
                         type="number"
-                        min="1"
+                        min="0"
                         className="min-w-[60px] rounded border-[1.5px] border-stroke bg-transparent py-2 w-20 px-1 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                         value={item.quantity}
-                        onChange={(e) =>
+                        placeholder="0"
+                        onChange={(e) => {
+                          const raw = e.target.value;
                           updateProcedure(
                             item.id,
                             'quantity',
-                            parseInt(e.target.value),
-                          )
-                        }
+                            raw === '' ? 0 : Number.isFinite(parseInt(raw, 10)) ? parseInt(raw, 10) : 0,
+                          );
+                        }}
                         onWheel={handleNumberInputWheel}
                       />
                     </td>
@@ -1781,7 +1785,7 @@ export default function InvoiceCreation() {
                       <input
                         type="number"
                         className="rounded border-[1.5px] bg-gray-2 border-stroke bg-transparent py-2 w-24 px-1 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
-                        value={item.amount.toFixed(2)}
+                        value={Number.isFinite(numField(item.amount)) ? numField(item.amount).toFixed(2) : '0.00'}
                         disabled
                       />
                     </td>
@@ -2127,11 +2131,6 @@ export default function InvoiceCreation() {
                             parseInstallmentAmountInput(e.target.value),
                           )
                         }
-                        onBlur={() => {
-                          if (item.amount === '') {
-                            updatePaymentInstallment(item.id, 'amount', 0);
-                          }
-                        }}
                         onWheel={handleNumberInputWheel}
                       />
                     </td>

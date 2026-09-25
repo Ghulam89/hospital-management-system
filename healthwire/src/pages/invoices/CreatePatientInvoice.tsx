@@ -17,6 +17,10 @@ import {
   InstallmentAmount,
   parseInstallmentAmountInput,
 } from './paymentInstallmentUtils';
+import {
+  resolveInvoiceDiscountAmount,
+  splitDiscountAcrossLines,
+} from './invoiceDiscountUtils';
 type Procedure = {
   _id: string;
   name: string;
@@ -533,11 +537,15 @@ const [isSubmitting, setIsSubmitting] = useState(false);
     procedures.filter((p) => !isProcDated(p)).reduce((sum, p) => sum + lineNetAfterDiscount(p), 0);
 
   const calculateSubTotal = () => {
-    return procedures.filter(isProcDated).reduce((sum, item) => sum + item.amount, 0);
+    return procedures
+      .filter((p) => String(p.procedureId || '').trim())
+      .reduce((sum, item) => sum + item.amount, 0);
   };
 
   const calculateProcedureDiscountTotal = () => {
-    return procedures.filter(isProcDated).reduce((sum, item) => {
+    return procedures
+      .filter((p) => String(p.procedureId || '').trim())
+      .reduce((sum, item) => {
       if (item.discountType === 0) {
         return sum + item.discount;
       } else {
@@ -546,23 +554,49 @@ const [isSubmitting, setIsSubmitting] = useState(false);
     }, 0);
   };
 
-  const calculateBillBeforeInvoiceDiscount = () =>
-    Math.max(0, calculateSubTotal() - calculateProcedureDiscountTotal());
-
-  const calculateInvoiceLevelDiscount = () => {
-    const base = calculateBillBeforeInvoiceDiscount();
-    if (base <= 0) return 0;
-    if (invoiceDiscountType === 1) {
-      return Math.min(base, Math.max(0, base * ((Number(invoiceDiscount) || 0) / 100)));
+  const calculateBillBeforeInvoiceDiscount = () => {
+    let procedureNet = 0;
+    for (const p of procedures) {
+      if (!isProcDated(p)) continue;
+      procedureNet += lineNetAfterDiscount(p);
     }
-    return Math.min(base, Math.max(0, Number(invoiceDiscount) || 0));
+    return procedureNet;
   };
 
-  const calculateTotalDiscount = () =>
-    calculateProcedureDiscountTotal() + calculateInvoiceLevelDiscount();
+  /** Discount lives on procedure lines after total-discount split (incl. undated advance). */
+  const applyTotalDiscountToProcedureLines = (discountVal: number, discountType: number) => {
+    const eligible = procedures.filter((p) => String(p.procedureId || '').trim());
+    if (eligible.length === 0) return;
+    const gross = eligible.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+    const totalDisc = resolveInvoiceDiscountAmount(gross, discountVal, discountType);
+    const splits = splitDiscountAcrossLines(eligible, totalDisc);
+    setProcedures((prev) =>
+      prev.map((p) => {
+        if (!eligible.some((row) => row.id === p.id)) return p;
+        return { ...p, discount: splits.get(p.id) ?? 0, discountType: 0 };
+      }),
+    );
+  };
 
-  const calculateGrandTotal = () =>
-    Math.max(0, calculateBillBeforeInvoiceDiscount() - calculateInvoiceLevelDiscount());
+  const handleInvoiceDiscountInputChange = (rawVal: number) => {
+    const val =
+      invoiceDiscountType === 1
+        ? Math.min(100, Math.max(0, rawVal))
+        : Math.max(0, rawVal);
+    setInvoiceDiscount(val);
+    applyTotalDiscountToProcedureLines(val, invoiceDiscountType);
+  };
+
+  const handleInvoiceDiscountTypeChange = (nextType: number) => {
+    let val = Number(invoiceDiscount) || 0;
+    if (nextType === 1 && val > 100) val = 100;
+    setInvoiceDiscountType(nextType);
+    applyTotalDiscountToProcedureLines(val, nextType);
+  };
+
+  const calculateTotalDiscount = () => calculateProcedureDiscountTotal();
+
+  const calculateGrandTotal = () => Math.max(0, calculateBillBeforeInvoiceDiscount());
 
   const calculateTotalPaid = () => {
     return paymentInstallments.reduce(
@@ -775,8 +809,8 @@ const [isSubmitting, setIsSubmitting] = useState(false);
       })),
       subTotalBill: calculateSubTotal(),
       discountBill: calculateTotalDiscount(),
-      invoiceDiscount: Number(invoiceDiscount) || 0,
-      invoiceDiscountType: Number(invoiceDiscountType) || 0,
+      invoiceDiscount: 0,
+      invoiceDiscountType: 0,
       taxBill: 0,
       totalBill: billingTotal,
       duePay: rawDue > 0 ? rawDue : 0,
@@ -1019,13 +1053,15 @@ const [isSubmitting, setIsSubmitting] = useState(false);
                         type="number"
                         className="min-w-[80px] rounded border-[1.5px] border-stroke bg-transparent py-2 px-1 w-20 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                         value={item.rate}
-                        onChange={(e) =>
+                        placeholder="0"
+                        onChange={(e) => {
+                          const raw = e.target.value;
                           updateProcedure(
                             item.id,
                             'rate',
-                            parseFloat(e.target.value),
-                          )
-                        }
+                            raw === '' ? 0 : Number.isFinite(parseFloat(raw)) ? parseFloat(raw) : 0,
+                          );
+                        }}
                         onWheel={handleNumberInputWheel}
                         step="0.01"
                         min="0"
@@ -1034,16 +1070,18 @@ const [isSubmitting, setIsSubmitting] = useState(false);
                     <td className="px-1 py-3 whitespace-nowrap">
                       <input
                         type="number"
-                        min="1"
+                        min="0"
                         className="min-w-[60px] rounded border-[1.5px] border-stroke bg-transparent py-2 w-20 px-1 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
                         value={item.quantity}
-                        onChange={(e) =>
+                        placeholder="0"
+                        onChange={(e) => {
+                          const raw = e.target.value;
                           updateProcedure(
                             item.id,
                             'quantity',
-                            parseInt(e.target.value),
-                          )
-                        }
+                            raw === '' ? 0 : Number.isFinite(parseInt(raw, 10)) ? parseInt(raw, 10) : 0,
+                          );
+                        }}
                         onWheel={handleNumberInputWheel}
                       />
                     </td>
@@ -1051,7 +1089,7 @@ const [isSubmitting, setIsSubmitting] = useState(false);
                       <input
                         type="number"
                         className="rounded border-[1.5px] bg-gray-2 border-stroke bg-transparent py-2 w-24 px-1 text-black outline-none transition focus:border-primary active:border-primary dark:border-form-strokedark dark:bg-form-input dark:text-white dark:focus:border-primary"
-                        value={item.amount.toFixed(2)}
+                        value={Number.isFinite(Number(item.amount)) ? Number(item.amount).toFixed(2) : '0.00'}
                         disabled
                       />
                     </td>
@@ -1269,11 +1307,6 @@ const [isSubmitting, setIsSubmitting] = useState(false);
                             parseInstallmentAmountInput(e.target.value),
                           )
                         }
-                        onBlur={() => {
-                          if (item.amount === '') {
-                            updatePaymentInstallment(item.id, 'amount', 0);
-                          }
-                        }}
                         onWheel={handleNumberInputWheel}
                       />
                     </td>
@@ -1353,36 +1386,19 @@ const [isSubmitting, setIsSubmitting] = useState(false);
                       placeholder="0"
                       onWheel={handleNumberInputWheel}
                       onChange={(e) =>
-                        setInvoiceDiscount(
-                          Math.max(
-                            0,
-                            invoiceDiscountType === 1
-                              ? Math.min(100, Number(e.target.value) || 0)
-                              : Number(e.target.value) || 0,
-                          ),
-                        )
+                        handleInvoiceDiscountInputChange(Number(e.target.value) || 0)
                       }
                       className="w-28 rounded border border-stroke px-2 py-1"
                     />
                     <select
                       value={invoiceDiscountType}
-                      onChange={(e) => {
-                        const nextType = Number(e.target.value) || 0;
-                        setInvoiceDiscountType(nextType);
-                        if (nextType === 1 && invoiceDiscount > 100) setInvoiceDiscount(100);
-                      }}
+                      onChange={(e) => handleInvoiceDiscountTypeChange(Number(e.target.value) || 0)}
                       className="rounded border border-stroke px-2 py-1"
                     >
                       <option value={0}>Amount</option>
                       <option value={1}>%</option>
                     </select>
                   </div>
-                </div>
-                <div className="mt-2 flex justify-between text-sm">
-                  <span>Applied Invoice Discount:</span>
-                  <span className="font-medium text-red-500">
-                    - Rs. {calculateInvoiceLevelDiscount().toFixed(2)}
-                  </span>
                 </div>
               </div>
               <div className="flex justify-between">

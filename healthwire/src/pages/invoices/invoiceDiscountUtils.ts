@@ -1,4 +1,4 @@
-/** Resolve invoice-level discount input to a single Rs amount (dated procedure gross subtotal). */
+/** Resolve invoice-level discount input to a single Rs amount (procedure gross subtotal). */
 export function resolveInvoiceDiscountAmount(
   grossSubtotal: number,
   discount: number,

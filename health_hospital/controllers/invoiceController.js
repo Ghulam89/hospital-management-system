@@ -876,14 +876,15 @@ const addInvoicePayments = async (req, res) => {
       .map((p) => ({
         method: p?.method || '',
         payDate: p?.payDate ? new Date(p.payDate) : new Date(),
-        paid: Number(p?.paid) || 0,
+        paid: Number(p?.paid),
         reference: p?.reference || '',
         chequeNo: p?.chequeNo || '',
         bankName: p?.bankName || '',
         chequeDate: p?.chequeDate ? new Date(p.chequeDate) : undefined,
         notes: p?.notes || '',
       }))
-      .filter((p) => p.paid > 0);
+      // Allow 0 amount entries for data entry (reject only negative / invalid).
+      .filter((p) => Number.isFinite(p.paid) && p.paid >= 0);
 
     if (cleanedPayments.length === 0) {
       return res.status(400).json({ status: "error", message: "No valid payments provided" });
