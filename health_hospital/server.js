@@ -61,6 +61,7 @@ const pharmPurchaseOrderRouter = require("./routes/pharmPurchaseOrderRoutes.js")
 const storeClosingRouter = require("./routes/storeClosingRoutes.js");
 const branchRouter = require("./routes/branchRoutes.js");
 const roleRouter = require("./routes/roleRoutes.js");
+const activityLogRouter = require("./routes/activityLogRoutes.js");
 app.use("/apis/pharmReturnStock", pharmReturnStockRouter);
 app.use("/apis/pharmPurchaseOrder", pharmPurchaseOrderRouter);
 app.use("/apis/pharmMissedSale", pharmMissedSaleRouter);
@@ -100,6 +101,7 @@ app.use("/apis/login", loginRouter);
 app.use("/apis/storeClosing", storeClosingRouter);
 app.use("/apis/branch", branchRouter);
 app.use("/apis/role", roleRouter);
+app.use("/apis/activity-log", activityLogRouter);
 
 
 

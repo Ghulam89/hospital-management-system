@@ -20,6 +20,7 @@ import AddBedDetails from '../pages/IndoorManagement/bedDetails/AddBedDetails';
 import HealthRecords from '../pages/healthRecords';
 import RoomDetails from '../pages/IndoorManagement/roomDetails';
 import Users from '../pages/users';
+import ActivityLogs from '../pages/users/ActivityLogs';
 import Add_accountant from '../pages/users/Accountant/Add_accountant';
 import Patients from '../pages/Patients';
 import { ToastContainer } from 'react-toastify';
@@ -917,6 +918,15 @@ function Routing() {
             <>
               <PageTitle title="Basic Chart | Hospital Management" />
               <Users />
+            </>
+          }
+        />
+        <Route
+          path="/admin/activity-logs"
+          element={
+            <>
+              <PageTitle title="Activity Logs | Holistic Care Hospital Management System" />
+              <ActivityLogs />
             </>
           }
         />

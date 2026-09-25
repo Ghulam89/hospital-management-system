@@ -1,6 +1,7 @@
 const User = require('../models/userModel');
 const { refreshUserTabsFromRole } = require('../utils/syncUserTabsFromRole');
 const jwt = require('jsonwebtoken');
+const ActivityLog = require('../models/activityLogModel');
 
 const loginuser = async (req, res) => {
   try {
@@ -28,6 +29,20 @@ const loginuser = async (req, res) => {
         const payload = refreshed || updateduser;
 
         const token = jwt.sign({ id: userData?._id }, 'health', { expiresIn: '30d' });
+
+        ActivityLog.create({
+          actorId: userData._id,
+          actorName: userData.name,
+          actorEmail: userData.email,
+          actorRole: userData.role,
+          branchId: userData.branchId || null,
+          module: 'Authentication',
+          action: 'Logged in',
+          method: 'POST',
+          path: '/apis/login/user',
+          statusCode: 200,
+          ipAddress: req.clientIp || req.ip || '',
+        }).catch(() => {});
 
         return res.status(200).json({
           status: 'ok',

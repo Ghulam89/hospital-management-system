@@ -12,6 +12,7 @@ import Nurse from './Nurse';
 import Pharmacist from './Pharmacist';
 import QualityControlManager from './QualityControlManager';
 import Staff from './Staff';
+import ActivityLogs from './ActivityLogs';
 import {
   canAccessAllUsersRoleTabs,
   canSeeUsersAdminSubtab,
@@ -98,7 +99,11 @@ const Users = () => {
         { title: 'Pharmacist', Content: Pharmacist },
         { title: 'Quality Control Manager', Content: QualityControlManager },
         { title: 'Staff', Content: Staff },
+        ...(getUserRoleSlug(userData) === 'superadmin'
+          ? [{ title: 'Activity Logs', Content: ActivityLogs }]
+          : []),
       ].filter((tab) => {
+    if (tab.title === 'Activity Logs') return true;
     if (canAccessAllUsersRoleTabs(userData)) return true;
 
     /** Admin accounts — superadmin (all) / branch admin (own branch via API) */
