@@ -23,6 +23,11 @@ const {
 
 const escapeRegex = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+function isReceptionRole(role) {
+  const value = String(role || '').toLowerCase().replace(/\s+/g, '');
+  return value === 'reception' || value === 'receptionist' || value.includes('reception');
+}
+
 async function assertPharmPosDateAndBackdate(req, res, payloadPreview, existingDoc) {
   if (!req.user) return true;
   const effective = getEffectivePosTimestamp(payloadPreview, existingDoc);
@@ -219,6 +224,11 @@ const buildPharmPosQuery = async (req) => {
     });
   }
 
+  // Each reception login is a separate POS/sale point within its branch.
+  if (req.user && isReceptionRole(req.user.role)) {
+    andConditions.push({ createdBy: req.user._id });
+  }
+
   // Branch scoping (mergeBranchScopedQuery) is sufficient for POS: many invoices are
   // walk-ins with patientId null — getScopedPatientIds would incorrectly hide them.
 
@@ -267,7 +277,11 @@ const addpharmPos = async (req, res) => {
           continue; // try next sequence
         }
         try {
-          const payload = assignBranchIdForCreate(req, { ...req.body, invoiceNumber });
+          const payload = assignBranchIdForCreate(req, {
+            ...req.body,
+            invoiceNumber,
+            ...(req.user?._id ? { createdBy: req.user._id } : {}),
+          });
           if (createReturnOnly) {
             payload.createdAt = new Date();
           } else if (!payload.createdAt) {
@@ -301,7 +315,10 @@ const addpharmPos = async (req, res) => {
       }
     } else {
       // If invoiceNumber provided, still attempt create directly and let unique index enforce
-      const dataPayload = assignBranchIdForCreate(req, { ...req.body });
+      const dataPayload = assignBranchIdForCreate(req, {
+        ...req.body,
+        ...(req.user?._id ? { createdBy: req.user._id } : {}),
+      });
       if (createReturnOnly) {
         dataPayload.createdAt = new Date();
       } else if (!dataPayload.createdAt) {
@@ -434,6 +451,11 @@ async function assertExistingPosDayUnlocked(req, res, posDoc) {
   return true;
 }
 
+function receptionOwnsPos(req, posDoc) {
+  if (!req.user || !isReceptionRole(req.user.role)) return true;
+  return String(posDoc?.createdBy || '') === String(req.user._id);
+}
+
 // 4. Update pharmPos
 const updatepharmPos = async (req, res) => {
   try {
@@ -443,6 +465,13 @@ const updatepharmPos = async (req, res) => {
       return res.status(404).json({
         status: "error",
         message: "POS transaction not found",
+      });
+    }
+
+    if (!receptionOwnsPos(req, existing)) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Reception users can only manage sales from their own sale point',
       });
     }
 
@@ -457,6 +486,7 @@ const updatepharmPos = async (req, res) => {
         cleanedBody[key] = req.body[key];
       }
     }
+    delete cleanedBody.createdBy;
 
     if (req.user && req.body && Object.prototype.hasOwnProperty.call(req.body, "allItem")) {
       const incomingItems = req.body.allItem;
@@ -537,6 +567,13 @@ const deletepharmPos = async (req, res) => {
       return res.status(404).json({
         status: "error",
         message: "POS transaction not found",
+      });
+    }
+
+    if (!receptionOwnsPos(req, pos)) {
+      return res.status(403).json({
+        status: 'error',
+        message: 'Reception users can only manage sales from their own sale point',
       });
     }
 

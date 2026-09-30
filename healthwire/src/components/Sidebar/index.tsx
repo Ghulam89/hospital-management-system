@@ -10,6 +10,7 @@ import {
   getStoredUserForPermissions,
   usesGranularMenuTabs,
 } from '../../utils/permissions';
+import { isSuperAdminRole } from '../../utils/branchScope';
 interface SidebarProps {
   sidebarOpen: boolean;
   setSidebarOpen: (arg: boolean) => void;
@@ -1636,6 +1637,32 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                     </defs>
                   </svg>
                   Users
+                </NavLink>
+              </li>
+              )}
+
+              {isSuperAdminRole(permUser?.role) && (
+              <li>
+                <NavLink
+                  to="/admin/activity-logs"
+                  className={`group relative flex items-center gap-2.5 rounded-sm py-2 px-4 font-medium text-bodydark1 duration-300 ease-in-out hover:bg-graydark dark:hover:bg-meta-4 ${
+                    pathname.includes('/admin/activity-logs') && 'bg-graydark dark:bg-meta-4'
+                  }`}
+                >
+                  <svg
+                    className="fill-current"
+                    width="18"
+                    height="19"
+                    viewBox="0 0 18 19"
+                    fill="none"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path
+                      d="M9 1.5a7.5 7.5 0 1 0 7.5 7.5A7.51 7.51 0 0 0 9 1.5Zm.75 3v4.19l2.7 1.56-.75 1.3-3.45-2V4.5h1.5Z"
+                      fill=""
+                    />
+                  </svg>
+                  Activity Logs
                 </NavLink>
               </li>
               )}

@@ -1,12 +1,13 @@
 import { useEffect, useState } from 'react';
 import { Table, Button, Input, DatePicker, Card, Statistic, Modal, Form, Space, message } from 'antd';
-import { SearchOutlined, PlusOutlined, EyeOutlined, DownloadOutlined, PrinterOutlined } from '@ant-design/icons';
+import { SearchOutlined, PlusOutlined, EyeOutlined, EditOutlined, DownloadOutlined, PrinterOutlined } from '@ant-design/icons';
 import { Base_url } from '../../../utils/Base_url';
 import axios from 'axios';
 import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 import Swal from 'sweetalert2';
 import dayjs, { Dayjs } from 'dayjs';
 import { useBranchScopeEpoch } from '../../../context/BranchScopeEpochContext';
+import { isSuperAdminRole } from '../../../utils/branchScope';
 
 const { Search } = Input;
 const { RangePicker } = DatePicker;
@@ -78,6 +79,16 @@ function getCurrentUserId(): string | null {
   }
 }
 
+function isCurrentUserSuperAdmin(): boolean {
+  try {
+    const stored = localStorage.getItem('userData');
+    const user = stored ? JSON.parse(stored) : null;
+    return isSuperAdminRole(user?.role);
+  } catch {
+    return false;
+  }
+}
+
 const StoreClosings = () => {
   const branchEpoch = useBranchScopeEpoch();
   const [storeClosings, setStoreClosings] = useState<StoreClosing[]>([]);
@@ -85,6 +96,7 @@ const StoreClosings = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [dateRange, setDateRange] = useState<[Dayjs | null, Dayjs | null]>([null, null]);
   const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const [form] = Form.useForm();
   const [totalSales, setTotalSales] = useState(0);
   const [totalExpenses, setTotalExpenses] = useState(0);
@@ -276,6 +288,14 @@ const StoreClosings = () => {
             onClick={() => handleView(record)}
             title="View Details"
           />
+          {isCurrentUserSuperAdmin() && (
+            <Button
+              type="text"
+              icon={<EditOutlined className="text-green-500" />}
+              onClick={() => handleEdit(record)}
+              title="Edit Store Closing"
+            />
+          )}
         </Space>
       ),
     },
@@ -318,11 +338,22 @@ const StoreClosings = () => {
   };
 
   const handleAddStoreClosing = async () => {
+    setEditingId(null);
     form.resetFields();
     const today = dayjs();
     form.setFieldsValue({ closingDate: today, cashDeposit: 0 });
     setIsModalOpen(true);
     await loadClosingPrep(today);
+  };
+
+  const handleEdit = (record: StoreClosing) => {
+    setEditingId(record._id);
+    form.setFieldsValue({
+      ...record,
+      closingDate: dayjs(record.closingDate),
+      closedBy: record.closedBy?._id,
+    });
+    setIsModalOpen(true);
   };
 
   const handleModalSubmit = async () => {
@@ -353,15 +384,18 @@ const StoreClosings = () => {
         cashDeposit: Number(values.cashDeposit) || 0,
         expectedCash,
         difference,
-        closedBy: userId,
         status: 'Closed',
+        ...(editingId ? {} : { closedBy: userId }),
       };
 
-      const response = await axios.post(`${Base_url}/apis/storeClosing/create`, data);
+      const response = editingId
+        ? await axios.put(`${Base_url}/apis/storeClosing/update/${editingId}`, data)
+        : await axios.post(`${Base_url}/apis/storeClosing/create`, data);
 
       if (response.data && response.data.status === 'ok') {
         message.success(response.data.message || 'Store closing recorded successfully');
         setIsModalOpen(false);
+        setEditingId(null);
         fetchStoreClosings();
       } else {
         throw new Error(response.data.error || 'Failed to save store closing');
@@ -470,14 +504,14 @@ const StoreClosings = () => {
               <div className="w-10 h-10 bg-primary rounded flex items-center justify-center text-white font-bold mr-3">
                 <PlusOutlined />
               </div>
-              <span className="text-lg font-semibold text-gray-800">Add Store Closing</span>
+              <span className="text-lg font-semibold text-gray-800">{editingId ? 'Edit Store Closing' : 'Add Store Closing'}</span>
             </div>
           }
           open={isModalOpen}
           onOk={handleModalSubmit}
           onCancel={() => setIsModalOpen(false)}
           width={820}
-          okText="Save Closing"
+          okText={editingId ? 'Update Closing' : 'Save Closing'}
           cancelText="Cancel"
           confirmLoading={prepLoading}
           okButtonProps={{ className: 'bg-primary hover:bg-opacity-90' }}

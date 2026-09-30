@@ -1,13 +1,13 @@
 const storeClosingController = require("../controllers/storeClosingController");
-const { optionalAuth } = require("../middleware/auth");
+const { auth, requireSuperAdmin } = require("../middleware/auth");
 
 const router = require("express").Router();
 
-router.get("/get", optionalAuth, storeClosingController.getStoreClosings);
-router.get("/prep", optionalAuth, storeClosingController.getStoreClosingPrep);
-router.post("/create", optionalAuth, storeClosingController.createStoreClosing);
-router.get("/get/:id", optionalAuth, storeClosingController.getStoreClosingById);
-router.put("/update/:id", optionalAuth, storeClosingController.updateStoreClosing);
-router.delete("/delete/:id", optionalAuth, storeClosingController.deleteStoreClosing);
+router.get("/get", auth, storeClosingController.getStoreClosings);
+router.get("/prep", auth, storeClosingController.getStoreClosingPrep);
+router.post("/create", auth, storeClosingController.createStoreClosing);
+router.get("/get/:id", auth, storeClosingController.getStoreClosingById);
+router.put("/update/:id", auth, requireSuperAdmin, storeClosingController.updateStoreClosing);
+router.delete("/delete/:id", auth, requireSuperAdmin, storeClosingController.deleteStoreClosing);
 
 module.exports = router;
