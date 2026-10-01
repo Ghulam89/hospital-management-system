@@ -1,20 +1,23 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
 import { Base_url } from '../utils/Base_url';
 import {
+  getUserDataFromStorage,
+  isSuperAdminRole,
+} from '../utils/branchScope';
+import {
+  assignableRolesForScreen,
   preferredNewRoleKey,
   type ApiRoleLite,
   type UserRoleScreen,
 } from '../pages/users/utils/assignableRoles';
 
 type RoleRow = ApiRoleLite & {
-  branchId?: string | { _id?: string } | null;
+  branchId?: string | { _id?: string; name?: string } | null;
 };
 
 type UserRoleSelectFieldProps = {
-  /** Fallback default key family if catalog is empty */
   screen: UserRoleScreen;
-  /** When set, only that branch’s roles + global (no-branch) templates are listed */
   branchId?: string;
   value: string;
   onChange: (key: string) => void;
@@ -38,32 +41,92 @@ function roleBranchId(r: RoleRow): string {
   return String(raw || '').trim();
 }
 
+function roleBranchName(r: RoleRow): string {
+  const raw = r?.branchId;
+  if (raw && typeof raw === 'object' && raw !== null && 'name' in raw) {
+    return String((raw as { name?: unknown }).name || '').trim();
+  }
+  return '';
+}
+
+function actorBranchIdFromStorage(): string {
+  const u = getUserDataFromStorage();
+  const raw = u?.branchId;
+  if (raw && typeof raw === 'object' && raw !== null && '_id' in (raw as object)) {
+    return String((raw as { _id?: unknown })._id || '').trim();
+  }
+  return String(raw || '').trim();
+}
+
 function normKey(raw: unknown): string {
   return String(raw || '')
     .trim()
     .toLowerCase()
-    .replace(/\s+/g, '_');
+    .replace(/\s+/g, '_')
+    .replace(/-/g, '_');
 }
 
+type CollectOpts = {
+  isSuperAdmin: boolean;
+  actorBranchId: string;
+};
+
 /**
- * All assignable roles for a branch:
- * - roles owned by that branchId
- * - global templates (no branchId)
- * If branchId is empty → full catalog (minus blocked keys).
+ * Super Admin → all roles (narrow to form branch when selected).
+ * Administrator → all roles for their own branch (no screen prefix filter).
  */
-function collectRoles(roles: RoleRow[], branchId: string): ApiRoleLite[] {
-  const bid = String(branchId || '').trim();
+function collectRoles(
+  roles: RoleRow[],
+  formBranchId: string,
+  screen: UserRoleScreen,
+  opts: CollectOpts,
+): ApiRoleLite[] {
+  const formBid = String(formBranchId || '').trim();
+  const actorBid = String(opts.actorBranchId || '').trim();
   const out: ApiRoleLite[] = [];
   const seen = new Set<string>();
 
   for (const r of roles || []) {
     const key = normKey(r?.key);
     if (!key || BLOCKED.has(key)) continue;
+
     const rb = roleBranchId(r);
-    if (bid && rb && rb !== bid) continue;
+    const bName = roleBranchName(r);
+
+    if (opts.isSuperAdmin) {
+      if (formBid && rb && rb !== formBid) continue;
+    } else {
+      // Administrator: only own branch (+ global / no-branch templates).
+      const scopeBid = formBid || actorBid;
+      if (scopeBid) {
+        if (rb && rb !== scopeBid) continue;
+      } else if (rb) {
+        continue;
+      }
+    }
+
     if (seen.has(key)) continue;
     seen.add(key);
-    out.push({ key, name: r.name || key, isSystem: r.isSystem });
+
+    let label = r.name || key;
+    if (opts.isSuperAdmin && !formBid && bName) {
+      label = `${label} (${bName})`;
+    } else if (opts.isSuperAdmin && !formBid && rb) {
+      label = `${label} (branch)`;
+    } else if (!rb) {
+      label = opts.isSuperAdmin ? `${label} (global)` : label;
+    }
+
+    out.push({ key, name: label, isSystem: r.isSystem });
+  }
+
+  // Always offer screen legacy keys so Admin/Doctor pages are never empty
+  // when the branch catalog is sparse.
+  for (const legacy of assignableRolesForScreen(out, screen)) {
+    const k = normKey(legacy.key);
+    if (!k || seen.has(k) || BLOCKED.has(k)) continue;
+    seen.add(k);
+    out.push({ key: k, name: legacy.name || k });
   }
 
   out.sort((a, b) =>
@@ -87,6 +150,15 @@ const UserRoleSelectField = ({
   const [loading, setLoading] = useState(true);
   const branchKey = String(branchId || '').trim();
 
+  const viewer = useMemo(() => {
+    const u = getUserDataFromStorage();
+    const superAdmin = isSuperAdminRole(u?.role);
+    return {
+      isSuperAdmin: superAdmin,
+      actorBranchId: superAdmin ? '' : actorBranchIdFromStorage(),
+    };
+  }, []);
+
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -95,7 +167,10 @@ const UserRoleSelectField = ({
       .then((res) => {
         if (cancelled) return;
         const rows: RoleRow[] = Array.isArray(res.data?.data) ? res.data.data : [];
-        let assignable = collectRoles(rows, branchKey);
+        let assignable = collectRoles(rows, branchKey, screen, {
+          isSuperAdmin: viewer.isSuperAdmin,
+          actorBranchId: viewer.actorBranchId,
+        });
 
         const current = normKey(value);
         if (current && !assignable.some((r) => r.key === current)) {
@@ -114,8 +189,9 @@ const UserRoleSelectField = ({
       .catch(() => {
         if (cancelled) return;
         const fallback = preferredNewRoleKey([], screen);
-        setOptions([{ key: fallback, name: fallback }]);
-        if (!value) onChange(fallback);
+        const legacy = assignableRolesForScreen([], screen);
+        setOptions(legacy.length ? legacy : [{ key: fallback, name: fallback }]);
+        if (!value) onChange(legacy[0]?.key || fallback);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -124,7 +200,7 @@ const UserRoleSelectField = ({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [screen, branchKey]);
+  }, [screen, branchKey, viewer.isSuperAdmin, viewer.actorBranchId]);
 
   return (
     <div className="w-full">
@@ -145,10 +221,11 @@ const UserRoleSelectField = ({
         ))}
       </select>
       <p className="mt-1.5 text-xs text-bodydark2">
-        {branchKey
-          ? 'All roles for this branch (and global templates) are listed.'
-          : 'Select a branch to narrow roles to that branch.'}{' '}
-        Permissions sync from Roles after save.
+        {viewer.isSuperAdmin
+          ? branchKey
+            ? 'Super Admin: all roles for the selected branch (and global templates).'
+            : 'Super Admin: all roles across branches. Select a branch to narrow.'
+          : 'Administrator: all roles for your branch are listed.'}
       </p>
     </div>
   );

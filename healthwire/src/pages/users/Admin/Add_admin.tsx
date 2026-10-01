@@ -34,7 +34,22 @@ const AddAdmin = () => {
     currentRole === 'branchadmin' ||
     currentRole === 'branch_admin' ||
     currentRole.startsWith('administrator_') ||
-    currentRole.startsWith('admin_');
+    currentRole.startsWith('admin_') ||
+    String(currentUser?.type || '')
+      .toLowerCase()
+      .replace(/\s+/g, '') === 'administrator' ||
+    String(currentUser?.type || '')
+      .toLowerCase()
+      .replace(/\s+/g, '') === 'admin' ||
+    (currentRole &&
+      currentRole !== 'superadmin' &&
+      !currentRole.startsWith('doctor') &&
+      !currentRole.startsWith('nurse') &&
+      !currentRole.startsWith('pharmacist') &&
+      !currentRole.startsWith('accountant') &&
+      !currentRole.startsWith('staff') &&
+      !currentRole.includes('reception') &&
+      !currentRole.startsWith('quality_control'));
 
   useEffect(() => {
     const existingBranchId = currentUser?.branchId?._id || currentUser?.branchId;
@@ -120,6 +135,7 @@ const AddAdmin = () => {
           password:state.password,
           shift:state.shift,
           role: roleKey.trim().toLowerCase(),
+          type: 'administrator',
           branchId,
     
     

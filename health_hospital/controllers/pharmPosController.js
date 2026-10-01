@@ -811,24 +811,20 @@ const getpharmPosSummary = async (req, res) => {
                   $convert: { input: '$advance', to: 'double', onError: 0, onNull: 0 },
                 },
                 // When line totals were never stored, bill total still equals paid + due − advance on the header.
+                // Keep signed value (return bills are negative) — do not clamp to 0 here.
                 _headerBillTotal: {
-                  $max: [
-                    0,
+                  $add: [
                     {
-                      $add: [
+                      $convert: { input: '$paid', to: 'double', onError: 0, onNull: 0 },
+                    },
+                    {
+                      $convert: { input: '$due', to: 'double', onError: 0, onNull: 0 },
+                    },
+                    {
+                      $multiply: [
+                        -1,
                         {
-                          $convert: { input: '$paid', to: 'double', onError: 0, onNull: 0 },
-                        },
-                        {
-                          $convert: { input: '$due', to: 'double', onError: 0, onNull: 0 },
-                        },
-                        {
-                          $multiply: [
-                            -1,
-                            {
-                              $convert: { input: '$advance', to: 'double', onError: 0, onNull: 0 },
-                            },
-                          ],
+                          $convert: { input: '$advance', to: 'double', onError: 0, onNull: 0 },
                         },
                       ],
                     },
@@ -839,13 +835,35 @@ const getpharmPosSummary = async (req, res) => {
             {
               $addFields: {
                 // Some legacy rows only have installments populated; use max of header paid vs installment sums.
+                // Do NOT $max away negative refunds (return bills) — that zeroed Total Paid incorrectly.
                 _paidEffective: {
-                  $max: ['$_paidN', '$_payFromInstallments'],
+                  $cond: [
+                    { $lt: ['$_paidN', 0] },
+                    '$_paidN',
+                    {
+                      $cond: [
+                        { $lt: ['$_payFromInstallments', 0] },
+                        '$_payFromInstallments',
+                        { $max: ['$_paidN', '$_payFromInstallments'] },
+                      ],
+                    },
+                  ],
                 },
                 // Use the larger of line sum vs header (paid+due−advance): legacy rows often under-sum lines
                 // but header totals are still correct — picking only lines when >0 understated totalDue.
+                // Allow negative bill totals for pure return invoices.
                 _linesForDue: {
-                  $max: ['$_linesTotal', '$_headerBillTotal'],
+                  $cond: [
+                    { $lt: ['$_linesTotal', 0] },
+                    '$_linesTotal',
+                    {
+                      $cond: [
+                        { $lt: ['$_headerBillTotal', 0] },
+                        '$_headerBillTotal',
+                        { $max: ['$_linesTotal', '$_headerBillTotal'] },
+                      ],
+                    },
+                  ],
                 },
               },
             },
@@ -895,41 +913,131 @@ const getpharmPosSummary = async (req, res) => {
               },
             },
           ],
-          // Line-level totals: all lines use parent bill createdAt (returns stay on sale date).
+          // Line-level totals: sale lines positive; return lines subtract refund.
           lineTotals: [
             { $match: altQuery },
             ...createdAtLineWindow,
             { $unwind: '$allItem' },
             {
-              $group: {
-                _id: null,
-                // Sum line totalAmount as stored: sale lines positive; pure return/refund lines
-                // negative; partial-return rows (same line) store net kept (positive).
-                totalSales: {
-                  $sum: {
-                    $ifNull: [
-                      {
-                        $convert: {
-                          input: '$allItem.totalAmount',
-                          to: 'double',
-                          onError: null,
-                          onNull: null,
-                        },
+              $addFields: {
+                _lineTotalRaw: {
+                  $ifNull: [
+                    {
+                      $convert: {
+                        input: '$allItem.totalAmount',
+                        to: 'double',
+                        onError: null,
+                        onNull: null,
                       },
-                      {
-                        $convert: {
-                          input: '$allItem.netAmount',
-                          to: 'double',
-                          onError: 0,
-                          onNull: 0,
-                        },
+                    },
+                    {
+                      $convert: {
+                        input: '$allItem.netAmount',
+                        to: 'double',
+                        onError: 0,
+                        onNull: 0,
                       },
-                    ],
+                    },
+                  ],
+                },
+                _lineRate: {
+                  $convert: { input: '$allItem.rate', to: 'double', onError: 0, onNull: 0 },
+                },
+                _lineReturnQty: {
+                  $convert: {
+                    input: '$allItem.returnQuantity',
+                    to: 'double',
+                    onError: 0,
+                    onNull: 0,
                   },
                 },
-              }
-            }
-          ]
+                _lineDisc: {
+                  $convert: {
+                    input: '$allItem.discount',
+                    to: 'double',
+                    onError: 0,
+                    onNull: 0,
+                  },
+                },
+                _lineIsReturn: {
+                  $or: [
+                    { $eq: ['$allItem.isReturn', true] },
+                    {
+                      $gt: [
+                        {
+                          $convert: {
+                            input: '$allItem.returnQuantity',
+                            to: 'double',
+                            onError: 0,
+                            onNull: 0,
+                          },
+                        },
+                        0,
+                      ],
+                    },
+                  ],
+                },
+              },
+            },
+            {
+              $addFields: {
+                // Return lines must reduce Total Sales. Legacy rows sometimes stored
+                // positive "kept" remainder — recompute refund as −(rate×returnQty−disc).
+                _lineSalesContribution: {
+                  $cond: [
+                    '$_lineIsReturn',
+                    {
+                      $cond: [
+                        { $lt: ['$_lineTotalRaw', 0] },
+                        '$_lineTotalRaw',
+                        {
+                          $multiply: [
+                            -1,
+                            {
+                              $max: [
+                                0,
+                                {
+                                  $subtract: [
+                                    {
+                                      $multiply: [
+                                        '$_lineRate',
+                                        {
+                                          $cond: [
+                                            { $gt: ['$_lineReturnQty', 0] },
+                                            '$_lineReturnQty',
+                                            {
+                                              $convert: {
+                                                input: '$allItem.quantity',
+                                                to: 'double',
+                                                onError: 0,
+                                                onNull: 0,
+                                              },
+                                            },
+                                          ],
+                                        },
+                                      ],
+                                    },
+                                    '$_lineDisc',
+                                  ],
+                                },
+                              ],
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                    '$_lineTotalRaw',
+                  ],
+                },
+              },
+            },
+            {
+              $group: {
+                _id: null,
+                totalSales: { $sum: '$_lineSalesContribution' },
+              },
+            },
+          ],
         }
       },
       {

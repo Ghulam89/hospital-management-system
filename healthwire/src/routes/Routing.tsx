@@ -97,7 +97,7 @@ import AddPurchaseOrder from '../pages/Pharmacy/PurchaseOrders/AddPurchaseOrder'
 import PurchaseOrderDetails from '../pages/Pharmacy/PurchaseOrders/PurchaseOrderDetails';
 import MissedSales from '../pages/Pharmacy/MissedSales';
 import ConsumeStocks from '../pages/Pharmacy/PharmacyConsumptions';
-import StoreClosings from '../pages/Pharmacy/StoreClosings/index';
+import Closings from '../pages/Closings';
 import PharmacyReports from '../pages/Pharmacy/PharmacyReports';
 import StockReturnAddPage from '../pages/Pharmacy/StockReturn/StockReturnAddPage';
 import ProductDetails from '../pages/Pharmacy/PharmacyItem/ProductDetails';
@@ -574,13 +574,18 @@ function Routing() {
         />
 
         <Route
-          path="/admin/pharmacy/store-closings"
+          path="/admin/closings"
           element={
             <>
-              <PageTitle title="Store Closings | Hospital Management" />
-              <StoreClosings />
+              <PageTitle title="Closings | Hospital Management" />
+              <Closings />
             </>
           }
+        />
+
+        <Route
+          path="/admin/pharmacy/store-closings"
+          element={<Navigate to="/admin/closings?tab=pharmacy" replace />}
         />
 
         <Route

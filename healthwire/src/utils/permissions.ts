@@ -71,14 +71,41 @@ export function getUserRoleSlug(user: StoredUser): string {
 /** Legacy / custom branch admin slugs that may manage standard staff user lists. */
 export function isBranchStaffAdminSlug(user: StoredUser): boolean {
   if (!user) return false;
+  const t = String((user as { type?: string }).type || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '');
+  if (t === 'administrator' || t === 'admin') return true;
   const r = normalizeRole(user);
-  return (
+  if (!r || r === 'superadmin') return false;
+  if (
     r === 'admin' ||
     r === 'administrator' ||
     r === 'branchadmin' ||
     r === 'branch_admin' ||
     r.startsWith('administrator_') ||
     r.startsWith('admin_')
+  ) {
+    return true;
+  }
+  // Dynamic custom Roles Manage keys (bariha_admin, dha_admin, …)
+  return !(
+    r === 'doctor' ||
+    r.startsWith('doctor_') ||
+    r === 'nurse' ||
+    r.startsWith('nurse_') ||
+    r === 'pharmacist' ||
+    r === 'sale' ||
+    r === 'sales' ||
+    r === 'pos' ||
+    r.startsWith('pharmacist_') ||
+    r === 'accountant' ||
+    r.startsWith('accountant_') ||
+    r === 'staff' ||
+    r.startsWith('staff_') ||
+    r.includes('reception') ||
+    r === 'quality_control_manager' ||
+    r.startsWith('quality_control_manager_')
   );
 }
 
@@ -88,8 +115,6 @@ export function canSeeUsersAdminSubtab(user: StoredUser): boolean {
   const r = normalizeRole(user);
   if (r === 'superadmin') return true;
   if (isBranchStaffAdminSlug(user)) return true;
-  /** Custom HQ-style keys scoped to a branch, e.g. administrator_dha */
-  if (r.startsWith('administrator_') || r.startsWith('admin_')) return true;
   return false;
 }
 

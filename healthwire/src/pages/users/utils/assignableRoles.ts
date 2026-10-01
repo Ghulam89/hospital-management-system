@@ -1,6 +1,7 @@
 /**
- * Roles that appear under each Users screen. User.role must match Role.key exactly
- * for Role.permissions → User.tabs sync (see syncUserTabsFromRole on the API).
+ * Roles that appear under each Users screen.
+ * Sync to Roles & Permissions happens only on exact Role.key === User.role
+ * (no admin↔administrator alias, no auto-create).
  */
 
 export type ApiRoleLite = {
@@ -24,7 +25,8 @@ function normKey(raw: unknown): string {
   return String(raw || '')
     .trim()
     .toLowerCase()
-    .replace(/\s+/g, '_');
+    .replace(/\s+/g, '_')
+    .replace(/-/g, '_');
 }
 
 export function roleMatchesScreen(key: string, screen: UserRoleScreen): boolean {
@@ -36,7 +38,6 @@ export function roleMatchesScreen(key: string, screen: UserRoleScreen): boolean 
     case 'nurse':
       return k === 'nurse' || k.startsWith('nurse_');
     case 'pharmacist':
-      // Pharmacy POS / “sale” custom roles are assigned on the Pharmacist user screen
       return (
         k === 'pharmacist' ||
         k.startsWith('pharmacist_') ||
@@ -63,11 +64,38 @@ export function roleMatchesScreen(key: string, screen: UserRoleScreen): boolean 
         k.includes('reception')
       );
     case 'administrator':
-      return (
+      // Admin screen: classic keys OR any custom Roles Manage key (not a staff screen family)
+      if (
         k === 'administrator' ||
         k === 'admin' ||
+        k === 'branchadmin' ||
+        k === 'branch_admin' ||
         k.startsWith('administrator_') ||
         k.startsWith('admin_')
+      ) {
+        return true;
+      }
+      return !(
+        k === 'doctor' ||
+        k.startsWith('doctor_') ||
+        k === 'nurse' ||
+        k.startsWith('nurse_') ||
+        k === 'pharmacist' ||
+        k === 'sale' ||
+        k === 'sales' ||
+        k === 'pos' ||
+        k.startsWith('pharmacist_') ||
+        k === 'accountant' ||
+        k.startsWith('accountant_') ||
+        k === 'staff' ||
+        k.startsWith('staff_') ||
+        k === 'reception' ||
+        k === 'receptionist' ||
+        k.includes('reception') ||
+        k === 'quality_control_manager' ||
+        k.startsWith('quality_control_manager_') ||
+        k === 'superadmin' ||
+        k === 'super_admin'
       );
     case 'doctor':
       return k === 'doctor' || k.startsWith('doctor_');
@@ -156,12 +184,20 @@ export function preferredNewRoleKey(
         x.key.startsWith('receptionist_') ||
         x.key.includes('reception'),
     );
-    if (receptionCustom && receptionCustom.key !== 'reception' && receptionCustom.key !== 'receptionist') {
+    if (
+      receptionCustom &&
+      receptionCustom.key !== 'reception' &&
+      receptionCustom.key !== 'receptionist'
+    ) {
       return receptionCustom.key;
     }
   }
   if (screen === 'administrator') {
-    const adminCustom = assignable.find((x) => x.key.startsWith('admin_'));
+    const adminCustom = assignable.find((x) => {
+      const k = String(x.key || '').toLowerCase();
+      if (!k || k === 'administrator' || k === 'admin') return false;
+      return roleMatchesScreen(k, 'administrator');
+    });
     if (adminCustom) return adminCustom.key;
   }
   return (

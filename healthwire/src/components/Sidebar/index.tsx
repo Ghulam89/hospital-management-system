@@ -817,6 +817,32 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
               </li>
               )}
 
+              {canSeeAnySidebarMenu(permUser, ['clinic_close', 'pharm_store_close']) && (
+              <li>
+                <NavLink
+                  to="/admin/closings"
+                  className={`group relative flex items-center gap-2.5 rounded-sm py-2 px-4 font-medium text-bodydark1 duration-300 ease-in-out hover:bg-graydark dark:hover:bg-meta-4 ${
+                    pathname.includes('/admin/closings') && 'bg-graydark dark:bg-meta-4'
+                  }`}
+                >
+                  <svg
+                    className="fill-current"
+                    width="18"
+                    height="19"
+                    viewBox="0 0 18 19"
+                    fill="none"
+                    xmlns="http://www.w3.org/2000/svg"
+                  >
+                    <path
+                      d="M15.75 2.25H2.25C1.42157 2.25 0.75 2.92157 0.75 3.75V15.75C0.75 16.5784 1.42157 17.25 2.25 17.25H15.75C16.5784 17.25 17.25 16.5784 17.25 15.75V3.75C17.25 2.92157 16.5784 2.25 15.75 2.25ZM2.25 3.75H15.75V5.25H2.25V3.75ZM2.25 15.75V6.75H15.75V15.75H2.25Z"
+                      fill=""
+                    />
+                  </svg>
+                  Closings
+                </NavLink>
+              </li>
+              )}
+
               {canSeeAnySidebarMenu(permUser, [
                 'pharm_items',
                 'pharm_stock',
@@ -1020,10 +1046,10 @@ const Sidebar = ({ sidebarOpen, setSidebarOpen }: SidebarProps) => {
                           {canSeeSidebarMenu(permUser, 'pharm_store_close') && (
                           <li>
                             <NavLink
-                              to="/admin/pharmacy/store-closings"
+                              to="/admin/closings?tab=pharmacy"
                               className={({ isActive }) =>
                                 'group relative flex items-center gap-2.5 rounded-md px-4 font-medium text-bodydark2 duration-300 ease-in-out hover:text-white ' +
-                                (isActive && '!text-white')
+                                ((isActive || pathname.includes('/admin/closings')) && '!text-white')
                               }
                             >
                                Store Closings

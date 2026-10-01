@@ -86,13 +86,7 @@ const Edit_admin = () => {
     e.preventDefault();
 
     const roleNorm = roleKey.trim().toLowerCase();
-    if (
-      currentRole === 'superadmin' &&
-      (roleNorm === 'administrator' ||
-        roleNorm === 'admin' ||
-        roleNorm.startsWith('administrator_') ||
-        roleNorm.startsWith('admin_'))
-    ) {
+    if (currentRole === 'superadmin' && roleNorm && roleNorm !== 'superadmin') {
       if (!branchId) {
         toast.error('Please select branch');
         return;
@@ -106,6 +100,7 @@ const Edit_admin = () => {
       email: String(state.email || '').trim() || String(user?.email || '').trim(),
       shift: String(state.shift || '').trim() || String(user?.shift || '').trim(),
       role: roleNorm,
+      type: 'administrator',
     };
     if (currentRole === 'superadmin' && branchId) {
       params.branchId = branchId;

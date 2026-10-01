@@ -459,10 +459,26 @@ const PharmacyReports: React.FC = () => {
         const items = Array.isArray(record.allItem) ? record.allItem : [];
         const total =
           items.length > 0
-            ? items.reduce((s: number, it: any) => s + (Number(it?.totalAmount) || 0), 0)
+            ? items.reduce((s: number, it: any) => {
+                const raw = Number(it?.totalAmount);
+                const isRet =
+                  Boolean(it?.isReturn) || (Number(it?.returnQuantity) || 0) > 0;
+                if (isRet) {
+                  // Legacy return lines sometimes stored positive "kept" — show refund as negative.
+                  if (Number.isFinite(raw) && raw < 0) return s + raw;
+                  const rate = Number(it?.rate) || 0;
+                  const rq =
+                    Number(it?.returnQuantity) ||
+                    (isRet ? Number(it?.quantity) || 0 : 0);
+                  const disc = Number(it?.discount) || 0;
+                  return s - Math.max(0, rate * rq - disc);
+                }
+                return s + (Number.isFinite(raw) ? raw : Number(it?.netAmount) || 0);
+              }, 0)
             : Number(record.paid || 0) + Number(record.due || 0) - Number((record as any).advance || 0);
+        const isNeg = total < 0;
         return (
-          <span className="font-semibold text-green-600">
+          <span className={`font-semibold ${isNeg ? 'text-red-600' : 'text-green-600'}`}>
             Rs. {total.toLocaleString()}
           </span>
         );
@@ -471,7 +487,21 @@ const PharmacyReports: React.FC = () => {
         const tot = (r: POSTransaction) => {
           const items = Array.isArray(r.allItem) ? r.allItem : [];
           if (items.length > 0) {
-            return items.reduce((s: number, it: any) => s + (Number(it?.totalAmount) || 0), 0);
+            return items.reduce((s: number, it: any) => {
+              const raw = Number(it?.totalAmount);
+              const isRet =
+                Boolean(it?.isReturn) || (Number(it?.returnQuantity) || 0) > 0;
+              if (isRet) {
+                if (Number.isFinite(raw) && raw < 0) return s + raw;
+                const rate = Number(it?.rate) || 0;
+                const rq =
+                  Number(it?.returnQuantity) ||
+                  (isRet ? Number(it?.quantity) || 0 : 0);
+                const disc = Number(it?.discount) || 0;
+                return s - Math.max(0, rate * rq - disc);
+              }
+              return s + (Number.isFinite(raw) ? raw : Number(it?.netAmount) || 0);
+            }, 0);
           }
           return Number(r.paid || 0) + Number(r.due || 0) - Number((r as any).advance || 0);
         };

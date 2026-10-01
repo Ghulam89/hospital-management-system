@@ -71,9 +71,12 @@ function isElevatedRoleNameRootReserved(root) {
   return root === 'admin' || root === 'administrator' || root === 'superadmin';
 }
 
-/** Roles branch admins must not see or edit (HQ / branch-administrator templates). */
+/** Roles branch admins must not see or edit: global HQ elevated templates only.
+ * Branch-scoped admin/administrator rows stay visible so user registration can assign them. */
 function isElevatedRoleHiddenFromBranchViewer(roleLike) {
   if (!roleLike) return false;
+  const hasBranch = roleLike.branchId != null && roleLike.branchId !== '';
+  if (hasBranch) return false;
   if (isElevatedRoleKey(roleLike.key)) return true;
   return isElevatedRoleNameRootReserved(elevatedRoleNameRoot(roleLike.name));
 }
@@ -84,7 +87,8 @@ function filterRolesHiddenFromBranchAdmin(req, rows) {
   return rows.filter((r) => !isElevatedRoleHiddenFromBranchViewer(r));
 }
 
-/** Branch users: every role for their branch (incl. Super Admin–authored templates) + global system rows. */
+/** Branch users: every role for their branch + global templates (system or not).
+ * Elevated global HQ keys (administrator/admin without branch) stay filtered out separately. */
 async function rolesFilterForUser(req) {
   if (isSuperAdmin(req.user)) return {};
   const bid = await resolveBranchIdForNonSuperAdmin(req);
@@ -92,7 +96,8 @@ async function rolesFilterForUser(req) {
   return {
     $or: [
       { branchId: bid },
-      { isSystem: true, branchId: null },
+      { branchId: null },
+      { branchId: { $exists: false } },
     ],
   };
 }
@@ -149,7 +154,11 @@ const getCatalog = async (req, res) => {
 const getRoles = async (req, res) => {
   try {
     const filter = await rolesFilterForUser(req);
-    const rows = await Role.find(filter).sort({ isSystem: -1, name: 1 }).lean().exec();
+    const rows = await Role.find(filter)
+      .populate('branchId', 'name')
+      .sort({ isSystem: -1, name: 1 })
+      .lean()
+      .exec();
     const data = filterRolesHiddenFromBranchAdmin(req, rows);
     return res.status(200).json({ status: 'ok', data });
   } catch (err) {
@@ -184,12 +193,6 @@ const createRole = async (req, res) => {
       return res.status(400).json({ status: 'fail', message: 'Role name is required' });
     }
 
-    if (!isSuperAdmin(req.user) && isElevatedRoleHiddenFromBranchViewer({ key, name })) {
-      return res.status(403).json({
-        status: 'fail',
-        message: 'This role name or key is reserved for super admin only' });
-    }
-
     if (!key || !/^[a-z0-9_-]+$/.test(key)) {
       return res
         .status(400)
@@ -206,6 +209,17 @@ const createRole = async (req, res) => {
           status: 'fail',
           message: 'Branch not assigned — only Super Admin can create global roles' });
       }
+    }
+
+    // Global elevated templates stay Super Admin-only; branch-scoped admin/administrator OK.
+    if (
+      !isSuperAdmin(req.user) &&
+      isElevatedRoleHiddenFromBranchViewer({ key, name, branchId })
+    ) {
+      return res.status(403).json({
+        status: 'fail',
+        message: 'This role name or key is reserved for super admin only',
+      });
     }
 
     /** Super Admin + branchId ⇒ HQ-only template; branch admins only list rows with explicit `false`. */

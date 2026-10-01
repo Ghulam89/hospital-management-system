@@ -26,7 +26,11 @@ function escapeRegExp(s) {
   return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Align keys with Role documents + common UI variants (spaces, hyphens). */
+/**
+ * Exact key variants only (spaces/hyphens). No admin↔administrator alias —
+ * registration role and Roles & Permissions must use the same key deliberately
+ * to avoid cross-role permission conflicts.
+ */
 function roleKeyCandidates(raw) {
   const s = String(raw || '').trim();
   if (!s) return [];
@@ -44,7 +48,7 @@ function roleKeyCandidates(raw) {
 
 /**
  * Resolve Role document for a user.role slug. Prefer branch-scoped row when `userBranchId` is set,
- * then global template (branchId null), so each branch can define the same key independently.
+ * then global template (branchId null). Exact key only — no auto-create, no aliases.
  */
 async function findRoleDocForLogin(rawRole, userBranchId) {
   for (const key of roleKeyCandidates(rawRole)) {
@@ -63,8 +67,8 @@ async function findRoleDocForLogin(rawRole, userBranchId) {
 }
 
 /**
- * Applies Role.permissions to User.tabs when user.role matches a custom Role row.
- * Persists so login/session payloads include mp.* keys for the SPA sidebar.
+ * Applies Role.permissions to User.tabs when user.role exactly matches a Role.key.
+ * Does not create Role rows or alias across admin/administrator.
  */
 async function refreshUserTabsFromRole(userDoc) {
   const uid = userDoc?._id || userDoc?.id;
@@ -80,7 +84,6 @@ async function refreshUserTabsFromRole(userDoc) {
 
   if (roleDoc.branchId) {
     const userBr = effectiveBranchId || userDoc.branchId;
-    /** No branch on user — never clear tabs here (would empty sidebar incorrectly). Skip until branch is resolved. */
     if (!branchOidMaybe(userBr)) {
       return userDoc;
     }
@@ -94,8 +97,7 @@ async function refreshUserTabsFromRole(userDoc) {
 }
 
 /**
- * After Role.permissions save, refresh User.tabs for every user whose slug matches `roleDoc.key`,
- * without requiring re-login or relying on flaky string branch compares.
+ * After Role.permissions save, refresh User.tabs for users whose role slug equals this Role.key.
  */
 async function propagateTabsToUsersMatchingRole(roleDoc) {
   if (!roleDoc || roleDoc.key == null) return 0;

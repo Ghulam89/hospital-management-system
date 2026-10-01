@@ -8,13 +8,51 @@ function isSuperAdmin(user) {
 }
 
 function isBranchAdmin(user) {
+  const t = String(user?.type || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, '');
+  if (t === 'administrator' || t === 'admin') return true;
+
   const r = normalizeRole(user?.role);
-  return (
+  if (!r) return false;
+  if (
     r === 'administrator' ||
     r === 'admin' ||
     r === 'branchadmin' ||
-    r === 'branch_admin'
-  );
+    r === 'branch_admin' ||
+    r.startsWith('administrator_') ||
+    r.startsWith('admin_')
+  ) {
+    return true;
+  }
+  // Custom Roles Manage keys (bariha_admin, dha_admin, …) — anything not a fixed staff screen
+  const staff =
+    r === 'doctor' ||
+    r.startsWith('doctor_') ||
+    r === 'nurse' ||
+    r.startsWith('nurse_') ||
+    r === 'pharmacist' ||
+    r === 'sale' ||
+    r === 'sales' ||
+    r === 'pos' ||
+    r.startsWith('pharmacist_') ||
+    r.startsWith('sale_') ||
+    r.startsWith('sales_') ||
+    r.startsWith('pos_') ||
+    r === 'accountant' ||
+    r.startsWith('accountant_') ||
+    r === 'staff' ||
+    r.startsWith('staff_') ||
+    r === 'reception' ||
+    r === 'receptionist' ||
+    r.startsWith('reception') ||
+    r.includes('reception') ||
+    r === 'quality_control_manager' ||
+    r.startsWith('quality_control_manager_') ||
+    r === 'superadmin' ||
+    r === 'super_admin';
+  return !staff;
 }
 
 /**

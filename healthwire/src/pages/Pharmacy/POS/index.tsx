@@ -161,13 +161,13 @@ function posRecalcItemTotals(item: PosItem): PosItem {
     const Q = Math.max(0, Number(item.quantity) || 0);
     const Rraw = Math.max(0, Number(item.returnQuantity) || 0);
     const R = Q > 0 ? Math.min(Rraw, Q) : Rraw;
-    const fullSaleDiscount = posGetFullSaleLineDiscount(item);
+    // Separate return bills keep the original sale invoice unchanged — store the
+    // refund as a negative line total so POS Sales Summary nets correctly.
     const returnSliceDiscount =
       R > 0 ? posGetDiscountAmount({ ...item, isReturn: true, returnQuantity: R }) : 0;
-    const remainderDiscount = Math.max(0, fullSaleDiscount - returnSliceDiscount);
-    const grossKept = item.rate * Math.max(0, Q - R);
-    const netAmount = grossKept;
-    const totalAmount = grossKept - remainderDiscount;
+    const refund = Math.max(0, item.rate * R - returnSliceDiscount);
+    const netAmount = -(item.rate * R);
+    const totalAmount = -refund;
     return { ...item, returnQuantity: R, netAmount, totalAmount };
   }
   const discountAmount = posGetDiscountAmount(item);
@@ -2520,16 +2520,24 @@ export default function PharmacyPOS() {
         </div>
         <div className="p-4 space-y-4">
           {posItems.map((item, index) => {
+            const preservedReturn = preservedReturnByRowId.current.get(item.id);
             const loadedReturnLine = Boolean(returnSourceInvoice && item.isReturn);
+            // Edit page disables new returns, but must still render existing return lines
+            // (sold qty + return qty input) so returned amounts are visible.
             const lineIsReturn =
-              loadedReturnLine || (allowPatientReturns && item.isReturn);
+              loadedReturnLine ||
+              item.isReturn ||
+              Boolean(preservedReturn?.isReturn) ||
+              (Number(item.returnQuantity) || 0) > 0;
+            const returnQtyReadOnly = Boolean(id) && !allowPatientReturns && lineIsReturn;
             let profit = 0;
             const discountAmount = posGetDiscountAmount(item);
             if (lineIsReturn) {
               const Q = Math.max(0, Number(item.quantity) || 0);
               const R = Q > 0 ? Math.min(Math.max(0, Number(item.returnQuantity) || 0), Q) : Math.max(0, Number(item.returnQuantity) || 0);
-              const kept = Math.max(0, Q - R);
-              profit = item.totalAmount - item.unitCost * kept;
+              // totalAmount is negative refund; profit = cost recovered − cash refunded
+              const refund = Math.abs(Number(item.totalAmount) || 0);
+              profit = item.unitCost * R - refund;
             } else {
               const qty = Number(item.quantity) || 0;
               const revenue = (item.rate * qty) - discountAmount;
@@ -2546,11 +2554,10 @@ export default function PharmacyPOS() {
                     Item #{index + 1}
                   </div>
                   <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3">
-                    {!allowPatientReturns &&
-                      (preservedReturnByRowId.current.get(item.id)?.isReturn ||
-                        item.isReturn) && (
+                    {returnQtyReadOnly && (
                         <span className="rounded bg-red-100 px-2 py-1 text-xs font-medium text-red-800">
-                          Return line (read-only)
+                          Return line — sold {item.quantity}, returned{' '}
+                          {Number(item.returnQuantity) || 0} (read-only)
                         </span>
                       )}
                     {loadedReturnLine && (
@@ -2795,9 +2802,12 @@ export default function PharmacyPOS() {
                         type="text"
                         inputMode="numeric"
                         autoComplete="off"
-                        className="w-full h-11 mt-2 rounded-lg border border-red-300 bg-red-50 px-3 text-sm text-gray-700 outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-200"
+                        className={`w-full h-11 mt-2 rounded-lg border border-red-300 px-3 text-sm text-gray-700 outline-none transition focus:border-red-500 focus:ring-2 focus:ring-red-200 ${
+                          returnQtyReadOnly ? 'bg-gray-100 cursor-not-allowed' : 'bg-red-50'
+                        }`}
                         value={item.returnQuantity === 0 ? '' : String(item.returnQuantity)}
                         onChange={(e) => {
+                          if (returnQtyReadOnly) return;
                           const digits = e.target.value.replace(/\D/g, '');
                           if (digits === '') {
                             updatePosItem(item.id, 'returnQuantity', 0);
@@ -2810,12 +2820,19 @@ export default function PharmacyPOS() {
                           updatePosItem(item.id, 'returnQuantity', v);
                         }}
                         onBlur={() => {
+                          if (returnQtyReadOnly) return;
                           if (!Number.isFinite(item.returnQuantity) || item.returnQuantity < 0) {
                             updatePosItem(item.id, 'returnQuantity', 0);
                           }
                         }}
                         placeholder="Return Qty"
-                        title="Return qty is always editable on an open bill (even when sold pack qty is locked)."
+                        readOnly={returnQtyReadOnly}
+                        disabled={returnQtyReadOnly}
+                        title={
+                          returnQtyReadOnly
+                            ? 'Returned quantity from this bill (view only on edit).'
+                            : 'Return qty is always editable on an open bill (even when sold pack qty is locked).'
+                        }
                       />
                     )}
                     {lineIsReturn && (() => {

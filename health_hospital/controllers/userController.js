@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const User = require("../models/userModel");
+const Role = require("../models/roleModel");
 const jwt = require("jsonwebtoken");
 const { normalizeRole } = require("../middleware/auth");
 const {
@@ -25,17 +26,131 @@ function toBranchOid(raw) {
 }
 
 const isSuperAdminRole = (role) => normalizeRole(role) === "superadmin";
-const isBranchAdminRole = (role) => {
+
+function isAdminUserType(type) {
+  const t = String(type || "")
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, "");
+  return t === "administrator" || t === "admin";
+}
+
+/** Fixed staff screens — everything else from Roles Manage can be a branch admin key. */
+function isKnownStaffRoleKey(role) {
   const r = normalizeRole(role);
-  return (
+  if (!r) return false;
+  if (r === "superadmin" || r === "super_admin") return false;
+  if (r === "doctor" || r.startsWith("doctor_")) return true;
+  if (r === "nurse" || r.startsWith("nurse_")) return true;
+  if (
+    r === "pharmacist" ||
+    r === "sale" ||
+    r === "sales" ||
+    r === "pos" ||
+    r.startsWith("pharmacist_") ||
+    r.startsWith("sale_") ||
+    r.startsWith("sales_") ||
+    r.startsWith("pos_")
+  ) {
+    return true;
+  }
+  if (r === "accountant" || r.startsWith("accountant_")) return true;
+  if (r === "staff" || r.startsWith("staff_")) return true;
+  if (
+    r === "reception" ||
+    r === "receptionist" ||
+    r.startsWith("reception") ||
+    r.includes("reception")
+  ) {
+    return true;
+  }
+  if (
+    r === "quality_control_manager" ||
+    r.startsWith("quality_control_manager_")
+  ) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Branch admin powers: User.type from Admin register, classic keys,
+ * or any non-staff role key (custom Roles Manage keys like bariha_admin / dha_admin).
+ */
+const isBranchAdminRole = (role, user) => {
+  if (isAdminUserType(user?.type)) return true;
+  const r = normalizeRole(role);
+  if (!r || isSuperAdminRole(r)) return false;
+  if (
     r === "administrator" ||
     r === "admin" ||
     r === "branchadmin" ||
     r === "branch_admin" ||
     r.startsWith("administrator_") ||
     r.startsWith("admin_")
-  );
+  ) {
+    return true;
+  }
+  return !isKnownStaffRoleKey(r);
 };
+
+/**
+ * Admin list filter: type=administrator OR classic admin keys OR any Role.key
+ * from Roles Manage (branch-scoped for branch admin; all / selected branch for superadmin)
+ * that is not a known staff screen key. Fully dynamic — no per-role regex updates.
+ */
+async function buildAdministratorListClause(actorRole, actorBranchId, queryBranchId) {
+  const classicRoleClause = {
+    role: /^(administrator|admin|branchadmin|branch_admin)(_.*)?$/i,
+  };
+  const typeClause = { type: /^(administrator|admin)$/i };
+
+  const roleOr = [];
+  if (isSuperAdminRole(actorRole)) {
+    const bidStr = pickValidBranchOidString(queryBranchId);
+    if (bidStr) {
+      const oid = toBranchOid(bidStr);
+      roleOr.push(
+        ...(oid ? [{ branchId: oid }, { branchId: bidStr }] : [{ branchId: bidStr }]),
+        { branchId: null },
+        { branchId: { $exists: false } },
+      );
+    }
+  } else if (actorBranchId) {
+    const oid = toBranchOid(actorBranchId);
+    const bidStr = pickValidBranchOidString(actorBranchId);
+    if (oid && bidStr) {
+      roleOr.push({ branchId: oid }, { branchId: bidStr });
+    } else if (oid) {
+      roleOr.push({ branchId: oid });
+    } else if (bidStr) {
+      roleOr.push({ branchId: bidStr });
+    } else {
+      roleOr.push({ branchId: actorBranchId });
+    }
+    roleOr.push({ branchId: null }, { branchId: { $exists: false } });
+  }
+
+  const roleQuery = roleOr.length ? { $or: roleOr } : {};
+  const roleDocs = await Role.find(roleQuery).select("key").lean();
+  const dynamicKeys = [];
+  const seen = new Set();
+  for (const doc of roleDocs || []) {
+    const k = normalizeRole(doc?.key);
+    if (!k || seen.has(k)) continue;
+    if (k === "superadmin" || k === "super_admin") continue;
+    if (isKnownStaffRoleKey(k)) continue;
+    seen.add(k);
+    dynamicKeys.push(k);
+  }
+
+  const userOr = [typeClause, classicRoleClause];
+  for (const k of dynamicKeys) {
+    userOr.push({ role: new RegExp(`^${escapeRegex(k)}$`, "i") });
+  }
+
+  return { $or: userOr };
+}
 
 const isDoctorRoleKey = (role) => {
   const r = normalizeRole(role);
@@ -258,7 +373,7 @@ const isWithinActorBranch = (actor, targetBranchId) => {
 const canManageTargetUser = async (actor, targetUser) => {
   if (!actor || !targetUser) return false;
   if (isSuperAdminRole(actor.role)) return true;
-  if (!isBranchAdminRole(actor.role)) return false;
+  if (!isBranchAdminRole(actor.role, actor)) return false;
 
   let actorBr = actor.branchId;
   if (!actorBr && actor._id) {
@@ -298,15 +413,15 @@ async function syncTabsFromRoleDoc(actor, payload, existingUser) {
   }
 
   const actorRole = normalizeRole(actor?.role);
-  if (isBranchAdminRole(actorRole) && !isSuperAdminRole(actorRole)) {
+  if (isBranchAdminRole(actorRole, actor) && !isSuperAdminRole(actorRole)) {
     effectiveBranchId = actor.branchId;
     payload.branchId = actor.branchId;
   }
 
   const roleDoc = await findRoleDocForLogin(rawRole, effectiveBranchId);
   if (!roleDoc) {
-    // Never trust client-sent tabs when Role catalog has no matching key —
-    // stale mp.* from the form would keep wrong sidebar access after a role change.
+    // No matching Role.key — leave tabs alone / empty. Do not auto-create Role rows
+    // (avoids conflict between user registration and Roles & Permissions catalog).
     if (existingUser) {
       delete payload.tabs;
     } else if (payload.tabs === undefined) {
@@ -347,7 +462,7 @@ const adduser = async (req, res) => {
       actorBr = await loadBranchIdFromUserDoc(actor._id);
     }
 
-    if (isBranchAdminRole(actorRole)) {
+    if (isBranchAdminRole(actorRole, actor)) {
       if (requestedRole === "superadmin") {
         return res
           .status(403)
@@ -360,8 +475,11 @@ const adduser = async (req, res) => {
       }
     }
 
+    const registeringAsAdmin =
+      isAdminUserType(req.body.type) || isBranchAdminRole(requestedRole);
+
     if (
-      isBranchAdminRole(requestedRole) &&
+      registeringAsAdmin &&
       !isSuperAdminRole(requestedRole) &&
       isSuperAdminRole(actorRole)
     ) {
@@ -375,7 +493,7 @@ const adduser = async (req, res) => {
     }
 
     if (
-      isBranchAdminRole(requestedRole) &&
+      registeringAsAdmin &&
       !isSuperAdminRole(requestedRole) &&
       !req.body.branchId &&
       !actorBr
@@ -388,7 +506,9 @@ const adduser = async (req, res) => {
     const branchIds = isDoctor
       ? parseBranchIdsFromBody(
           req.body,
-          isBranchAdminRole(actorRole) && !isSuperAdminRole(actorRole) ? actorBr : null,
+          isBranchAdminRole(actorRole, actor) && !isSuperAdminRole(actorRole)
+            ? actorBr
+            : null,
         )
       : parseBranchIdsFromBody(req.body, actorBr).slice(0, 1);
 
@@ -426,8 +546,11 @@ const adduser = async (req, res) => {
     }
 
     const basePayload = stripBranchFieldsFromPayload({ ...req.body });
+    if (registeringAsAdmin) {
+      basePayload.type = "administrator";
+    }
     if (!isDoctor) {
-      if (isBranchAdminRole(actorRole) && !isSuperAdminRole(actorRole)) {
+      if (isBranchAdminRole(actorRole, actor) && !isSuperAdminRole(actorRole)) {
         basePayload.branchId = actorBr;
       } else if (!basePayload.branchId && actorBr) {
         basePayload.branchId = actorBr;
@@ -483,6 +606,11 @@ const getusers = async (req, res) => {
     const actor = req.user;
     const actorRole = normalizeRole(actor?.role);
 
+    let actorBranchId = actor?.branchId;
+    if (!isSuperAdminRole(actorRole) && !actorBranchId && actor?._id) {
+      actorBranchId = await loadBranchIdFromUserDoc(actor._id);
+    }
+
     if (req.query.roles) {
       const arr = String(req.query.roles || '')
         .split(',')
@@ -516,16 +644,17 @@ const getusers = async (req, res) => {
         } else if (rl === "doctor") {
           andParts.push({ role: /^doctor(_.*)?$/i });
         } else if (rl === "administrator" || rl === "admin") {
-          andParts.push({ role: /^(administrator|admin)(_.*)?$/i });
+          andParts.push(
+            await buildAdministratorListClause(
+              actorRole,
+              actorBranchId,
+              req.query.branchId,
+            ),
+          );
         } else {
           andParts.push({ role: new RegExp(`^${escapeRegex(r)}$`, 'i') });
         }
       }
-    }
-
-    let actorBranchId = actor?.branchId;
-    if (!isSuperAdminRole(actorRole) && !actorBranchId && actor?._id) {
-      actorBranchId = await loadBranchIdFromUserDoc(actor._id);
     }
 
     if (isSuperAdminRole(actorRole)) {
@@ -952,7 +1081,7 @@ const updateuser = async (req, res) => {
 
     const actorRole = normalizeRole(req.user?.role);
     const incomingRole = normalizeRole(req.body.role);
-    if (isBranchAdminRole(actorRole) && incomingRole === "superadmin") {
+    if (isBranchAdminRole(actorRole, req.user) && incomingRole === "superadmin") {
       return res
         .status(403)
         .json({ status: "fail", message: "Branch admin cannot promote to superadmin" });
@@ -968,6 +1097,14 @@ const updateuser = async (req, res) => {
     }
 
     const payload = { ...req.body, image: image };
+    if (
+      isAdminUserType(req.body.type) ||
+      isBranchAdminRole(incomingRole || existingUser.role, {
+        type: req.body.type || existingUser.type,
+      })
+    ) {
+      payload.type = "administrator";
+    }
     if (payload.isActive !== undefined) {
       payload.isActive = normalizeIsActiveFlag(payload.isActive);
     }
@@ -980,7 +1117,7 @@ const updateuser = async (req, res) => {
         ? parseBranchIdsFromBody(req.body, null)
         : [];
 
-    if (isBranchAdminRole(actorRole) && !isSuperAdminRole(actorRole)) {
+    if (isBranchAdminRole(actorRole, req.user) && !isSuperAdminRole(actorRole)) {
       let actorBr = req.user.branchId;
       if (!actorBr && req.user._id) {
         actorBr = await loadBranchIdFromUserDoc(req.user._id);

@@ -12,7 +12,7 @@ import { isSuperAdminRole } from '../../../utils/branchScope';
 const { Search } = Input;
 const { RangePicker } = DatePicker;
 
-interface StoreClosing {
+interface ClinicClosing {
   _id: string;
   closingDate: string;
   openingCash: number;
@@ -89,9 +89,9 @@ function isCurrentUserSuperAdmin(): boolean {
   }
 }
 
-const StoreClosings = ({ embedded = false }: { embedded?: boolean }) => {
+const ClinicClosings = ({ embedded = false }: { embedded?: boolean }) => {
   const branchEpoch = useBranchScopeEpoch();
-  const [storeClosings, setStoreClosings] = useState<StoreClosing[]>([]);
+  const [clinicClosings, setClinicClosings] = useState<ClinicClosing[]>([]);
   const [loading, setLoading] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   const [dateRange, setDateRange] = useState<[Dayjs | null, Dayjs | null]>([null, null]);
@@ -113,10 +113,10 @@ const StoreClosings = ({ embedded = false }: { embedded?: boolean }) => {
   const liveDifference = (Number(cashInHand) || 0) - liveExpectedCash;
 
   useEffect(() => {
-    fetchStoreClosings();
+    fetchClinicClosings();
   }, [searchTerm, dateRange, currentPage, branchEpoch]);
 
-  const fetchStoreClosings = async () => {
+  const fetchClinicClosings = async () => {
     try {
       setLoading(true);
       const params = new URLSearchParams({
@@ -129,16 +129,16 @@ const StoreClosings = ({ embedded = false }: { embedded?: boolean }) => {
         }),
       });
 
-      const response = await axios.get(`${Base_url}/apis/storeClosing/get?${params}`);
-      setStoreClosings(response.data.data || []);
+      const response = await axios.get(`${Base_url}/apis/clinicClosing/get?${params}`);
+      setClinicClosings(response.data.data || []);
 
-      const sales = response.data.data?.reduce((sum: number, closing: StoreClosing) => sum + closing.totalSales, 0) || 0;
-      const expenses = response.data.data?.reduce((sum: number, closing: StoreClosing) => sum + closing.totalExpenses, 0) || 0;
+      const sales = response.data.data?.reduce((sum: number, closing: ClinicClosing) => sum + closing.totalSales, 0) || 0;
+      const expenses = response.data.data?.reduce((sum: number, closing: ClinicClosing) => sum + closing.totalExpenses, 0) || 0;
       setTotalSales(sales);
       setTotalExpenses(expenses);
     } catch (error) {
-      console.error('Error fetching store closings:', error);
-      setStoreClosings([]);
+      console.error('Error fetching Clinic Closings:', error);
+      setClinicClosings([]);
     } finally {
       setLoading(false);
     }
@@ -148,12 +148,12 @@ const StoreClosings = ({ embedded = false }: { embedded?: boolean }) => {
     const dateStr = date.format('YYYY-MM-DD');
     setPrepLoading(true);
     try {
-      const response = await axios.get(`${Base_url}/apis/storeClosing/prep`, {
+      const response = await axios.get(`${Base_url}/apis/clinicClosing/prep`, {
         params: { date: dateStr },
       });
       const prep: ClosingPrep = response.data?.prep || {};
       if (prep.alreadyClosed) {
-        message.warning('This date already has a store closing.');
+        message.warning('This date already has a Clinic Closing.');
       }
       form.setFieldsValue({
         openingCash: prep.openingCash ?? 0,
@@ -168,7 +168,7 @@ const StoreClosings = ({ embedded = false }: { embedded?: boolean }) => {
       });
     } catch (error) {
       console.error('Error loading closing prep:', error);
-      message.error('Failed to load POS data for this date');
+      message.error('Failed to load invoice data for this date');
     } finally {
       setPrepLoading(false);
     }
@@ -280,7 +280,7 @@ const StoreClosings = ({ embedded = false }: { embedded?: boolean }) => {
     {
       title: 'Actions',
       key: 'actions',
-      render: (_text: unknown, record: StoreClosing) => (
+      render: (_text: unknown, record: ClinicClosing) => (
         <Space size="small">
           <Button
             type="text"
@@ -293,7 +293,7 @@ const StoreClosings = ({ embedded = false }: { embedded?: boolean }) => {
               type="text"
               icon={<EditOutlined className="text-green-500" />}
               onClick={() => handleEdit(record)}
-              title="Edit Store Closing"
+              title="Edit Clinic Closing"
             />
           )}
         </Space>
@@ -301,9 +301,9 @@ const StoreClosings = ({ embedded = false }: { embedded?: boolean }) => {
     },
   ];
 
-  const handleView = (record: StoreClosing) => {
+  const handleView = (record: ClinicClosing) => {
     Swal.fire({
-      title: 'Store Closing Details',
+      title: 'Clinic Closing Details',
       html: `
         <div class="text-left" style="font-size: 14px;">
           <div style="background: #f3f4f6; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
@@ -313,7 +313,7 @@ const StoreClosings = ({ embedded = false }: { embedded?: boolean }) => {
           <div style="background: #dbeafe; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
             <h4 style="margin-top: 0; color: #1e40af;">Cash Flow</h4>
             <p style="margin: 8px 0;"><strong>Opening Cash:</strong> Rs. ${record.openingCash.toLocaleString()}</p>
-            <p style="margin: 8px 0;"><strong>Cash (POS):</strong> <span style="color: #059669;">Rs. ${(record.cashSales || 0).toLocaleString()}</span></p>
+            <p style="margin: 8px 0;"><strong>Cash (Invoices):</strong> <span style="color: #059669;">Rs. ${(record.cashSales || 0).toLocaleString()}</span></p>
             <p style="margin: 8px 0;"><strong>Credit:</strong> Rs. ${(record.creditSales || 0).toLocaleString()}</p>
             <p style="margin: 8px 0;"><strong>Card:</strong> Rs. ${(record.cardTransactions || 0).toLocaleString()}</p>
             <p style="margin: 8px 0;"><strong>Bank Transfer:</strong> Rs. ${(record.onlineCash || 0).toLocaleString()}</p>
@@ -337,7 +337,7 @@ const StoreClosings = ({ embedded = false }: { embedded?: boolean }) => {
     });
   };
 
-  const handleAddStoreClosing = async () => {
+  const handleAddClinicClosing = async () => {
     setEditingId(null);
     form.resetFields();
     const today = dayjs();
@@ -346,7 +346,7 @@ const StoreClosings = ({ embedded = false }: { embedded?: boolean }) => {
     await loadClosingPrep(today);
   };
 
-  const handleEdit = (record: StoreClosing) => {
+  const handleEdit = (record: ClinicClosing) => {
     setEditingId(record._id);
     form.setFieldsValue({
       ...record,
@@ -389,25 +389,25 @@ const StoreClosings = ({ embedded = false }: { embedded?: boolean }) => {
       };
 
       const response = editingId
-        ? await axios.put(`${Base_url}/apis/storeClosing/update/${editingId}`, data)
-        : await axios.post(`${Base_url}/apis/storeClosing/create`, data);
+        ? await axios.put(`${Base_url}/apis/clinicClosing/update/${editingId}`, data)
+        : await axios.post(`${Base_url}/apis/clinicClosing/create`, data);
 
       if (response.data && response.data.status === 'ok') {
-        message.success(response.data.message || 'Store closing recorded successfully');
+        message.success(response.data.message || 'Clinic Closing recorded successfully');
         setIsModalOpen(false);
         setEditingId(null);
-        fetchStoreClosings();
+        fetchClinicClosings();
       } else {
-        throw new Error(response.data.error || 'Failed to save store closing');
+        throw new Error(response.data.error || 'Failed to save Clinic Closing');
       }
     } catch (error: unknown) {
-      console.error('Error saving store closing:', error);
+      console.error('Error saving Clinic Closing:', error);
       const err = error as { response?: { data?: { error?: string; message?: string } }; message?: string };
       const errorMsg =
         err.response?.data?.error ||
         err.response?.data?.message ||
         err.message ||
-        'Failed to save store closing';
+        'Failed to save Clinic Closing';
       message.error(errorMsg);
     }
   };
@@ -422,28 +422,31 @@ const StoreClosings = ({ embedded = false }: { embedded?: boolean }) => {
 
   return (
     <>
-      {!embedded && <Breadcrumb pageName="Store Closings" />}
+      {!embedded && <Breadcrumb pageName="Clinic Closings" />}
 
       <div className={embedded ? '' : 'min-h-screen bg-gray-50 p-4'}>
         {!embedded && (
         <div className="flex items-center justify-between mb-6">
-          <h1 className="text-2xl font-bold text-gray-800">Store Closings</h1>
+          <h1 className="text-2xl font-bold text-gray-800">Clinic Closings</h1>
           <div className="flex items-center space-x-2">
             <Button icon={<DownloadOutlined />} onClick={handleExport}>Excel</Button>
             <Button icon={<PrinterOutlined />} onClick={handlePrint}>Print</Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={handleAddStoreClosing} className="bg-primary hover:bg-opacity-90">
-              + Add Store Closing
+            <Button type="primary" icon={<PlusOutlined />} onClick={handleAddClinicClosing} className="bg-primary hover:bg-opacity-90">
+              + Add Clinic Closing
             </Button>
           </div>
         </div>
         )}
         {embedded && (
         <div className="flex items-center justify-end mb-4">
-          <Button type="primary" icon={<PlusOutlined />} onClick={handleAddStoreClosing} className="bg-primary hover:bg-opacity-90">
-            + Add Store Closing
+          <Button type="primary" icon={<PlusOutlined />} onClick={handleAddClinicClosing} className="bg-primary hover:bg-opacity-90">
+            + Add Clinic Closing
           </Button>
         </div>
         )}
+        <p className="text-sm text-gray-500 mb-4">
+          Each user closes their own drawer — 3 receptionists means 3 separate clinic closings.
+        </p>
 
         <div className="bg-white rounded-lg shadow-sm p-6 mb-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -476,7 +479,7 @@ const StoreClosings = ({ embedded = false }: { embedded?: boolean }) => {
 
         <div className="grid grid-cols-1 md:grid-cols-4 gap-6 mb-6">
           <Card className="bg-blue-50 border-blue-200">
-            <Statistic title="Total Closings" value={storeClosings.length} prefix={<SearchOutlined className="text-blue-500" />} valueStyle={{ color: '#2563eb' }} />
+            <Statistic title="Total Closings" value={clinicClosings.length} prefix={<SearchOutlined className="text-blue-500" />} valueStyle={{ color: '#2563eb' }} />
           </Card>
           <Card className="bg-green-50 border-green-200">
             <Statistic title="Total Sales" value={totalSales} prefix="Rs." precision={2} valueStyle={{ color: '#16a34a' }} />
@@ -492,7 +495,7 @@ const StoreClosings = ({ embedded = false }: { embedded?: boolean }) => {
         <Card className="shadow-sm">
           <Table
             columns={columns}
-            dataSource={storeClosings}
+            dataSource={clinicClosings}
             rowKey="_id"
             loading={loading}
             pagination={{
@@ -513,7 +516,7 @@ const StoreClosings = ({ embedded = false }: { embedded?: boolean }) => {
               <div className="w-10 h-10 bg-primary rounded flex items-center justify-center text-white font-bold mr-3">
                 <PlusOutlined />
               </div>
-              <span className="text-lg font-semibold text-gray-800">{editingId ? 'Edit Store Closing' : 'Add Store Closing'}</span>
+              <span className="text-lg font-semibold text-gray-800">{editingId ? 'Edit Clinic Closing' : 'Add Clinic Closing'}</span>
             </div>
           }
           open={isModalOpen}
@@ -556,7 +559,7 @@ const StoreClosings = ({ embedded = false }: { embedded?: boolean }) => {
               </Form.Item>
             </div>
 
-            <p className="text-sm text-gray-600 mb-2 font-medium">POS Payment Methods (auto from bills)</p>
+            <p className="text-sm text-gray-600 mb-2 font-medium">Invoice Payment Methods (your bills only)</p>
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
               <Form.Item name="cashSales" label="Cash" className="mb-0">
                 {renderReadOnlyAmount()}
@@ -576,13 +579,13 @@ const StoreClosings = ({ embedded = false }: { embedded?: boolean }) => {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <Form.Item name="totalSales" label={<span className="font-semibold text-gray-700">Total Sales <span className="text-xs text-gray-500">(POS)</span></span>}>
+              <Form.Item name="totalSales" label={<span className="font-semibold text-gray-700">Total Sales <span className="text-xs text-gray-500">(Invoices)</span></span>}>
                 {renderReadOnlyAmount()}
               </Form.Item>
 
               <Form.Item
                 name="totalExpenses"
-                label={<span className="font-semibold text-gray-700">Expenses <span className="text-xs text-gray-500">(Pharmacy)</span></span>}
+                label={<span className="font-semibold text-gray-700">Expenses <span className="text-xs text-gray-500">(Clinic/General)</span></span>}
                 rules={[{ required: true, message: 'Expenses required' }]}
               >
                 {renderReadOnlyAmount()}
@@ -642,4 +645,4 @@ const StoreClosings = ({ embedded = false }: { embedded?: boolean }) => {
   );
 };
 
-export default StoreClosings;
+export default ClinicClosings;

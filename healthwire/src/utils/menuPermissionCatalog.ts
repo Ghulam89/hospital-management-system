@@ -41,6 +41,7 @@ export const MENU_ROWS: MenuMatrixRow[] = [
   { id: 'appointments', label: 'Appointments', group: 'Clinical', pathPrefix: '/appointments', cells: { module: true, create: true, read: true, update: true, delete: true } },
   { id: 'invoices', label: 'Invoices', group: 'Clinical', pathPrefix: '/invoice', cells: { module: true, create: true, read: true, update: true, delete: true } },
   { id: 'patients', label: 'Patients', group: 'Clinical', pathPrefix: '/admin/patients', cells: { module: true, create: true, read: true, update: true, delete: true } },
+  { id: 'clinic_close', label: 'Closings', group: 'Clinical', pathPrefix: '/admin/closings', cells: { module: true, create: true, read: true, update: true, delete: false } },
 
   { id: 'pharm_items', label: 'Items', group: 'Pharmacy', parentLabel: 'Pharmacy', pathPrefix: '/admin/items/pharmacy', cells: { module: true, create: true, read: true, update: true, delete: true } },
   { id: 'pharm_stock', label: 'Manage Stock', group: 'Pharmacy', parentLabel: 'Pharmacy', pathPrefix: '/admin/pharmacy/stocks', cells: { module: true, create: true, read: true, update: true, delete: true } },
@@ -49,7 +50,7 @@ export const MENU_ROWS: MenuMatrixRow[] = [
   { id: 'pharm_missed', label: 'Missed Sales', group: 'Pharmacy', parentLabel: 'Pharmacy', pathPrefix: '/admin/pharmacy/missed-sales', cells: { module: true, create: true, read: true, update: true, delete: false } },
   { id: 'pharm_racks', label: 'Racks', group: 'Pharmacy', parentLabel: 'Pharmacy', pathPrefix: '/admin/pharmacy/rack', cells: { module: true, create: true, read: true, update: true, delete: true } },
   { id: 'pharm_consumed_stocks', label: 'Consume Stocks', group: 'Pharmacy', parentLabel: 'Pharmacy', pathPrefix: '/admin/pharmacy/consumed-stocks', cells: { module: true, create: true, read: true, update: true, delete: false } },
-  { id: 'pharm_store_close', label: 'Store Closings', group: 'Pharmacy', parentLabel: 'Pharmacy', pathPrefix: '/admin/pharmacy/store-closings', cells: { module: true, create: true, read: true, update: true, delete: false } },
+  { id: 'pharm_store_close', label: 'Store Closings', group: 'Pharmacy', parentLabel: 'Pharmacy', pathPrefix: '/admin/closings', cells: { module: true, create: true, read: true, update: true, delete: false } },
   { id: 'pharm_expenses', label: 'Pharmacy Expenses', group: 'Pharmacy', parentLabel: 'Pharmacy', pathPrefix: '/admin/pharmacy/expenses', cells: { module: true, create: true, read: true, update: true, delete: true } },
   { id: 'pharm_suppliers', label: 'Suppliers', group: 'Pharmacy', parentLabel: 'Pharmacy', pathPrefix: '/admin/pharmacy/supplier', cells: { module: true, create: true, read: true, update: true, delete: true } },
   { id: 'pharm_pos', label: 'POS', group: 'Pharmacy', parentLabel: 'Pharmacy', pathPrefix: '/admin/pharmacy/invoices', cells: { module: true, create: true, read: true, update: true, delete: true } },

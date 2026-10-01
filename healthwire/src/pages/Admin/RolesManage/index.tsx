@@ -398,22 +398,7 @@ const RolesManage = () => {
         classNames={modalClassNames}
       >
         <form onSubmit={submitCreate}>
-          <p className="mb-4 rounded-sm border border-stroke bg-gray-2 px-4 py-3 text-xs leading-relaxed text-bodydark2 dark:border-strokedark dark:bg-meta-4">
-            New roles start with <span className="font-medium text-bodydark1 dark:text-bodydark">no</span> sidebar
-            access. After you create the role, open{' '}
-            <Link to="/admin/roles" className="font-medium text-primary hover:underline">
-              Menu permissions
-            </Link>{' '}
-            {isSuperAdmin ? (
-              <span>and tick the menus and actions this role should have.</span>
-            ) : (
-              <span>
-                tick menus under{' '}
-                <span className="font-medium text-bodydark1 dark:text-bodydark">Menu permissions</span> for your
-                branch-created roles.
-              </span>
-            )}
-          </p>
+      
           <div className="mb-4.5 grid grid-cols-1 gap-6 sm:grid-cols-2">
             <div className="w-full">
               <label className={LABEL_CLASS}>
@@ -440,16 +425,7 @@ const RolesManage = () => {
                 onChange={(e) => setCreateForm((f) => ({ ...f, key: e.target.value }))}
                 placeholder="e.g. pharmacist_sale"
               />
-              <p className="mt-1.5 text-xs text-bodydark2">
-                Lowercase key used when assigning users. Prefix by user type so it appears on
-                that screen:{' '}
-                <span className="font-mono">pharmacist_sale</span>,{' '}
-                <span className="font-mono">nurse_opd</span>,{' '}
-                <span className="font-mono">staff_reception</span>,{' '}
-                <span className="font-mono">accountant_billing</span>. Pharmacy sale roles also
-                accept keys <span className="font-mono">sale</span> /{' '}
-                <span className="font-mono">sales</span> under Users → Pharmacist.
-              </p>
+             
             </div>
             <div className="w-full sm:col-span-2">
               <label className={LABEL_CLASS}>Description (optional)</label>

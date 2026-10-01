@@ -7,6 +7,7 @@ const {
   branchDocumentVisible, branchDocumentDeletable,
   applyStrictBranchListFilter,
   getScopedPatientIds,
+  resolveWriteBranchOid,
 } = require("../utils/branchScope");
 const {
   resolveInvoiceFilterPatientIds,
@@ -20,9 +21,38 @@ const {
   procedureMaxRefundable,
 } = require("../utils/invoiceProcedureRefund");
 const { computeClientBillFromItems } = require("../utils/invoiceBillTotals");
+const {
+  isClinicInvoiceDayClosedForUser,
+  getEffectiveInvoiceTimestamp,
+} = require("../utils/posClosingAndBackdate");
 
 /** Historical patient invoice/payment dates are allowed for old-data imports. */
 function assertInvoiceBackdatesAllowed(req, res, dates) {
+  return true;
+}
+
+async function assertClinicClosingAllowsWrite(req, res, body, existingDoc) {
+  if (!req.user?._id) return true;
+  const effective = getEffectiveInvoiceTimestamp(body, existingDoc);
+  let branchId =
+    (body && body.branchId) ||
+    (existingDoc && existingDoc.branchId) ||
+    null;
+  if (!branchId) {
+    try {
+      branchId = await resolveWriteBranchOid(req);
+    } catch {
+      branchId = null;
+    }
+  }
+  if (await isClinicInvoiceDayClosedForUser(branchId, req.user._id, effective)) {
+    res.status(403).json({
+      status: "error",
+      message:
+        "You already closed clinic for this date. Your invoices for that day are locked.",
+    });
+    return false;
+  }
   return true;
 }
 
@@ -180,6 +210,9 @@ const addinvoice = async (req, res) => {
       }
     }
     if (!assertInvoiceBackdatesAllowed(req, res, datesToCheck)) {
+      return;
+    }
+    if (!(await assertClinicClosingAllowsWrite(req, res, body, null))) {
       return;
     }
     const data = await Invoice.create(body);
@@ -893,6 +926,18 @@ const addInvoicePayments = async (req, res) => {
     const payDates = cleanedPayments.map((p) => p.payDate).filter(Boolean);
     if (!assertInvoiceBackdatesAllowed(req, res, payDates)) {
       return;
+    }
+    for (const p of cleanedPayments) {
+      if (
+        !(await assertClinicClosingAllowsWrite(
+          req,
+          res,
+          { payment: [p], branchId: invoice.branchId },
+          invoice,
+        ))
+      ) {
+        return;
+      }
     }
 
     invoice.payment = Array.isArray(invoice.payment) ? invoice.payment : [];

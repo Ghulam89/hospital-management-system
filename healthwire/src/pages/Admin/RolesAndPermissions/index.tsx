@@ -52,6 +52,17 @@ function elevatedRoleNameRoot(name: string): string {
 }
 
 function isElevatedRoleHiddenFromBranchClient(r: AppRole): boolean {
+  const rawBranch = r.branchId as unknown;
+  let hasBranch = false;
+  if (rawBranch != null && rawBranch !== '') {
+    if (typeof rawBranch === 'object') {
+      hasBranch = !!String((rawBranch as { _id?: unknown })._id || '').trim();
+    } else {
+      hasBranch = true;
+    }
+  }
+  // Branch-scoped roles (incl. administrator for that branch) stay visible.
+  if (hasBranch) return false;
   const k = normalizeRoleKeyForFilter(r.key);
   if (RESERVED_GLOBAL_TEMPLATE_KEYS.has(k)) return true;
   const root = elevatedRoleNameRoot(r.name);

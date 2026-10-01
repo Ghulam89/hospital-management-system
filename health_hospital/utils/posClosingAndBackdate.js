@@ -1,5 +1,6 @@
 const mongoose = require("mongoose");
 const StoreClosing = require("../models/storeClosingModel");
+const ClinicClosing = require("../models/clinicClosingModel");
 
 function startOfLocalDay(d) {
   const x = new Date(d);
@@ -51,11 +52,53 @@ async function isPharmPosDayClosedForBranch(branchId, anchorDate) {
   return false;
 }
 
+/**
+ * Clinic closing locks invoices only for the user who closed (user-based).
+ * Reception A closing does not lock Reception B.
+ */
+async function isClinicInvoiceDayClosedForUser(branchId, userId, anchorDate) {
+  if (!userId || !mongoose.Types.ObjectId.isValid(String(userId))) return false;
+  const dayStart = startOfLocalDay(anchorDate);
+  const dayEnd = addOneLocalDay(dayStart);
+
+  const orBranch = [];
+  if (branchId != null && branchId !== "" && mongoose.Types.ObjectId.isValid(String(branchId))) {
+    orBranch.push({ branchId: new mongoose.Types.ObjectId(String(branchId)) });
+  }
+  orBranch.push({ branchId: null });
+  orBranch.push({ branchId: { $exists: false } });
+
+  const found = await ClinicClosing.findOne({
+    closedBy: new mongoose.Types.ObjectId(String(userId)),
+    closingDate: { $gte: dayStart, $lt: dayEnd },
+    $or: orBranch,
+  })
+    .select("branchId")
+    .lean();
+
+  if (!found) return false;
+  if (found.branchId == null || !found.branchId) return true;
+  if (branchId != null && branchId !== "" && mongoose.Types.ObjectId.isValid(String(branchId))) {
+    return String(found.branchId) === String(branchId);
+  }
+  return false;
+}
+
 function getEffectivePosTimestamp(body, existingDoc) {
   if (body && body.createdAt) return new Date(body.createdAt);
   if (body && Array.isArray(body.payment) && body.payment.length > 0 && body.payment[0].payDate) {
     return new Date(body.payment[0].payDate);
   }
+  if (existingDoc && existingDoc.createdAt) return new Date(existingDoc.createdAt);
+  return new Date();
+}
+
+function getEffectiveInvoiceTimestamp(body, existingDoc) {
+  if (body && body.invoiceDate) return new Date(body.invoiceDate);
+  if (body && Array.isArray(body.payment) && body.payment.length > 0 && body.payment[0].payDate) {
+    return new Date(body.payment[0].payDate);
+  }
+  if (existingDoc && existingDoc.invoiceDate) return new Date(existingDoc.invoiceDate);
   if (existingDoc && existingDoc.createdAt) return new Date(existingDoc.createdAt);
   return new Date();
 }
@@ -102,7 +145,9 @@ module.exports = {
   addOneLocalDay,
   isBeforeStartOfTodayLocal,
   isPharmPosDayClosedForBranch,
+  isClinicInvoiceDayClosedForUser,
   getEffectivePosTimestamp,
+  getEffectiveInvoiceTimestamp,
   posAllItemQtyOrLinesChanged,
   posReturnDataChanged,
 };
