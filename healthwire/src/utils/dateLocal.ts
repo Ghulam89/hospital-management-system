@@ -27,3 +27,16 @@ export function formatYmdInTimeZone(
 export function localCalendarYmd(d: Date = new Date()): string {
   return formatYmdInTimeZone(d);
 }
+
+/** YYYY-MM-DD → Date at local noon (keeps POS bill day stable across UTC). */
+export function ymdToLocalNoonDate(ymd: string): Date {
+  const m = String(ymd || '')
+    .trim()
+    .match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) {
+    return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), 12, 0, 0, 0);
+  }
+  const d = new Date(ymd);
+  if (Number.isNaN(d.getTime())) return new Date();
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 12, 0, 0, 0);
+}

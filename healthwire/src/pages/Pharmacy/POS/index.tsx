@@ -7,7 +7,7 @@ import Breadcrumb from '../../../components/Breadcrumbs/Breadcrumb';
 import { AsyncPaginate, LoadOptions } from 'react-select-async-paginate';
 import Modal from '../../../components/modal';
 import { getStoredUserForPermissions, getUserRoleSlug, hasAnyPermission } from '../../../utils/permissions';
-import { localCalendarYmd } from '../../../utils/dateLocal';
+import { formatYmdInTimeZone, localCalendarYmd, ymdToLocalNoonDate } from '../../../utils/dateLocal';
 
 // Enhanced type definitions
 // Custom option types for AsyncPaginate
@@ -288,9 +288,11 @@ const PAYMENT_METHODS: PaymentMethod[] = [
 function parseApiPayDate(value: unknown, fallback?: unknown): string {
   const tryParse = (v: unknown): string | null => {
     if (v == null || v === '') return null;
-    const d = v instanceof Date ? v : new Date(String(v));
+    const s = String(v).trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+    const d = v instanceof Date ? v : new Date(s);
     if (Number.isNaN(d.getTime())) return null;
-    return d.toISOString().split('T')[0];
+    return formatYmdInTimeZone(d);
   };
   return tryParse(value) || tryParse(fallback) || localCalendarYmd();
 }
@@ -520,6 +522,7 @@ function buildPosPayloadFromRows(
     allowNegativeInventory: boolean;
     note: string;
     createdBy: string | null;
+    billDate?: string;
     editingInvoiceNumber?: string;
     isEdit?: boolean;
     allowPatientReturns?: boolean;
@@ -542,6 +545,12 @@ function buildPosPayloadFromRows(
     grandTotal = computeReturnExchangeNet(items);
   }
   const paid = payments.reduce((sum, p) => sum + p.amount, 0);
+  const billYmd = String(meta.billDate || payments[0]?.date || localCalendarYmd()).trim();
+  const billCreatedAt = ymdToLocalNoonDate(billYmd).toISOString();
+  const paymentsWithBillDate = payments.map((payment) => ({
+    ...payment,
+    date: billYmd,
+  }));
   return {
     patientId: meta.patientId,
     patientName: meta.patientName,
@@ -555,6 +564,7 @@ function buildPosPayloadFromRows(
     paid,
     note: meta.note,
     createdBy: meta.createdBy,
+    createdAt: billCreatedAt,
     allItem: items.map((item) => {
       const preserved = meta.preservedReturnByRowId?.get(item.id);
       const allowRet = meta.allowPatientReturns !== false;
@@ -590,9 +600,9 @@ function buildPosPayloadFromRows(
         originalInvoiceNumber,
       };
     }),
-    payment: payments.map((payment) => ({
+    payment: paymentsWithBillDate.map((payment) => ({
       method: payment.method,
-      payDate: new Date(payment.date).toISOString(),
+      payDate: ymdToLocalNoonDate(String(payment.date || billYmd)).toISOString(),
       paid: payment.amount,
       reference: payment.reference,
     })),
@@ -688,9 +698,12 @@ export default function PharmacyPOS() {
   const permUser = useMemo(() => getStoredUserForPermissions(), []);
   const isSuperAdminRole = getUserRoleSlug(permUser) === 'superadmin';
   const canPosChangeQuantity = hasAnyPermission(permUser, 'pharmPosChangeQuantity');
-  const canPosBackdateBills = hasAnyPermission(permUser, 'pharmPosBackdateBills');
+  // All pharmacy users may backdate / change Bill Date.
+  const canPosBackdateBills = true;
   const lockQtyOnEdit = Boolean(id) && !canPosChangeQuantity;
   const paymentDateMin = !canPosBackdateBills && !id ? localTodayYmd() : undefined;
+
+  const [billDate, setBillDate] = useState<string>(localCalendarYmd());
 
   const [posItems, setPosItems] = useState<PosItem[]>([
     {
@@ -858,13 +871,15 @@ export default function PharmacyPOS() {
         ]);
 
         const mappedPayments = getInvoicePaymentRows(inv);
+        const loadedBillDate = parseApiPayDate(inv.createdAt, mappedPayments[0]?.date);
+        setBillDate(loadedBillDate);
         setPaymentInstallments(
           mappedPayments.length
-            ? mappedPayments
+            ? mappedPayments.map((p) => ({ ...p, date: loadedBillDate }))
             : [
                 {
                   id: 1,
-                  date: localCalendarYmd(),
+                  date: loadedBillDate,
                   method: 'Cash',
                   amount: 0,
                   reference: '',
@@ -1757,7 +1772,7 @@ export default function PharmacyPOS() {
     
     setPaymentInstallments([...paymentInstallments, {
       id: paymentInstallments.length > 0 ? Math.max(...paymentInstallments.map(p => p.id)) + 1 : 1,
-      date: localCalendarYmd(),
+      date: billDate || localCalendarYmd(),
       method: 'Cash',
       amount: 0,
       reference: ''
@@ -1773,6 +1788,14 @@ export default function PharmacyPOS() {
   };
 
   const updatePaymentInstallment = (id: number, field: keyof PaymentInstallment, value: any) => {
+    if (field === 'date') {
+      const next = String(value || localCalendarYmd());
+      setBillDate(next);
+      setPaymentInstallments(
+        paymentInstallments.map((item) => ({ ...item, date: next })),
+      );
+      return;
+    }
     const updatedPayments = paymentInstallments.map(item => {
       if (item.id === id) {
         return { ...item, [field]: value };
@@ -2000,6 +2023,7 @@ export default function PharmacyPOS() {
         allowNegativeInventory,
         note: remarks,
         createdBy: currentUserId,
+        billDate,
         editingInvoiceNumber,
         isEdit: Boolean(id),
       };
@@ -2328,6 +2352,47 @@ export default function PharmacyPOS() {
       )}
 
      
+      {/* Bill Date — created date (backdate / edit supported) */}
+      <div className="mb-6 bg-white rounded-xl shadow-md border border-gray-100 p-6 hover:shadow-lg transition-shadow">
+        <div className="flex flex-col sm:flex-row sm:items-end gap-4">
+          <div className="flex-1 max-w-xs">
+            <div className="flex items-center mb-2">
+              <div className="bg-indigo-100 rounded-lg p-2 mr-3">
+                <svg className="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" />
+                </svg>
+              </div>
+              <label className="block text-sm font-semibold text-gray-700">
+                Bill Date <span className="text-red-500">*</span>
+              </label>
+            </div>
+            <input
+              type="date"
+              className="w-full rounded-lg border border-gray-300 bg-white py-3 px-4 text-sm text-gray-700 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-200"
+              value={billDate}
+              min={paymentDateMin}
+              onChange={(e) => {
+                const next = e.target.value || localCalendarYmd();
+                setBillDate(next);
+                setPaymentInstallments((prev) =>
+                  prev.map((p) => ({ ...p, date: next })),
+                );
+              }}
+              required
+            />
+            {/* <p className="mt-1.5 text-xs text-gray-500">
+              {id
+                ? 'Edit invoice: change date to backdate; this updates the bill created date.'
+                : 'Select today or a back date — this becomes the bill created date.'}
+            </p> */}
+          </div>
+          {id && editingInvoiceNumber ? (
+            <p className="text-sm text-gray-600 pb-2">
+              Invoice: <span className="font-semibold text-gray-800">{editingInvoiceNumber}</span>
+            </p>
+          ) : null}
+        </div>
+      </div>
       
       {/* Patient and Doctor Selection */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
