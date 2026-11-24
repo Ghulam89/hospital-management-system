@@ -1,5 +1,6 @@
 const { Types } = require("mongoose");
 const Invoice = require("../models/invoiceModel");
+const PharmPos = require("../models/pharmPosModel");
 const moment = require("moment");
 const {
   assignBranchIdForCreate,
@@ -1345,6 +1346,88 @@ const getInvoiceSummary = async (req, res) => {
       );
     }
 
+    // Department / search stages — reused by the cash-received query below.
+    const filterStages = pipeline.slice(1);
+
+    // `totalBill` holds dated procedures only; procedure lines without a date are an
+    // advance the patient still pays on this invoice. Add them so the cards match the
+    // table's TOTAL column (frontend `getInvoiceListGrandTotal` / `getProcedureAdvanceAmount`).
+    pipeline.push({
+      $addFields: {
+        _undatedAdvance: {
+          $reduce: {
+            input: { $ifNull: ['$item', []] },
+            initialValue: 0,
+            in: {
+              $add: [
+                '$$value',
+                {
+                  $let: {
+                    vars: {
+                      amt: {
+                        $cond: [
+                          { $gt: [{ $convert: { input: '$$this.amount', to: 'double', onError: 0, onNull: 0 } }, 0] },
+                          { $convert: { input: '$$this.amount', to: 'double', onError: 0, onNull: 0 } },
+                          {
+                            $multiply: [
+                              { $convert: { input: '$$this.rate', to: 'double', onError: 0, onNull: 0 } },
+                              { $max: [1, { $convert: { input: '$$this.quantity', to: 'double', onError: 1, onNull: 1 } }] },
+                            ],
+                          },
+                        ],
+                      },
+                      disc: { $convert: { input: '$$this.discount', to: 'double', onError: 0, onNull: 0 } },
+                      // Type check only — some legacy dates are out of $toString range (e.g. year 62025).
+                      hasDate: {
+                        $switch: {
+                          branches: [
+                            { case: { $eq: [{ $type: '$$this.procedureDate' }, 'date'] }, then: true },
+                            {
+                              case: { $eq: [{ $type: '$$this.procedureDate' }, 'string'] },
+                              then: { $gt: [{ $strLenCP: { $trim: { input: '$$this.procedureDate' } } }, 0] },
+                            },
+                          ],
+                          default: false,
+                        },
+                      },
+                    },
+                    in: {
+                      $cond: [
+                        '$$hasDate',
+                        0,
+                        {
+                          $max: [
+                            0,
+                            {
+                              $subtract: [
+                                '$$amt',
+                                {
+                                  $cond: [
+                                    { $eq: [{ $convert: { input: '$$this.discountType', to: 'int', onError: 0, onNull: 0 } }, 1] },
+                                    { $multiply: ['$$amt', { $divide: ['$$disc', 100] }] },
+                                    '$$disc',
+                                  ],
+                                },
+                              ],
+                            },
+                          ],
+                        },
+                      ],
+                    },
+                  },
+                },
+              ],
+            },
+          },
+        },
+      },
+    });
+    pipeline.push({
+      $addFields: {
+        _grandTotal: { $max: [0, { $add: [{ $ifNull: ['$totalBill', 0] }, '$_undatedAdvance'] }] },
+      },
+    });
+
     // Calculate summary statistics.
     // Do NOT $push all invoice items into one document — that blows the 16MB BSON limit
     // when date filters are cleared / dataset is large.
@@ -1352,17 +1435,13 @@ const getInvoiceSummary = async (req, res) => {
       $group: {
         _id: null,
         totalTransactions: { $sum: 1 },
-        totalRevenue: { $sum: { $ifNull: ['$totalBill', 0] } },
+        totalRevenue: { $sum: '$_grandTotal' },
         totalTax: { $sum: { $ifNull: ['$taxBill', 0] } },
         totalDiscount: { $sum: { $ifNull: ['$discountBill', 0] } },
         totalPaid: { $sum: { $ifNull: ['$totalPay', 0] } },
         totalDue: {
           $sum: {
-            $cond: [
-              { $gt: [{ $ifNull: ['$duePay', 0] }, 0] },
-              { $ifNull: ['$duePay', 0] },
-              0,
-            ],
+            $max: [0, { $subtract: ['$_grandTotal', { $ifNull: ['$totalPay', 0] }] }],
           },
         },
         subTotal: { $sum: { $ifNull: ['$subTotalBill', 0] } },
@@ -1409,15 +1488,65 @@ const getInvoiceSummary = async (req, res) => {
       const stats = result[0];
       summary = {
         totalTransactions: stats.totalTransactions || 0,
-        totalRevenue: stats.totalRevenue || 0,
+        totalRevenue: roundMoneyAmount(stats.totalRevenue || 0),
         totalTax: stats.totalTax || 0,
         totalDiscount: stats.totalDiscount || 0,
         totalPaid: stats.totalPaid || 0,
-        totalDue: stats.totalDue || 0,
+        totalDue: roundMoneyAmount(stats.totalDue || 0),
         subTotal: stats.subTotal || 0,
         totalDoctorShare: stats.totalDoctorShare || 0,
         totalHospitalShare: stats.totalHospitalShare || 0
       };
+    }
+
+    // Cash received — counted by PAYMENT date (not invoice date), like a daily cash book.
+    // Includes installments / due collections of older invoices; refunds are negative payments.
+    const cashRange = {};
+    if (startDate && String(startDate).trim() !== '') cashRange.$gte = new Date(startDate);
+    if (endDate && String(endDate).trim() !== '') cashRange.$lte = new Date(endDate);
+    if (Object.keys(cashRange).length > 0) {
+      const { $expr: _invoiceDateExpr, ...cashMatch } = matchQuery;
+      const payMatch = { 'payment.payDate': cashRange };
+      if (paymentMode && paymentMode.trim() !== '') payMatch['payment.method'] = paymentMode;
+      const sumPaid = {
+        $group: {
+          _id: null,
+          cash: { $sum: { $convert: { input: '$payment.paid', to: 'double', onError: 0, onNull: 0 } } },
+        },
+      };
+
+      const invoiceCashRows = await Invoice.aggregate([
+        { $match: { ...cashMatch, 'payment.payDate': cashRange } },
+        ...filterStages,
+        { $unwind: '$payment' },
+        { $match: payMatch },
+        sumPaid,
+      ]);
+      const invoiceCash = roundMoneyAmount(invoiceCashRows[0]?.cash || 0);
+
+      // Pharmacy sales only when no invoice-specific filter is active (they have no doctor/procedure/etc.).
+      const invoiceOnlyFilterActive = [
+        doctorId, departmentId, procedureId, status, search, patientMR,
+        req.query.patientName, req.query.patientPhone, req.query.invoiceNo,
+        minTotalBill, maxTotalBill,
+      ].some((v) => v != null && String(v).trim() !== '');
+      let pharmacyCash = 0;
+      const pharmacyIncluded = !invoiceOnlyFilterActive && summaryScopedPatientIds === null;
+      if (pharmacyIncluded) {
+        const branchPharm = await mergeBranchScopedQuery(req);
+        const pharmCashRows = await PharmPos.aggregate([
+          { $match: { ...(branchPharm || {}), 'payment.payDate': cashRange } },
+          { $unwind: '$payment' },
+          { $match: payMatch },
+          sumPaid,
+        ]);
+        pharmacyCash = roundMoneyAmount(pharmCashRows[0]?.cash || 0);
+      }
+
+      summary.invoiceCashReceived = invoiceCash;
+      summary.pharmacyCashReceived = pharmacyCash;
+      summary.pharmacyCashIncluded = pharmacyIncluded;
+      summary.totalCashReceived = roundMoneyAmount(invoiceCash + pharmacyCash);
     }
 
     console.log('✅ Invoice summary calculated:', summary);

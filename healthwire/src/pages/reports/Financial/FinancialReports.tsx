@@ -1202,7 +1202,21 @@ const [filters, setFilters] = useState<Filters>({
   }, [filteredTransactions.length, pagination.total, pagination.current]);
 
   // State for summary data - ALL calculated on BACKEND, not frontend!
-  const [summaryData, setSummaryData] = useState({
+  // Cash fields come only from /invoice/summary when a date range is set (by payment date).
+  const [summaryData, setSummaryData] = useState<{
+    totalRevenue: number;
+    totalTax: number;
+    totalDiscount: number;
+    totalPaid: number;
+    totalDue: number;
+    totalDoctorShare: number;
+    totalHospitalShare: number;
+    transactionCount: number;
+    totalCashReceived?: number | null;
+    invoiceCashReceived?: number;
+    pharmacyCashReceived?: number;
+    pharmacyCashIncluded?: boolean;
+  }>({
     totalRevenue: 0,
     totalTax: 0,
     totalDiscount: 0,
@@ -1330,6 +1344,10 @@ const [filters, setFilters] = useState<Filters>({
         totalDoctorShare: Number(s.totalDoctorShare) || 0,
         totalHospitalShare: Number(s.totalHospitalShare) || 0,
         transactionCount: Number(s.totalTransactions ?? s.transactionCount) || 0,
+        totalCashReceived: s.totalCashReceived != null ? Number(s.totalCashReceived) || 0 : null,
+        invoiceCashReceived: Number(s.invoiceCashReceived) || 0,
+        pharmacyCashReceived: Number(s.pharmacyCashReceived) || 0,
+        pharmacyCashIncluded: Boolean(s.pharmacyCashIncluded),
       });
     } catch (error: any) {
       if (requestId !== summaryRequestIdRef.current) return;
@@ -2298,6 +2316,8 @@ const generatePdf = async (invoice) => {
                     </div>
                   </div>
                 </div>
+
+                
               </div>
 
               {/* Filters Section */}
